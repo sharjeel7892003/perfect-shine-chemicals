@@ -1,0 +1,736 @@
+import React, { useState } from 'react';
+import { 
+  BarChart3, 
+  TrendingUp, 
+  DollarSign, 
+  Package, 
+  Users, 
+  Truck, 
+  FileText, 
+  Calendar,
+  Layers,
+  ArrowUpRight,
+  ShoppingCart,
+  Filter,
+  Printer,
+  Download
+} from 'lucide-react';
+import { useApp } from '../../context/AppContext';
+import { useAuth } from '../../context/AuthContext';
+import { formatPKR, formatDate } from '../../utils/formatters';
+import { Badge } from '../common/Badge';
+
+export type ReportType = 'sales' | 'purchases' | 'profit' | 'receivables' | 'payables' | 'valuation';
+
+export const ReportsModule: React.FC = () => {
+  const { sales, purchases, products, customers, suppliers } = useApp();
+  const { isOwner } = useAuth();
+
+  const [activeReport, setActiveReport] = useState<ReportType>('sales');
+
+  // Filter States
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+  const [selectedCustomerFilter, setSelectedCustomerFilter] = useState<string>('all');
+  const [selectedProductFilter, setSelectedProductFilter] = useState<string>('all');
+  const [selectedSupplierFilter, setSelectedSupplierFilter] = useState<string>('all');
+
+  // Date filtering helper
+  const isDateInRange = (dateStr: string) => {
+    if (!startDate && !endDate) return true;
+    const d = new Date(dateStr);
+    if (startDate && d < new Date(startDate)) return false;
+    if (endDate && d > new Date(endDate + 'T23:59:59')) return false;
+    return true;
+  };
+
+  // Quick date ranges
+  const handleSetQuickDate = (type: 'today' | 'this_month' | 'all') => {
+    const today = new Date();
+    if (type === 'today') {
+      const formatted = today.toISOString().split('T')[0];
+      setStartDate(formatted);
+      setEndDate(formatted);
+    } else if (type === 'this_month') {
+      const firstDay = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
+      const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().split('T')[0];
+      setStartDate(firstDay);
+      setEndDate(lastDay);
+    } else {
+      setStartDate('');
+      setEndDate('');
+    }
+  };
+
+  // ================= 1. SALES REPORT DATA =================
+  const filteredSales = sales.filter(s => {
+    const dateMatch = isDateInRange(s.date);
+    const customerMatch = selectedCustomerFilter === 'all' || s.customer_id === selectedCustomerFilter;
+    const productMatch = selectedProductFilter === 'all' || s.items.some(i => i.product_id === selectedProductFilter);
+    return dateMatch && customerMatch && productMatch;
+  });
+
+  const totalSalesRevenue = filteredSales.reduce((acc, s) => acc + s.total_amount, 0);
+  const totalSalesPaid = filteredSales.reduce((acc, s) => acc + s.amount_paid, 0);
+  
+  let totalSalesUnits = 0;
+  const salesItemizedRows: {
+    invoiceNo: string;
+    date: string;
+    customer: string;
+    productName: string;
+    quantity: number;
+    unitPrice: number;
+    subtotal: number;
+  }[] = [];
+
+  filteredSales.forEach(s => {
+    s.items.forEach(item => {
+      if (selectedProductFilter === 'all' || item.product_id === selectedProductFilter) {
+        totalSalesUnits += item.quantity;
+        salesItemizedRows.push({
+          invoiceNo: s.invoice_number,
+          date: s.date,
+          customer: s.customer_name,
+          productName: item.product_name,
+          quantity: item.quantity,
+          unitPrice: item.unit_price,
+          subtotal: item.subtotal,
+        });
+      }
+    });
+  });
+
+  // ================= 2. PURCHASE REPORT DATA =================
+  const filteredPurchases = purchases.filter(p => {
+    const dateMatch = isDateInRange(p.date);
+    const supplierMatch = selectedSupplierFilter === 'all' || p.supplier_id === selectedSupplierFilter;
+    return dateMatch && supplierMatch;
+  });
+
+  const totalPurchaseSpend = filteredPurchases.reduce((acc, p) => acc + p.total_amount, 0);
+  const totalPurchasePaid = filteredPurchases.reduce((acc, p) => acc + p.amount_paid, 0);
+
+  // ================= 3. PROFIT REPORT DATA =================
+  let profitRevenue = 0;
+  let profitCOGS = 0;
+  const productProfitMap: { [key: string]: { name: string; qtySold: number; revenue: number; cost: number; profit: number } } = {};
+
+  filteredSales.forEach(sale => {
+    profitRevenue += sale.total_amount;
+    sale.items.forEach(item => {
+      const itemCost = (item.unit_cost || 0) * item.quantity;
+      profitCOGS += itemCost;
+
+      if (!productProfitMap[item.product_name]) {
+        productProfitMap[item.product_name] = {
+          name: item.product_name,
+          qtySold: 0,
+          revenue: 0,
+          cost: 0,
+          profit: 0,
+        };
+      }
+
+      productProfitMap[item.product_name].qtySold += item.quantity;
+      productProfitMap[item.product_name].revenue += item.subtotal;
+      productProfitMap[item.product_name].cost += itemCost;
+      productProfitMap[item.product_name].profit += (item.subtotal - itemCost);
+    });
+  });
+
+  const estimatedGrossProfit = profitRevenue - profitCOGS;
+  const overallMarginPercent = profitRevenue > 0 ? ((estimatedGrossProfit / profitRevenue) * 100).toFixed(1) : '0';
+
+  // ================= 4. RECEIVABLES REPORT DATA =================
+  const sortedDebtors = [...customers]
+    .filter(c => (c.current_balance || 0) > 0)
+    .sort((a, b) => (b.current_balance || 0) - (a.current_balance || 0));
+  const totalReceivables = sortedDebtors.reduce((acc, c) => acc + c.current_balance, 0);
+
+  // ================= 5. PAYABLES REPORT DATA =================
+  const sortedCreditors = [...suppliers]
+    .filter(s => (s.current_balance || 0) > 0)
+    .sort((a, b) => (b.current_balance || 0) - (a.current_balance || 0));
+  const totalPayables = sortedCreditors.reduce((acc, s) => acc + s.current_balance, 0);
+
+  // ================= 6. STOCK VALUATION DATA =================
+  const totalStockCostValue = products.reduce((acc, p) => acc + (p.current_stock * p.cost_price), 0);
+  const totalStockRetailValue = products.reduce((acc, p) => acc + (p.current_stock * p.selling_price), 0);
+  const unrealizedStockProfit = totalStockRetailValue - totalStockCostValue;
+
+  return (
+    <div className="space-y-6 pb-12">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+        <div>
+          <h2 className="text-xl font-bold text-white flex items-center gap-2">
+            <BarChart3 className="w-6 h-6 text-emerald-400" />
+            <span>Financial & Analytical Intelligence</span>
+          </h2>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Detailed sales, purchases, profit estimations, outstanding receivables, and stock asset valuation
+          </p>
+        </div>
+
+        <button
+          onClick={() => window.print()}
+          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors w-fit"
+        >
+          <Printer className="w-4 h-4 text-emerald-400" />
+          <span>Print Report</span>
+        </button>
+      </div>
+
+      {/* Navigation Tabs for All 6 Reports */}
+      <div className="flex flex-wrap items-center gap-2 p-1.5 rounded-2xl bg-slate-900 border border-slate-800">
+        <button
+          onClick={() => setActiveReport('sales')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            activeReport === 'sales' ? 'bg-emerald-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <ShoppingCart className="w-4 h-4" />
+          <span>Sales Report</span>
+        </button>
+
+        <button
+          onClick={() => setActiveReport('purchases')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            activeReport === 'purchases' ? 'bg-emerald-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Truck className="w-4 h-4" />
+          <span>Purchase Report</span>
+        </button>
+
+        <button
+          onClick={() => setActiveReport('profit')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            activeReport === 'profit' ? 'bg-emerald-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <TrendingUp className="w-4 h-4" />
+          <span>Profit Report</span>
+        </button>
+
+        <button
+          onClick={() => setActiveReport('receivables')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            activeReport === 'receivables' ? 'bg-emerald-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Users className="w-4 h-4" />
+          <span>Outstanding Receivables</span>
+        </button>
+
+        <button
+          onClick={() => setActiveReport('payables')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            activeReport === 'payables' ? 'bg-emerald-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Building2Icon className="w-4 h-4" />
+          <span>Outstanding Payables</span>
+        </button>
+
+        <button
+          onClick={() => setActiveReport('valuation')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            activeReport === 'valuation' ? 'bg-emerald-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Layers className="w-4 h-4" />
+          <span>Stock Valuation</span>
+        </button>
+      </div>
+
+      {/* Filter Toolbar (Active for Sales, Purchases, Profit) */}
+      {(activeReport === 'sales' || activeReport === 'purchases' || activeReport === 'profit') && (
+        <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-slate-400 font-semibold">From:</span>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-slate-400 font-semibold">To:</span>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white"
+              />
+            </div>
+
+            {/* Quick date range presets */}
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => handleSetQuickDate('today')}
+                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
+              >
+                Today
+              </button>
+              <button
+                onClick={() => handleSetQuickDate('this_month')}
+                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
+              >
+                This Month
+              </button>
+              <button
+                onClick={() => handleSetQuickDate('all')}
+                className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
+              >
+                All Time
+              </button>
+            </div>
+          </div>
+
+          {/* Module-specific entity filters */}
+          <div className="flex items-center gap-2">
+            {activeReport === 'sales' && (
+              <>
+                <select
+                  value={selectedCustomerFilter}
+                  onChange={(e) => setSelectedCustomerFilter(e.target.value)}
+                  className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white max-w-44 truncate"
+                >
+                  <option value="all">All Customers</option>
+                  {customers.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+
+                <select
+                  value={selectedProductFilter}
+                  onChange={(e) => setSelectedProductFilter(e.target.value)}
+                  className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white max-w-44 truncate"
+                >
+                  <option value="all">All Products</option>
+                  {products.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </>
+            )}
+
+            {activeReport === 'purchases' && (
+              <select
+                value={selectedSupplierFilter}
+                onChange={(e) => setSelectedSupplierFilter(e.target.value)}
+                className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white"
+              >
+                <option value="all">All Suppliers</option>
+                {suppliers.map(s => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ================= REPORT 1: SALES REPORT ================= */}
+      {activeReport === 'sales' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase">Total Sales Revenue</span>
+              <p className="text-xl font-black text-emerald-400 mt-1 font-mono">{formatPKR(totalSalesRevenue)}</p>
+              <p className="text-[11px] text-slate-500 mt-0.5">{filteredSales.length} Orders Invoiced</p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase">Total Quantity Sold</span>
+              <p className="text-xl font-black text-white mt-1 font-mono">{totalSalesUnits} Units</p>
+              <p className="text-[11px] text-slate-500 mt-0.5">Across chemical catalog</p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase">Cash Collected</span>
+              <p className="text-xl font-black text-white mt-1 font-mono">{formatPKR(totalSalesPaid)}</p>
+              <p className="text-[11px] text-emerald-400 mt-0.5">Cleared payments</p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase">Uncollected Credit</span>
+              <p className="text-xl font-black text-amber-400 mt-1 font-mono">{formatPKR(totalSalesRevenue - totalSalesPaid)}</p>
+              <p className="text-[11px] text-amber-300 mt-0.5">Pending receivables</p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4">
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Itemized Sales Transactions</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+                    <th className="py-2.5 px-3">Date</th>
+                    <th className="py-2.5 px-3">Invoice #</th>
+                    <th className="py-2.5 px-3">Customer</th>
+                    <th className="py-2.5 px-3">Product Description</th>
+                    <th className="py-2.5 px-3 text-center">Qty</th>
+                    <th className="py-2.5 px-3 text-right">Unit Rate</th>
+                    <th className="py-2.5 px-3 text-right">Subtotal (PKR)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {salesItemizedRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-slate-500">No sales match the filter criteria</td>
+                    </tr>
+                  ) : (
+                    salesItemizedRows.map((row, idx) => (
+                      <tr key={idx} className="hover:bg-slate-800/40">
+                        <td className="py-2.5 px-3 text-slate-400 font-mono">{formatDate(row.date)}</td>
+                        <td className="py-2.5 px-3 font-mono font-bold text-white">{row.invoiceNo}</td>
+                        <td className="py-2.5 px-3 text-slate-300">{row.customer}</td>
+                        <td className="py-2.5 px-3 font-medium text-white">{row.productName}</td>
+                        <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-200">{row.quantity}</td>
+                        <td className="py-2.5 px-3 text-right font-mono text-slate-400">{formatPKR(row.unitPrice)}</td>
+                        <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-400">{formatPKR(row.subtotal)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= REPORT 2: PURCHASE REPORT ================= */}
+      {activeReport === 'purchases' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase">Total Spend on Raw Materials</span>
+              <p className="text-xl font-black text-rose-400 mt-1 font-mono">{formatPKR(totalPurchaseSpend)}</p>
+              <p className="text-[11px] text-slate-500 mt-0.5">{filteredPurchases.length} Purchase Orders</p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase">Paid Out to Suppliers</span>
+              <p className="text-xl font-black text-white mt-1 font-mono">{formatPKR(totalPurchasePaid)}</p>
+              <p className="text-[11px] text-emerald-400 mt-0.5">Disbursed funds</p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase">Unpaid Supplier Dues</span>
+              <p className="text-xl font-black text-rose-400 mt-1 font-mono">{formatPKR(totalPurchaseSpend - totalPurchasePaid)}</p>
+              <p className="text-[11px] text-rose-300 mt-0.5">Accounts payable</p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4">
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Purchase Orders Record</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+                    <th className="py-2.5 px-3">Date</th>
+                    <th className="py-2.5 px-3">PO Number</th>
+                    <th className="py-2.5 px-3">Supplier</th>
+                    <th className="py-2.5 px-3">Materials Received</th>
+                    <th className="py-2.5 px-3 text-right">Total Amount</th>
+                    <th className="py-2.5 px-3 text-right">Amount Paid</th>
+                    <th className="py-2.5 px-3 text-center">Payment Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {filteredPurchases.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-slate-500">No purchases found for selected criteria</td>
+                    </tr>
+                  ) : (
+                    filteredPurchases.map((p) => (
+                      <tr key={p.id} className="hover:bg-slate-800/40">
+                        <td className="py-2.5 px-3 text-slate-400 font-mono">{formatDate(p.date)}</td>
+                        <td className="py-2.5 px-3 font-mono font-bold text-white">{p.invoice_number}</td>
+                        <td className="py-2.5 px-3 text-slate-200">{p.supplier_name}</td>
+                        <td className="py-2.5 px-3 text-slate-300">{p.items.map(i => `${i.product_or_material_name} (${i.quantity})`).join(', ')}</td>
+                        <td className="py-2.5 px-3 text-right font-mono font-bold text-white">{formatPKR(p.total_amount)}</td>
+                        <td className="py-2.5 px-3 text-right font-mono text-emerald-400">{formatPKR(p.amount_paid)}</td>
+                        <td className="py-2.5 px-3 text-center">
+                          <Badge variant={p.payment_status === 'paid' ? 'emerald' : p.payment_status === 'partial' ? 'amber' : 'rose'}>
+                            {p.payment_status}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= REPORT 3: PROFIT ESTIMATOR REPORT ================= */}
+      {activeReport === 'profit' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase">Sales Revenue</span>
+              <p className="text-2xl font-black text-white mt-2 font-mono">{formatPKR(profitRevenue)}</p>
+              <p className="text-xs text-slate-500 mt-1">Filtered timeframe turnover</p>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase">Cost of Goods Sold (COGS)</span>
+              <p className="text-2xl font-black text-slate-300 mt-2 font-mono">{formatPKR(profitCOGS)}</p>
+              <p className="text-xs text-slate-500 mt-1">Direct chemical/bottle production cost</p>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-gradient-to-br from-emerald-950 to-slate-900 border border-emerald-500/30">
+              <span className="text-xs font-semibold text-emerald-400 uppercase">Estimated Gross Profit</span>
+              <p className="text-2xl font-black text-emerald-400 mt-2 font-mono">{formatPKR(estimatedGrossProfit)}</p>
+              <p className="text-xs text-emerald-300/80 mt-1">Overall Margin: <strong>{overallMarginPercent}%</strong></p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6">
+            <h3 className="text-base font-bold text-white mb-4">
+              Profit Analysis by Chemical Product <span className="text-xs font-normal text-slate-400">(Formula: [Selling Price − Cost Price] × Qty Sold)</span>
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+                    <th className="py-3 px-3">Chemical Product</th>
+                    <th className="py-3 px-3 text-center">Units Sold</th>
+                    <th className="py-3 px-3 text-right">Gross Invoiced</th>
+                    <th className="py-3 px-3 text-right">Production Cost</th>
+                    <th className="py-3 px-3 text-right">Estimated Profit</th>
+                    <th className="py-3 px-3 text-right">Margin %</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {Object.values(productProfitMap).length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-slate-500">No product sales in the selected period</td>
+                    </tr>
+                  ) : (
+                    Object.values(productProfitMap).map((item, idx) => {
+                      const margin = item.revenue > 0 ? ((item.profit / item.revenue) * 100).toFixed(1) : '0';
+                      return (
+                        <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
+                          <td className="py-3 px-3 font-bold text-white text-sm">{item.name}</td>
+                          <td className="py-3 px-3 text-center font-mono font-bold text-slate-300">{item.qtySold}</td>
+                          <td className="py-3 px-3 text-right font-mono text-white">{formatPKR(item.revenue)}</td>
+                          <td className="py-3 px-3 text-right font-mono text-slate-400">{formatPKR(item.cost)}</td>
+                          <td className="py-3 px-3 text-right font-mono font-bold text-emerald-400">{formatPKR(item.profit)}</td>
+                          <td className="py-3 px-3 text-right font-mono font-semibold text-emerald-300">{margin}%</td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= REPORT 4: RECEIVABLES REPORT ================= */}
+      {activeReport === 'receivables' && (
+        <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-bold text-white">Outstanding Customer Receivables (Sorted by Amount Owed)</h3>
+              <p className="text-xs text-slate-400">Clients with unpaid balances and overdue credit</p>
+            </div>
+            <div className="text-right">
+              <span className="text-xs text-slate-400">Total Receivables:</span>
+              <p className="text-xl font-black text-amber-400 font-mono">{formatPKR(totalReceivables)}</p>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+                  <th className="py-3 px-3">#</th>
+                  <th className="py-3 px-3">Customer Name</th>
+                  <th className="py-3 px-3">Category</th>
+                  <th className="py-3 px-3">Phone</th>
+                  <th className="py-3 px-3">Market Address</th>
+                  <th className="py-3 px-3 text-right">Credit Limit</th>
+                  <th className="py-3 px-3 text-right">Amount Owed (PKR)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60">
+                {sortedDebtors.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-8 text-center text-slate-500">
+                      All customer debts have been fully settled! 👍
+                    </td>
+                  </tr>
+                ) : (
+                  sortedDebtors.map((c, idx) => (
+                    <tr key={c.id} className="hover:bg-slate-800/40">
+                      <td className="py-3 px-3 text-slate-500 font-mono">{idx + 1}</td>
+                      <td className="py-3 px-3 font-bold text-white text-sm">{c.name}</td>
+                      <td className="py-3 px-3 capitalize">
+                        <Badge variant={c.customer_type === 'distributor' ? 'purple' : 'blue'}>
+                          {c.customer_type}
+                        </Badge>
+                      </td>
+                      <td className="py-3 px-3 font-mono text-slate-300">{c.phone}</td>
+                      <td className="py-3 px-3 text-slate-400">{c.address}, {c.city}</td>
+                      <td className="py-3 px-3 text-right font-mono text-slate-400">{formatPKR(c.credit_limit)}</td>
+                      <td className="py-3 px-3 text-right font-mono font-black text-amber-400 text-sm">
+                        {formatPKR(c.current_balance)}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ================= REPORT 5: PAYABLES REPORT ================= */}
+      {activeReport === 'payables' && (
+        <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-bold text-white">Outstanding Supplier Payables (Sorted by Amount Owed)</h3>
+              <p className="text-xs text-slate-400">Factory commitments for raw materials, chemicals, and bottle packaging</p>
+            </div>
+            <div className="text-right">
+              <span className="text-xs text-slate-400">Total Factory Payables:</span>
+              <p className="text-xl font-black text-rose-400 font-mono">{formatPKR(totalPayables)}</p>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+                  <th className="py-3 px-3">#</th>
+                  <th className="py-3 px-3">Supplier / Vendor</th>
+                  <th className="py-3 px-3">Raw Material Type</th>
+                  <th className="py-3 px-3">Phone</th>
+                  <th className="py-3 px-3">Location</th>
+                  <th className="py-3 px-3 text-right">Payable Balance (PKR)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60">
+                {sortedCreditors.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-8 text-center text-slate-500">
+                      All supplier bills are cleared!
+                    </td>
+                  </tr>
+                ) : (
+                  sortedCreditors.map((s, idx) => (
+                    <tr key={s.id} className="hover:bg-slate-800/40">
+                      <td className="py-3 px-3 text-slate-500 font-mono">{idx + 1}</td>
+                      <td className="py-3 px-3 font-bold text-white text-sm">{s.name}</td>
+                      <td className="py-3 px-3 text-slate-300">{s.raw_material_type}</td>
+                      <td className="py-3 px-3 font-mono text-slate-300">{s.phone}</td>
+                      <td className="py-3 px-3 text-slate-400">{s.city}</td>
+                      <td className="py-3 px-3 text-right font-mono font-black text-rose-400 text-sm">
+                        {formatPKR(s.current_balance)}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ================= REPORT 6: STOCK VALUATION REPORT ================= */}
+      {activeReport === 'valuation' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase">Stock Asset Value (At Cost Price)</span>
+              <p className="text-2xl font-black text-white mt-2 font-mono">{formatPKR(totalStockCostValue)}</p>
+              <p className="text-xs text-slate-500 mt-1">Capital invested in finished stock</p>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase">Potential Retail Revenue</span>
+              <p className="text-2xl font-black text-emerald-400 mt-2 font-mono">{formatPKR(totalStockRetailValue)}</p>
+              <p className="text-xs text-slate-500 mt-1">Projected revenue upon full dispatch</p>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase">Unrealized Stock Margin</span>
+              <p className="text-2xl font-black text-blue-400 mt-2 font-mono">{formatPKR(unrealizedStockProfit)}</p>
+              <p className="text-xs text-slate-500 mt-1">Expected gross profit locked in warehouse</p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6">
+            <h3 className="text-base font-bold text-white mb-4">Stock Valuation Breakdown per Product</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+                    <th className="py-3 px-3">Chemical Product</th>
+                    <th className="py-3 px-3 text-center">Unit</th>
+                    <th className="py-3 px-3 text-right">In-Stock Qty</th>
+                    <th className="py-3 px-3 text-right">Cost Rate (PKR)</th>
+                    <th className="py-3 px-3 text-right">Selling Rate (PKR)</th>
+                    <th className="py-3 px-3 text-right">Total Cost Value</th>
+                    <th className="py-3 px-3 text-right">Total Retail Value</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {products.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-slate-500 text-xs">
+                        No products currently in factory stock. Stock asset valuation is PKR 0.
+                      </td>
+                    </tr>
+                  ) : (
+                    products.map((p) => {
+                      const costVal = p.current_stock * p.cost_price;
+                      const retailVal = p.current_stock * p.selling_price;
+                      return (
+                        <tr key={p.id} className="hover:bg-slate-800/40">
+                          <td className="py-3 px-3 font-bold text-white text-sm">{p.name}</td>
+                          <td className="py-3 px-3 text-center font-mono text-slate-400 capitalize">{p.unit}</td>
+                          <td className="py-3 px-3 text-right font-mono font-bold text-white">{p.current_stock}</td>
+                          <td className="py-3 px-3 text-right font-mono text-slate-400">{formatPKR(p.cost_price)}</td>
+                          <td className="py-3 px-3 text-right font-mono text-slate-300">{formatPKR(p.selling_price)}</td>
+                          <td className="py-3 px-3 text-right font-mono font-semibold text-white">{formatPKR(costVal)}</td>
+                          <td className="py-3 px-3 text-right font-mono font-bold text-emerald-400">{formatPKR(retailVal)}</td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Helper icon component
+const Building2Icon = (props: React.SVGProps<SVGSVGElement>) => (
+  <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/>
+    <path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/>
+    <path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/>
+    <path d="M10 6h4"/>
+    <path d="M10 10h4"/>
+    <path d="M10 14h4"/>
+    <path d="M10 18h4"/>
+  </svg>
+);

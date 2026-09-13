@@ -1,0 +1,643 @@
+import React, { useState } from 'react';
+import { 
+  Factory, 
+  Plus, 
+  Search, 
+  CheckCircle2, 
+  AlertTriangle, 
+  Layers, 
+  Calendar, 
+  Clock, 
+  User, 
+  Eye, 
+  Sparkles, 
+  ArrowRight,
+  ShieldAlert,
+  Info,
+  ChevronRight,
+  Trash2
+} from 'lucide-react';
+import { useApp } from '../../context/AppContext';
+import { useAuth } from '../../context/AuthContext';
+import { ProductionBatch, ProductFormulation, ConsumedRawMaterial } from '../../types';
+import { formatPKR, formatDate, formatDateTime } from '../../utils/formatters';
+import { Badge } from '../common/Badge';
+import { Modal } from '../common/Modal';
+
+export const ProductionModule: React.FC = () => {
+  const { 
+    products, 
+    rawMaterials, 
+    formulations, 
+    productionBatches, 
+    recordProductionBatch,
+    deleteProductionBatch 
+  } = useApp();
+  
+  const { currentUser, isOwner, canRecordProduction } = useAuth();
+
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isRecordModalOpen, setIsRecordModalOpen] = useState(false);
+  const [selectedBatchDetails, setSelectedBatchDetails] = useState<ProductionBatch | null>(null);
+  const [deleteConfirmBatch, setDeleteConfirmBatch] = useState<ProductionBatch | null>(null);
+  const [negativeStockWarning, setNegativeStockWarning] = useState<string[] | null>(null);
+
+  // Form State
+  const [selectedProductId, setSelectedProductId] = useState('');
+  const [quantityProduced, setQuantityProduced] = useState<number>(100);
+  const [batchNumber, setBatchNumber] = useState('');
+  const [productionDate, setProductionDate] = useState(new Date().toISOString().split('T')[0]);
+  const [notes, setNotes] = useState('');
+
+  const openRecordModal = () => {
+    const defaultProd = products[0];
+    const defaultId = defaultProd ? defaultProd.id : '';
+    setSelectedProductId(defaultId);
+    setQuantityProduced(100);
+    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const randomSeq = Math.floor(10 + Math.random() * 90);
+    setBatchNumber(`BATCH-${dateStr}-${randomSeq}`);
+    setProductionDate(new Date().toISOString().split('T')[0]);
+    setNotes('');
+    setIsRecordModalOpen(true);
+  };
+
+  const selectedProduct = products.find(p => p.id === selectedProductId);
+  const selectedFormulation = formulations.find(f => f.product_id === selectedProductId);
+  const baseUnit = selectedProduct?.base_unit || selectedProduct?.unit || 'liter';
+
+  // Calculate live raw materials needed for current input quantity
+  const requiredMaterialsCalculations = selectedFormulation?.items.map(item => {
+    const rm = rawMaterials.find(m => m.id === item.raw_material_id);
+    const totalNeeded = Number((item.quantity * quantityProduced).toFixed(4));
+    const availableStock = rm ? Number(rm.current_stock) : 0;
+    const isSufficient = availableStock >= totalNeeded;
+    const unitCost = rm ? rm.cost_per_unit : (item.cost_per_unit || 0);
+    const estimatedCost = totalNeeded * unitCost;
+
+    return {
+      item,
+      rm,
+      totalNeeded,
+      availableStock,
+      isSufficient,
+      unitCost,
+      estimatedCost,
+    };
+  }) || [];
+
+  const hasAnyShortage = requiredMaterialsCalculations.some(r => !r.isSufficient);
+  const totalEstimatedBatchCost = requiredMaterialsCalculations.reduce((acc, r) => acc + r.estimatedCost, 0);
+
+  const handleRecordProductionSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!selectedProductId || quantityProduced <= 0) {
+      alert('Please enter a valid product and quantity to manufacture.');
+      return;
+    }
+
+    if (!selectedFormulation) {
+      alert('No formulation recipe exists for this product. Please define recipe in Formulations first.');
+      return;
+    }
+
+    if (hasAnyShortage) {
+      alert('Cannot proceed: Insufficient raw materials in stock. Please replenish raw materials first.');
+      return;
+    }
+
+    const result = recordProductionBatch({
+      productId: selectedProductId,
+      quantityProduced: Number(quantityProduced),
+      batchNumber,
+      date: new Date(productionDate).toISOString(),
+      supervisorName: currentUser.name,
+      notes,
+    });
+
+    if (result.success) {
+      setIsRecordModalOpen(false);
+      if (result.batch) {
+        setSelectedBatchDetails(result.batch);
+      }
+    } else {
+      alert(result.message);
+    }
+  };
+
+  const filteredBatches = productionBatches.filter(b =>
+    b.batch_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    b.product_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    b.supervisor_name.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  return (
+    <div className="space-y-6 pb-12">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+        <div>
+          <h2 className="text-xl font-bold text-white flex items-center gap-2">
+            <Factory className="w-6 h-6 text-emerald-400" />
+            <span>Chemical Manufacturing & Production Batches</span>
+          </h2>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Log factory batch output, automate BOM raw material consumption & increase finished base stock
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {canRecordProduction && (
+            <button
+              onClick={openRecordModal}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20 transition-all"
+            >
+              <Plus className="w-4 h-4 stroke-[3px]" />
+              <span>Record Production Batch</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Production History Table Card */}
+      <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="relative w-full sm:w-80">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search batch # or chemical product..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-10 pr-4 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+            />
+          </div>
+
+          <span className="text-xs text-slate-400">{productionBatches.length} Completed Production Runs</span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+                <th className="py-3 px-3">Batch Number</th>
+                <th className="py-3 px-3">Date</th>
+                <th className="py-3 px-3">Product Manufactured</th>
+                <th className="py-3 px-3 text-right">Quantity Output</th>
+                <th className="py-3 px-3 text-right">Batch Total Cost</th>
+                <th className="py-3 px-3 text-right">Cost / Base Unit</th>
+                <th className="py-3 px-3">Plant Supervisor</th>
+                <th className="py-3 px-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/60">
+              {filteredBatches.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="py-8 text-center text-slate-500">
+                    No production batch logs recorded yet.
+                  </td>
+                </tr>
+              ) : (
+                filteredBatches.map((batch) => (
+                  <tr key={batch.id} className="hover:bg-slate-800/40 transition-colors">
+                    <td className="py-3 px-3 font-mono font-bold text-emerald-400">{batch.batch_number}</td>
+                    <td className="py-3 px-3 text-slate-400">{formatDate(batch.date)}</td>
+                    <td className="py-3 px-3 font-bold text-white">{batch.product_name}</td>
+                    <td className="py-3 px-3 text-right font-mono font-bold text-white">
+                      +{batch.quantity_produced} <span className="text-[11px] font-normal text-slate-400">{batch.base_unit}</span>
+                    </td>
+                    <td className="py-3 px-3 text-right font-mono text-slate-300">
+                      {formatPKR(batch.total_batch_cost)}
+                    </td>
+                    <td className="py-3 px-3 text-right font-mono font-bold text-emerald-400">
+                      {formatPKR(batch.cost_per_base_unit)}/{batch.base_unit}
+                    </td>
+                    <td className="py-3 px-3 text-slate-300">{batch.supervisor_name}</td>
+                    <td className="py-3 px-3 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          onClick={() => setSelectedBatchDetails(batch)}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-colors"
+                          title="View Consumed Raw Materials"
+                        >
+                          <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>BOM Breakdown</span>
+                        </button>
+                        {isOwner ? (
+                          <button
+                            onClick={() => {
+                              setDeleteConfirmBatch(batch);
+                              setNegativeStockWarning(null);
+                            }}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs font-semibold transition-colors"
+                            title="Delete Batch & Reverse Stock"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete</span>
+                          </button>
+                        ) : (
+                          <button
+                            disabled
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/40 text-slate-600 border border-slate-800 text-xs cursor-not-allowed opacity-50"
+                            title="Admin role required to reverse and delete batches"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete</span>
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Record Production Batch Modal */}
+      <Modal
+        isOpen={isRecordModalOpen}
+        onClose={() => setIsRecordModalOpen(false)}
+        title="Record Chemical Production Batch"
+        subtitle="Auto-calculates BOM consumption, deducts raw materials, and adds to finished base stock"
+        maxWidth="2xl"
+      >
+        <form onSubmit={handleRecordProductionSubmit} className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="col-span-2">
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Select Product to Manufacture
+              </label>
+              <select
+                required
+                value={selectedProductId}
+                onChange={(e) => setSelectedProductId(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+              >
+                {products.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} (Current Stock: {p.current_stock} {p.base_unit || p.unit})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Batch Output Quantity ({baseUnit})
+              </label>
+              <input
+                type="number"
+                min="1"
+                required
+                value={quantityProduced}
+                onChange={(e) => setQuantityProduced(parseFloat(e.target.value) || 0)}
+                placeholder="e.g. 500"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Batch Identification Code
+              </label>
+              <input
+                type="text"
+                required
+                value={batchNumber}
+                onChange={(e) => setBatchNumber(e.target.value)}
+                placeholder="BATCH-202609-01"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Production Date
+              </label>
+              <input
+                type="date"
+                required
+                value={productionDate}
+                onChange={(e) => setProductionDate(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Supervisor / Logged By
+              </label>
+              <input
+                type="text"
+                disabled
+                value={currentUser.name}
+                className="w-full bg-slate-800/60 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-400"
+              />
+            </div>
+          </div>
+
+          {/* BOM Materials Consumption Forecast & Availability Check */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Raw Materials Required for {quantityProduced} {baseUnit}</span>
+              </label>
+              <span className="text-[11px] text-slate-400 font-mono">
+                Est. Cost: <strong className="text-emerald-400">{formatPKR(totalEstimatedBatchCost)}</strong>
+              </span>
+            </div>
+
+            {!selectedFormulation ? (
+              <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-300">
+                ⚠️ No recipe defined for this product. Please configure formulation in the Formulations module.
+              </div>
+            ) : (
+              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                {requiredMaterialsCalculations.map((req, idx) => (
+                  <div
+                    key={idx}
+                    className={`p-2.5 rounded-xl border flex items-center justify-between text-xs ${
+                      req.isSufficient
+                        ? 'bg-slate-800/60 border-slate-700/60'
+                        : 'bg-rose-500/10 border-rose-500/30'
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        {req.isSufficient ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        ) : (
+                          <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                        )}
+                        <span className="font-semibold text-white truncate">{req.item.raw_material_name}</span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 ml-5.5 mt-0.5">
+                        Current In-Stock: <span className={req.isSufficient ? 'text-slate-300' : 'text-rose-400 font-bold'}>{req.availableStock} {req.item.unit}</span>
+                      </p>
+                    </div>
+
+                    <div className="text-right pl-3">
+                      <span className="font-mono font-bold text-white text-xs block">
+                        Deduct: -{req.totalNeeded} {req.item.unit}
+                      </span>
+                      <span className="text-[10px] font-mono text-emerald-400">
+                        {formatPKR(req.estimatedCost)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Warnings & Block Alerts */}
+          {hasAnyShortage && (
+            <div className="p-3 bg-rose-500/15 border border-rose-500/30 rounded-xl flex items-center gap-2 text-xs text-rose-300 font-semibold">
+              <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0" />
+              <span>
+                Production is blocked: Factory lacks sufficient raw material stock for this batch quantity.
+              </span>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+              Production Batch Notes
+            </label>
+            <textarea
+              rows={2}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="e.g. Tank vessel #2 run, tested viscosity & pH"
+              className="w-full bg-slate-800 border border-slate-700 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-emerald-500"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+            <button
+              type="button"
+              onClick={() => setIsRecordModalOpen(false)}
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={hasAnyShortage || !selectedFormulation}
+              className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-md disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            >
+              Confirm Batch & Deduct Raw Materials
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* View Batch Details Modal */}
+      {selectedBatchDetails && (
+        <Modal
+          isOpen={!!selectedBatchDetails}
+          onClose={() => setSelectedBatchDetails(null)}
+          title={`Batch Record: ${selectedBatchDetails.batch_number}`}
+          subtitle={`Manufactured on ${formatDate(selectedBatchDetails.date)} by ${selectedBatchDetails.supervisor_name}`}
+          maxWidth="2xl"
+        >
+          <div className="space-y-4 text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950/60 p-3 rounded-xl border border-slate-800">
+              <div>
+                <span className="text-slate-400 text-[10px] uppercase">Product</span>
+                <p className="font-bold text-white">{selectedBatchDetails.product_name}</p>
+              </div>
+              <div>
+                <span className="text-slate-400 text-[10px] uppercase">Output Qty</span>
+                <p className="font-bold font-mono text-emerald-400 text-sm">
+                  +{selectedBatchDetails.quantity_produced} {selectedBatchDetails.base_unit}
+                </p>
+              </div>
+              <div>
+                <span className="text-slate-400 text-[10px] uppercase">Batch Total Cost</span>
+                <p className="font-bold font-mono text-white text-sm">
+                  {formatPKR(selectedBatchDetails.total_batch_cost)}
+                </p>
+              </div>
+              <div>
+                <span className="text-slate-400 text-[10px] uppercase">Cost / Unit</span>
+                <p className="font-bold font-mono text-emerald-400 text-sm">
+                  {formatPKR(selectedBatchDetails.cost_per_base_unit)}/{selectedBatchDetails.base_unit}
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <h4 className="font-bold text-slate-400 uppercase text-[10px] tracking-wider mb-2">
+                Raw Materials Consumed in this Batch
+              </h4>
+              <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                {selectedBatchDetails.raw_materials_consumed.map((rm, idx) => (
+                  <div
+                    key={idx}
+                    className="p-2.5 rounded-xl bg-slate-800/60 border border-slate-800 flex items-center justify-between"
+                  >
+                    <div>
+                      <p className="font-bold text-white">{rm.raw_material_name}</p>
+                      <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+                        Cost Rate: {formatPKR(rm.unit_cost)}/{rm.unit}
+                      </p>
+                    </div>
+
+                    <div className="text-right">
+                      <span className="font-mono font-bold text-rose-400 text-xs">
+                        -{rm.quantity_consumed} {rm.unit}
+                      </span>
+                      <p className="text-[11px] font-mono text-slate-300">
+                        {formatPKR(rm.total_cost)}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {selectedBatchDetails.notes && (
+              <div className="p-3 rounded-xl bg-slate-800/40 border border-slate-800 text-slate-300">
+                <span className="font-bold text-slate-400 block text-[10px] uppercase mb-1">Supervisor Notes</span>
+                <p>{selectedBatchDetails.notes}</p>
+              </div>
+            )}
+
+            <div className="flex justify-between items-center pt-2 border-t border-slate-800">
+              {isOwner && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = selectedBatchDetails;
+                    setSelectedBatchDetails(null);
+                    setDeleteConfirmBatch(target);
+                    setNegativeStockWarning(null);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 font-bold text-xs transition-colors"
+                  title="Reverse batch and return consumed materials to stock"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete & Reverse Batch</span>
+                </button>
+              )}
+
+              <button
+                onClick={() => setSelectedBatchDetails(null)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs transition-colors ml-auto"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Delete Production Batch Confirmation Modal */}
+      {deleteConfirmBatch && (
+        <Modal
+          isOpen={!!deleteConfirmBatch}
+          onClose={() => {
+            setDeleteConfirmBatch(null);
+            setNegativeStockWarning(null);
+          }}
+          title={`Delete & Reverse Batch: ${deleteConfirmBatch.batch_number}`}
+          subtitle="Admin Automated Raw Material Restoration & Finished Stock Deduction"
+        >
+          <div className="space-y-4 text-xs">
+            {/* Warning Block */}
+            {negativeStockWarning && (
+              <div className="p-3.5 rounded-xl bg-rose-500/20 border-2 border-rose-500/40 text-rose-200 space-y-2">
+                <div className="flex items-center gap-1.5 font-bold text-rose-400 text-sm">
+                  <ShieldAlert className="w-5 h-5 shrink-0" />
+                  <span>CRITICAL: Finished Goods Stock Warning!</span>
+                </div>
+                <p className="text-[11px] leading-relaxed">
+                  Reversing this production run will deduct finished goods that have already been dispatched or sold to customers on invoices:
+                </p>
+                <ul className="space-y-1 text-[11px] list-disc pl-5 font-mono text-rose-300">
+                  {negativeStockWarning.map((w, idx) => (
+                    <li key={idx}>{w}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {!negativeStockWarning && (
+              <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 space-y-2">
+                <div className="flex items-center gap-1.5 font-bold text-rose-400">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>Automatic Production Reversal Actions:</span>
+                </div>
+                <ul className="space-y-1.5 text-slate-200 text-[11px] list-disc pl-5">
+                  <li>
+                    <strong>Raw Material Restoration:</strong> Consumed ingredients will be restored back to factory raw inventory:
+                    <div className="mt-1 font-mono text-emerald-400">
+                      {deleteConfirmBatch.raw_materials_consumed?.map(i => `• ${i.raw_material_name}: +${i.quantity_consumed} ${i.unit}`).join(', ')}
+                    </div>
+                  </li>
+                  <li>
+                    <strong>Finished Goods Deduction:</strong> Manufactured output will be subtracted from product warehouse inventory:
+                    <div className="mt-1 font-mono text-rose-400">
+                      • {deleteConfirmBatch.product_name}: -{deleteConfirmBatch.quantity_produced} {deleteConfirmBatch.base_unit}
+                    </div>
+                  </li>
+                </ul>
+              </div>
+            )}
+
+            <p className="text-slate-300">
+              Are you sure you want to permanently cancel and delete production run <strong>{deleteConfirmBatch.batch_number}</strong>? An audit log entry will be saved.
+            </p>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteConfirmBatch(null);
+                  setNegativeStockWarning(null);
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+              >
+                Cancel
+              </button>
+              {negativeStockWarning ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const res = deleteProductionBatch(deleteConfirmBatch.id, currentUser, true);
+                    alert(res.message);
+                    setDeleteConfirmBatch(null);
+                    setNegativeStockWarning(null);
+                  }}
+                  className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black shadow-md transition-colors"
+                >
+                  Force Delete (Allow Negative Stock)
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const res = deleteProductionBatch(deleteConfirmBatch.id, currentUser, false);
+                    if (res.hasNegativeStockWarning && res.warningDetails) {
+                      setNegativeStockWarning(res.warningDetails);
+                    } else {
+                      alert(res.message);
+                      setDeleteConfirmBatch(null);
+                    }
+                  }}
+                  className="px-5 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white text-xs font-black shadow-md transition-colors"
+                >
+                  Confirm Deletion & Reverse Batch
+                </button>
+              )}
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+};
