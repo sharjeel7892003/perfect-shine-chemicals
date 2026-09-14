@@ -238,6 +238,22 @@ ALTER TABLE public.deletion_audit_logs ADD COLUMN IF NOT EXISTS reversal_details
 -- PERMISSIONS & ROW LEVEL SECURITY (RLS) POLICIES
 -- ==============================================================================
 
+-- Convert ID column types from UUID to TEXT if tables were originally created with UUID
+DO $$ 
+DECLARE
+  tbl text;
+BEGIN
+  FOR tbl IN 
+    SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+  LOOP
+    BEGIN
+      EXECUTE format('ALTER TABLE public.%I ALTER COLUMN id TYPE TEXT USING id::text', tbl);
+    EXCEPTION WHEN OTHERS THEN
+      NULL;
+    END;
+  END LOOP;
+END $$;
+
 -- Disable RLS on all POS operational tables to grant full access for POS operations
 ALTER TABLE public.profiles DISABLE ROW LEVEL SECURITY;
 ALTER TABLE public.products DISABLE ROW LEVEL SECURITY;
