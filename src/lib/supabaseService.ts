@@ -159,10 +159,11 @@ export const supabaseService = {
       updated_at: new Date().toISOString()
     };
 
+    console.log('[Supabase Customer Write] Inserting into table "customers", payload ID:', validId);
     const { data, error } = await supabase.from('customers').upsert(payload).select().single();
     if (error) {
       console.error('Supabase upsertCustomer error:', error);
-      throw new Error(`Customer database write failed: ${error.message}`);
+      throw new Error(`Customer database write failed: ${error.message} (${error.code || 'PGRST'})`);
     }
     return (data as Customer) || customer;
   },
