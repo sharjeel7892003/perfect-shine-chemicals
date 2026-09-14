@@ -12,7 +12,8 @@ import {
   DollarSign,
   Printer,
   Archive,
-  RefreshCw
+  RefreshCw,
+  Loader2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -45,6 +46,9 @@ export const SuppliersModule: React.FC = () => {
   const [isLedgerModalOpen, setIsLedgerModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [selectedSupplier, setSelectedSupplier] = useState<Supplier | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Form states
   const [formData, setFormData] = useState({
@@ -76,6 +80,7 @@ export const SuppliersModule: React.FC = () => {
       notes: '',
       is_active: true,
     });
+    setSubmitError(null);
     setIsAddModalOpen(true);
   };
 
@@ -91,6 +96,7 @@ export const SuppliersModule: React.FC = () => {
       notes: s.notes || '',
       is_active: s.is_active,
     });
+    setSubmitError(null);
     setIsEditModalOpen(true);
   };
 
@@ -105,40 +111,70 @@ export const SuppliersModule: React.FC = () => {
     setPaymentAmount(s.current_balance > 0 ? s.current_balance : 0);
     setPaymentRef('');
     setPaymentNotes('');
+    setSubmitError(null);
     setIsPaymentModalOpen(true);
   };
 
-  const handleSaveSupplier = (e: React.FormEvent) => {
+  const handleSaveSupplier = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isEditModalOpen && selectedSupplier) {
-      updateSupplier(selectedSupplier.id, formData);
-      setIsEditModalOpen(false);
-    } else {
-      addSupplier(formData);
-      setIsAddModalOpen(false);
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      if (isEditModalOpen && selectedSupplier) {
+        await updateSupplier(selectedSupplier.id, formData);
+        setIsEditModalOpen(false);
+      } else {
+        await addSupplier(formData);
+        setIsAddModalOpen(false);
+      }
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Failed to save supplier. Please check connection.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const handleRecordPayment = (e: React.FormEvent) => {
+  const handleRecordPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedSupplier || paymentAmount <= 0) return;
 
     const po = purchases.find(p => p.id === linkedPurchaseId);
 
-    recordPayment({
-      related_to: linkedPurchaseId ? 'purchase' : 'supplier_balance',
-      reference_id: linkedPurchaseId || undefined,
-      reference_no: po ? po.invoice_number : undefined,
-      supplier_id: selectedSupplier.id,
-      supplier_name: selectedSupplier.name,
-      amount: paymentAmount,
-      payment_method: paymentMethod,
-      transaction_ref: paymentRef,
-      notes: paymentNotes || (linkedPurchaseId ? `Payment for PO ${po?.invoice_number}` : 'Supplier balance settlement payment'),
-      date: new Date().toISOString(),
-    });
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      await recordPayment({
+        related_to: linkedPurchaseId ? 'purchase' : 'supplier_balance',
+        reference_id: linkedPurchaseId || undefined,
+        reference_no: po ? po.invoice_number : undefined,
+        supplier_id: selectedSupplier.id,
+        supplier_name: selectedSupplier.name,
+        amount: paymentAmount,
+        payment_method: paymentMethod,
+        transaction_ref: paymentRef,
+        notes: paymentNotes || (linkedPurchaseId ? `Payment for PO ${po?.invoice_number}` : 'Supplier balance settlement payment'),
+        date: new Date().toISOString(),
+      });
 
-    setIsPaymentModalOpen(false);
+      setIsPaymentModalOpen(false);
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Failed to record payment. Please check connection.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteOrArchive = async (supplier: Supplier) => {
+    setIsDeleting(true);
+    try {
+      const res = await deleteOrArchiveSupplier(supplier.id, currentUser);
+      alert(res.message);
+      setDeleteConfirmSupplier(null);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to delete/archive supplier');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   const filteredSuppliers = suppliers.filter(s => {
@@ -435,19 +471,28 @@ export const SuppliersModule: React.FC = () => {
             </div>
           </div>
 
+          {submitError && (
+            <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs text-rose-400">
+              {submitError}
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-4 border-t border-slate-800">
             <button
               type="button"
+              disabled={isSubmitting}
               onClick={() => { setIsAddModalOpen(false); setIsEditModalOpen(false); }}
-              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-md transition-colors"
+              disabled={isSubmitting}
+              className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60"
             >
-              {isEditModalOpen ? 'Save Changes' : 'Add Supplier'}
+              {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              <span>{isSubmitting ? 'Saving Supplier...' : (isEditModalOpen ? 'Save Changes' : 'Add Supplier')}</span>
             </button>
           </div>
         </form>
@@ -650,19 +695,28 @@ export const SuppliersModule: React.FC = () => {
             />
           </div>
 
+          {submitError && (
+            <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs text-rose-400">
+              {submitError}
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-4 border-t border-slate-800">
             <button
               type="button"
+              disabled={isSubmitting}
               onClick={() => setIsPaymentModalOpen(false)}
-              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white text-xs font-black shadow-md transition-colors"
+              disabled={isSubmitting}
+              className="px-5 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60"
             >
-              Confirm Supplier Payment
+              {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              <span>{isSubmitting ? 'Recording Payment...' : 'Confirm Supplier Payment'}</span>
             </button>
           </div>
         </form>
@@ -711,23 +765,22 @@ export const SuppliersModule: React.FC = () => {
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
                 <button
                   type="button"
+                  disabled={isDeleting}
                   onClick={() => setDeleteConfirmSupplier(null)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    const res = deleteOrArchiveSupplier(deleteConfirmSupplier.id, currentUser);
-                    alert(res.message);
-                    setDeleteConfirmSupplier(null);
-                  }}
-                  className={`px-5 py-2 rounded-xl text-white text-xs font-black shadow-md transition-colors ${
+                  disabled={isDeleting}
+                  onClick={() => handleDeleteOrArchive(deleteConfirmSupplier)}
+                  className={`px-5 py-2 rounded-xl text-white text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60 ${
                     hasHistory ? 'bg-amber-600 hover:bg-amber-500' : 'bg-rose-600 hover:bg-rose-500'
                   }`}
                 >
-                  {hasHistory ? 'Confirm & Archive Supplier' : 'Confirm Permanent Deletion'}
+                  {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isDeleting ? 'Processing...' : (hasHistory ? 'Confirm & Archive Supplier' : 'Confirm Permanent Deletion')}</span>
                 </button>
               </div>
             </div>

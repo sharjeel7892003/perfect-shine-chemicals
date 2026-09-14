@@ -16,7 +16,8 @@ import {
   Box,
   Layers,
   ChevronDown,
-  AlertTriangle
+  AlertTriangle,
+  Loader2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -33,6 +34,9 @@ export const SalesModule: React.FC = () => {
   const [activeSubTab, setActiveSubTab] = useState<'pos' | 'history'>('pos');
   const [selectedInvoice, setSelectedInvoice] = useState<Sale | null>(null);
   const [deleteConfirmSale, setDeleteConfirmSale] = useState<Sale | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // POS State
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
@@ -209,7 +213,7 @@ export const SalesModule: React.FC = () => {
     setSalesNotes('');
   };
 
-  const handleCheckout = (e: React.FormEvent) => {
+  const handleCheckout = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (cartItems.length === 0) {
@@ -220,31 +224,47 @@ export const SalesModule: React.FC = () => {
     const customerName = selectedCustomer ? selectedCustomer.name : 'Counter Walk-in Retail';
     const finalAmountPaid = paymentStatus === 'paid' ? totalAmount : amountPaid;
 
-    const newSale = createSale({
-      customer_id: selectedCustomerId || undefined,
-      customer_name: customerName,
-      date: new Date().toISOString(),
-      items: cartItems,
-      subtotal,
-      discount: discountAmount,
-      tax: 0,
-      total_amount: totalAmount,
-      amount_paid: finalAmountPaid,
-      payment_status: paymentStatus,
-      payment_method: paymentMethod,
-      salesperson_name: currentUser.name,
-      notes: salesNotes,
-    });
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      const newSale = await createSale({
+        customer_id: selectedCustomerId || undefined,
+        customer_name: customerName,
+        date: new Date().toISOString(),
+        items: cartItems,
+        subtotal,
+        discount: discountAmount,
+        tax: 0,
+        total_amount: totalAmount,
+        amount_paid: finalAmountPaid,
+        payment_status: paymentStatus,
+        payment_method: paymentMethod,
+        salesperson_name: currentUser.name,
+        notes: salesNotes,
+      });
 
-    clearCart();
-    setSelectedInvoice(newSale);
+      clearCart();
+      setSelectedInvoice(newSale);
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Failed to complete sale. Please check your connection.');
+      alert(err?.message || 'Failed to complete sale');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleConfirmDeleteSale = () => {
+  const handleConfirmDeleteSale = async () => {
     if (!deleteConfirmSale) return;
-    const res = deleteSaleInvoice(deleteConfirmSale.id, currentUser);
-    alert(res.message);
-    setDeleteConfirmSale(null);
+    setIsDeleting(true);
+    try {
+      const res = await deleteSaleInvoice(deleteConfirmSale.id, currentUser);
+      alert(res.message);
+      setDeleteConfirmSale(null);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to delete sale invoice');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   // Filter products in POS (Only active & non-archived)
@@ -575,21 +595,27 @@ export const SalesModule: React.FC = () => {
               )}
 
               {/* Checkout Action Buttons */}
+              {submitError && (
+                <div className="p-2.5 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs text-rose-400">
+                  {submitError}
+                </div>
+              )}
               <div className="flex items-center gap-2 pt-2">
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={clearCart}
-                  className="px-3 py-2.5 rounded-xl border border-slate-700 hover:bg-slate-800 text-slate-400 hover:text-white text-xs font-semibold transition-colors"
+                  className="px-3 py-2.5 rounded-xl border border-slate-700 hover:bg-slate-800 text-slate-400 hover:text-white text-xs font-semibold transition-colors disabled:opacity-50"
                 >
                   Clear
                 </button>
                 <button
                   type="submit"
-                  disabled={cartItems.length === 0}
+                  disabled={isSubmitting || cartItems.length === 0}
                   className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-sm shadow-lg shadow-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
                 >
-                  <CheckCircle className="w-4 h-4" />
-                  <span>Generate Invoice ({formatPKR(totalAmount)})</span>
+                  {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+                  <span>{isSubmitting ? 'Syncing to Cloud...' : `Generate Invoice (${formatPKR(totalAmount)})`}</span>
                 </button>
               </div>
             </form>
@@ -762,17 +788,20 @@ export const SalesModule: React.FC = () => {
             <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
               <button
                 type="button"
+                disabled={isDeleting}
                 onClick={() => setDeleteConfirmSale(null)}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 type="button"
+                disabled={isDeleting}
                 onClick={handleConfirmDeleteSale}
-                className="px-5 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white text-xs font-black shadow-md transition-colors"
+                className="px-5 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60"
               >
-                Confirm Deletion & Execute Reversals
+                {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>{isDeleting ? 'Reversing...' : 'Confirm Deletion & Execute Reversals'}</span>
               </button>
             </div>
           </div>

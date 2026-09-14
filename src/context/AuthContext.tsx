@@ -73,10 +73,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem('psc_users', JSON.stringify(allUsers));
-  }, [allUsers]);
-
+  // Save only active user selection for browser session persistence
   useEffect(() => {
     localStorage.setItem('psc_current_user_id', currentUserId);
   }, [currentUserId]);

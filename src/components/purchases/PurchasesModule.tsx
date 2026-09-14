@@ -10,7 +10,8 @@ import {
   AlertCircle, 
   FlaskConical, 
   Package,
-  Eye
+  Eye,
+  Loader2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -28,6 +29,9 @@ export const PurchasesModule: React.FC = () => {
   const [selectedPurchaseDetails, setSelectedPurchaseDetails] = useState<Purchase | null>(null);
   const [deleteConfirmPurchase, setDeleteConfirmPurchase] = useState<Purchase | null>(null);
   const [negativeStockWarning, setNegativeStockWarning] = useState<string[] | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Active entities only for new purchases
   const activeSuppliers = suppliers.filter(s => !s.is_archived && s.is_active);
@@ -104,7 +108,7 @@ export const PurchasesModule: React.FC = () => {
     }
   };
 
-  const handleCreatePurchase = (e: React.FormEvent) => {
+  const handleCreatePurchase = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!supplierId) {
       alert('Please select a supplier');
@@ -117,38 +121,53 @@ export const PurchasesModule: React.FC = () => {
 
     const finalPaid = paymentStatus === 'paid' ? totalAmount : amountPaid;
 
-    createPurchase({
-      supplier_id: supplierId,
-      supplier_name: selectedSupplier ? selectedSupplier.name : 'Unknown Supplier',
-      date: new Date().toISOString(),
-      items,
-      total_amount: totalAmount,
-      amount_paid: finalPaid,
-      payment_status: paymentStatus,
-      payment_method: paymentMethod,
-      notes,
-    });
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      await createPurchase({
+        supplier_id: supplierId,
+        supplier_name: selectedSupplier ? selectedSupplier.name : 'Unknown Supplier',
+        date: new Date().toISOString(),
+        items,
+        total_amount: totalAmount,
+        amount_paid: finalPaid,
+        payment_status: paymentStatus,
+        payment_method: paymentMethod,
+        notes,
+      });
 
-    setIsModalOpen(false);
-    // Reset form
-    setSupplierId('');
-    setItems([{ item_type: 'raw_material', raw_material_id: '', product_or_material_name: '', quantity: 1, unit_cost: 0, subtotal: 0 }]);
-    setAmountPaid(0);
-    setNotes('');
+      setIsModalOpen(false);
+      // Reset form
+      setSupplierId('');
+      setItems([{ item_type: 'raw_material', raw_material_id: '', product_or_material_name: '', quantity: 1, unit_cost: 0, subtotal: 0 }]);
+      setAmountPaid(0);
+      setNotes('');
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Failed to record purchase. Please check your connection.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleDeletePurchase = (force: boolean = false) => {
+  const handleDeletePurchase = async (force: boolean = false) => {
     if (!deleteConfirmPurchase) return;
-    const res = deletePurchaseInvoice(deleteConfirmPurchase.id, currentUser, force);
+    setIsDeleting(true);
+    try {
+      const res = await deletePurchaseInvoice(deleteConfirmPurchase.id, currentUser, force);
 
-    if (res.hasNegativeStockWarning && !force) {
-      setNegativeStockWarning(res.warningDetails || ['Low stock detected']);
-      return;
+      if (res.hasNegativeStockWarning && !force) {
+        setNegativeStockWarning(res.warningDetails || ['Low stock detected']);
+        return;
+      }
+
+      alert(res.message);
+      setDeleteConfirmPurchase(null);
+      setNegativeStockWarning(null);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to delete purchase invoice');
+    } finally {
+      setIsDeleting(false);
     }
-
-    alert(res.message);
-    setDeleteConfirmPurchase(null);
-    setNegativeStockWarning(null);
   };
 
   const filteredPurchases = purchases.filter(p =>
@@ -472,19 +491,28 @@ export const PurchasesModule: React.FC = () => {
             )}
           </div>
 
+          {submitError && (
+            <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs text-rose-400">
+              {submitError}
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
             <button
               type="button"
+              disabled={isSubmitting}
               onClick={() => setIsModalOpen(false)}
-              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-md transition-colors"
+              disabled={isSubmitting}
+              className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60"
             >
-              Confirm Purchase & Receive Stock
+              {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              <span>{isSubmitting ? 'Recording Purchase...' : 'Confirm Purchase & Receive Stock'}</span>
             </button>
           </div>
         </form>
@@ -645,29 +673,34 @@ export const PurchasesModule: React.FC = () => {
             <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
               <button
                 type="button"
+                disabled={isDeleting}
                 onClick={() => {
                   setDeleteConfirmPurchase(null);
                   setNegativeStockWarning(null);
                 }}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
               >
                 Cancel
               </button>
               {negativeStockWarning ? (
                 <button
                   type="button"
+                  disabled={isDeleting}
                   onClick={() => handleDeletePurchase(true)}
-                  className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black shadow-md transition-colors"
+                  className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60"
                 >
-                  Force Delete (Allow Negative Stock)
+                  {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isDeleting ? 'Reversing...' : 'Force Delete (Allow Negative Stock)'}</span>
                 </button>
               ) : (
                 <button
                   type="button"
+                  disabled={isDeleting}
                   onClick={() => handleDeletePurchase(false)}
-                  className="px-5 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white text-xs font-black shadow-md transition-colors"
+                  className="px-5 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60"
                 >
-                  Confirm Deletion & Reverse Stocks
+                  {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isDeleting ? 'Reversing...' : 'Confirm Deletion & Reverse Stocks'}</span>
                 </button>
               )}
             </div>

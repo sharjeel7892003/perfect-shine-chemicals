@@ -12,7 +12,9 @@ import {
   DollarSign,
   Printer,
   Archive,
-  RefreshCw
+  RefreshCw,
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -67,7 +69,14 @@ export const CustomersModule: React.FC = () => {
   const [paymentRef, setPaymentRef] = useState<string>('');
   const [paymentNotes, setPaymentNotes] = useState<string>('');
 
+  // Form submission loading & error states
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   const openAddModal = () => {
+    setSubmitError(null);
+    setIsSubmitting(false);
     setFormData({
       name: '',
       phone: '',
@@ -83,6 +92,8 @@ export const CustomersModule: React.FC = () => {
   };
 
   const openEditModal = (c: Customer) => {
+    setSubmitError(null);
+    setIsSubmitting(false);
     setSelectedCustomer(c);
     setFormData({
       name: c.name,
@@ -104,6 +115,8 @@ export const CustomersModule: React.FC = () => {
   };
 
   const openPaymentModal = (c: Customer) => {
+    setSubmitError(null);
+    setIsSubmitting(false);
     setSelectedCustomer(c);
     setLinkedSaleId('');
     setPaymentAmount(c.current_balance > 0 ? c.current_balance : 0);
@@ -112,37 +125,53 @@ export const CustomersModule: React.FC = () => {
     setIsPaymentModalOpen(true);
   };
 
-  const handleSaveCustomer = (e: React.FormEvent) => {
+  const handleSaveCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isEditModalOpen && selectedCustomer) {
-      updateCustomer(selectedCustomer.id, formData);
-      setIsEditModalOpen(false);
-    } else {
-      addCustomer(formData);
-      setIsAddModalOpen(false);
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      if (isEditModalOpen && selectedCustomer) {
+        await updateCustomer(selectedCustomer.id, formData);
+        setIsEditModalOpen(false);
+      } else {
+        await addCustomer(formData);
+        setIsAddModalOpen(false);
+      }
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Failed to save customer to cloud database.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const handleRecordPayment = (e: React.FormEvent) => {
+  const handleRecordPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedCustomer || paymentAmount <= 0) return;
+    setIsSubmitting(true);
+    setSubmitError(null);
 
-    const sale = sales.find(s => s.id === linkedSaleId);
+    try {
+      const sale = sales.find(s => s.id === linkedSaleId);
 
-    recordPayment({
-      related_to: linkedSaleId ? 'sale' : 'customer_balance',
-      reference_id: linkedSaleId || undefined,
-      reference_no: sale ? sale.invoice_number : undefined,
-      customer_id: selectedCustomer.id,
-      customer_name: selectedCustomer.name,
-      amount: paymentAmount,
-      payment_method: paymentMethod,
-      transaction_ref: paymentRef,
-      notes: paymentNotes || (linkedSaleId ? `Payment for invoice ${sale?.invoice_number}` : 'Customer ledger payment receipt'),
-      date: new Date().toISOString(),
-    });
+      await recordPayment({
+        related_to: linkedSaleId ? 'sale' : 'customer_balance',
+        reference_id: linkedSaleId || undefined,
+        reference_no: sale ? sale.invoice_number : undefined,
+        customer_id: selectedCustomer.id,
+        customer_name: selectedCustomer.name,
+        amount: paymentAmount,
+        payment_method: paymentMethod,
+        transaction_ref: paymentRef,
+        notes: paymentNotes || (linkedSaleId ? `Payment for invoice ${sale?.invoice_number}` : 'Customer ledger payment receipt'),
+        date: new Date().toISOString(),
+      });
 
-    setIsPaymentModalOpen(false);
+      setIsPaymentModalOpen(false);
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Failed to record payment in cloud database.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const filteredCustomers = customers.filter(c => {
@@ -405,6 +434,13 @@ export const CustomersModule: React.FC = () => {
         subtitle="Wholesale distributor and shop account details"
       >
         <form onSubmit={handleSaveCustomer} className="space-y-4">
+          {submitError && (
+            <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{submitError}</span>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2">
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Customer / Store Name</label>
@@ -485,9 +521,11 @@ export const CustomersModule: React.FC = () => {
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-md transition-colors"
+              disabled={isSubmitting}
+              className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 text-xs font-black shadow-md transition-colors flex items-center gap-2"
             >
-              {isEditModalOpen ? 'Save Changes' : 'Add Customer'}
+              {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              <span>{isSubmitting ? 'Saving to Cloud...' : (isEditModalOpen ? 'Save Changes' : 'Add Customer')}</span>
             </button>
           </div>
         </form>
@@ -694,6 +732,13 @@ export const CustomersModule: React.FC = () => {
             />
           </div>
 
+          {submitError && (
+            <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{submitError}</span>
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-4 border-t border-slate-800">
             <button
               type="button"
@@ -704,9 +749,11 @@ export const CustomersModule: React.FC = () => {
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-md transition-colors"
+              disabled={isSubmitting}
+              className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-950 text-xs font-black shadow-md transition-colors flex items-center gap-2"
             >
-              Save Receipt & Update Balance
+              {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              <span>{isSubmitting ? 'Recording Receipt...' : 'Save Receipt & Update Balance'}</span>
             </button>
           </div>
         </form>
@@ -762,16 +809,25 @@ export const CustomersModule: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    const res = deleteOrArchiveCustomer(deleteConfirmCustomer.id, currentUser);
-                    alert(res.message);
-                    setDeleteConfirmCustomer(null);
+                  disabled={isDeleting}
+                  onClick={async () => {
+                    setIsDeleting(true);
+                    try {
+                      const res = await deleteOrArchiveCustomer(deleteConfirmCustomer.id, currentUser);
+                      alert(res.message);
+                      setDeleteConfirmCustomer(null);
+                    } catch (err: any) {
+                      alert(err?.message || 'Failed to delete or archive customer.');
+                    } finally {
+                      setIsDeleting(false);
+                    }
                   }}
-                  className={`px-5 py-2 rounded-xl text-white text-xs font-black shadow-md transition-colors ${
+                  className={`px-5 py-2 rounded-xl text-white text-xs font-black shadow-md transition-colors flex items-center gap-2 disabled:opacity-50 ${
                     hasHistory ? 'bg-amber-600 hover:bg-amber-500' : 'bg-rose-600 hover:bg-rose-500'
                   }`}
                 >
-                  {hasHistory ? 'Confirm & Archive Customer' : 'Confirm Permanent Deletion'}
+                  {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{hasHistory ? 'Confirm & Archive Customer' : 'Confirm Permanent Deletion'}</span>
                 </button>
               </div>
             </div>

@@ -15,7 +15,8 @@ import {
   ShieldAlert,
   Info,
   ChevronRight,
-  Trash2
+  Trash2,
+  Loader2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -41,6 +42,9 @@ export const ProductionModule: React.FC = () => {
   const [selectedBatchDetails, setSelectedBatchDetails] = useState<ProductionBatch | null>(null);
   const [deleteConfirmBatch, setDeleteConfirmBatch] = useState<ProductionBatch | null>(null);
   const [negativeStockWarning, setNegativeStockWarning] = useState<string[] | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Form State
   const [selectedProductId, setSelectedProductId] = useState('');
@@ -59,6 +63,7 @@ export const ProductionModule: React.FC = () => {
     setBatchNumber(`BATCH-${dateStr}-${randomSeq}`);
     setProductionDate(new Date().toISOString().split('T')[0]);
     setNotes('');
+    setSubmitError(null);
     setIsRecordModalOpen(true);
   };
 
@@ -89,7 +94,7 @@ export const ProductionModule: React.FC = () => {
   const hasAnyShortage = requiredMaterialsCalculations.some(r => !r.isSufficient);
   const totalEstimatedBatchCost = requiredMaterialsCalculations.reduce((acc, r) => acc + r.estimatedCost, 0);
 
-  const handleRecordProductionSubmit = (e: React.FormEvent) => {
+  const handleRecordProductionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!selectedProductId || quantityProduced <= 0) {
@@ -107,22 +112,30 @@ export const ProductionModule: React.FC = () => {
       return;
     }
 
-    const result = recordProductionBatch({
-      productId: selectedProductId,
-      quantityProduced: Number(quantityProduced),
-      batchNumber,
-      date: new Date(productionDate).toISOString(),
-      supervisorName: currentUser.name,
-      notes,
-    });
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      const result = await recordProductionBatch({
+        productId: selectedProductId,
+        quantityProduced: Number(quantityProduced),
+        batchNumber,
+        date: new Date(productionDate).toISOString(),
+        supervisorName: currentUser.name,
+        notes,
+      });
 
-    if (result.success) {
-      setIsRecordModalOpen(false);
-      if (result.batch) {
-        setSelectedBatchDetails(result.batch);
+      if (result.success) {
+        setIsRecordModalOpen(false);
+        if (result.batch) {
+          setSelectedBatchDetails(result.batch);
+        }
+      } else {
+        setSubmitError(result.message);
       }
-    } else {
-      alert(result.message);
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Failed to record production batch. Please check connection.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -416,20 +429,28 @@ export const ProductionModule: React.FC = () => {
             />
           </div>
 
+          {submitError && (
+            <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs text-rose-400">
+              {submitError}
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
             <button
               type="button"
+              disabled={isSubmitting}
               onClick={() => setIsRecordModalOpen(false)}
-              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              disabled={hasAnyShortage || !selectedFormulation}
-              className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-md disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              disabled={isSubmitting || hasAnyShortage || !selectedFormulation}
+              className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-md disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-1.5"
             >
-              Confirm Batch & Deduct Raw Materials
+              {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              <span>{isSubmitting ? 'Recording Batch to Cloud...' : 'Confirm Batch & Deduct Raw Materials'}</span>
             </button>
           </div>
         </form>
@@ -596,42 +617,61 @@ export const ProductionModule: React.FC = () => {
             <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
               <button
                 type="button"
+                disabled={isDeleting}
                 onClick={() => {
                   setDeleteConfirmBatch(null);
                   setNegativeStockWarning(null);
                 }}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
               >
                 Cancel
               </button>
               {negativeStockWarning ? (
                 <button
                   type="button"
-                  onClick={() => {
-                    const res = deleteProductionBatch(deleteConfirmBatch.id, currentUser, true);
-                    alert(res.message);
-                    setDeleteConfirmBatch(null);
-                    setNegativeStockWarning(null);
+                  disabled={isDeleting}
+                  onClick={async () => {
+                    setIsDeleting(true);
+                    try {
+                      const res = await deleteProductionBatch(deleteConfirmBatch.id, currentUser, true);
+                      alert(res.message);
+                      setDeleteConfirmBatch(null);
+                      setNegativeStockWarning(null);
+                    } catch (err: any) {
+                      alert(err?.message || 'Failed to delete batch');
+                    } finally {
+                      setIsDeleting(false);
+                    }
                   }}
-                  className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black shadow-md transition-colors"
+                  className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60"
                 >
-                  Force Delete (Allow Negative Stock)
+                  {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isDeleting ? 'Reversing...' : 'Force Delete (Allow Negative Stock)'}</span>
                 </button>
               ) : (
                 <button
                   type="button"
-                  onClick={() => {
-                    const res = deleteProductionBatch(deleteConfirmBatch.id, currentUser, false);
-                    if (res.hasNegativeStockWarning && res.warningDetails) {
-                      setNegativeStockWarning(res.warningDetails);
-                    } else {
-                      alert(res.message);
-                      setDeleteConfirmBatch(null);
+                  disabled={isDeleting}
+                  onClick={async () => {
+                    setIsDeleting(true);
+                    try {
+                      const res = await deleteProductionBatch(deleteConfirmBatch.id, currentUser, false);
+                      if (res.hasNegativeStockWarning && res.warningDetails) {
+                        setNegativeStockWarning(res.warningDetails);
+                      } else {
+                        alert(res.message);
+                        setDeleteConfirmBatch(null);
+                      }
+                    } catch (err: any) {
+                      alert(err?.message || 'Failed to delete batch');
+                    } finally {
+                      setIsDeleting(false);
                     }
                   }}
-                  className="px-5 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white text-xs font-black shadow-md transition-colors"
+                  className="px-5 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60"
                 >
-                  Confirm Deletion & Reverse Batch
+                  {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isDeleting ? 'Reversing...' : 'Confirm Deletion & Reverse Batch'}</span>
                 </button>
               )}
             </div>

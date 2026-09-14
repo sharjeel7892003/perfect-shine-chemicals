@@ -14,7 +14,8 @@ import {
   Sparkles,
   Trash2,
   Archive,
-  RefreshCw
+  RefreshCw,
+  Loader2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -44,6 +45,9 @@ export const RawMaterialsModule: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [deleteConfirmMaterial, setDeleteConfirmMaterial] = useState<RawMaterial | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Modal States
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -82,6 +86,7 @@ export const RawMaterialsModule: React.FC = () => {
       description: '',
       is_active: true,
     });
+    setSubmitError(null);
     setIsAddModalOpen(true);
   };
 
@@ -97,6 +102,7 @@ export const RawMaterialsModule: React.FC = () => {
       description: mat.description || '',
       is_active: mat.is_active,
     });
+    setSubmitError(null);
     setIsEditModalOpen(true);
   };
 
@@ -113,29 +119,57 @@ export const RawMaterialsModule: React.FC = () => {
     setIsAdjustModalOpen(true);
   };
 
-  const handleSaveMaterial = (e: React.FormEvent) => {
+  const handleSaveMaterial = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isEditModalOpen && selectedMaterial) {
-      updateRawMaterial(selectedMaterial.id, formData);
-      setIsEditModalOpen(false);
-    } else {
-      addRawMaterial(formData);
-      setIsAddModalOpen(false);
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      if (isEditModalOpen && selectedMaterial) {
+        await updateRawMaterial(selectedMaterial.id, formData);
+        setIsEditModalOpen(false);
+      } else {
+        await addRawMaterial(formData);
+        setIsAddModalOpen(false);
+      }
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Failed to save raw material. Please check connection.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const handleApplyAdjustment = (e: React.FormEvent) => {
+  const handleApplyAdjustment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!adjustData.materialId || adjustData.qtyDiff === 0) return;
 
-    adjustRawMaterialStock(
-      adjustData.materialId,
-      adjustData.qtyDiff,
-      adjustData.type,
-      adjustData.notes,
-      currentUser.name
-    );
-    setIsAdjustModalOpen(false);
+    setIsSubmitting(true);
+    try {
+      await adjustRawMaterialStock(
+        adjustData.materialId,
+        adjustData.qtyDiff,
+        adjustData.type,
+        adjustData.notes,
+        currentUser.name
+      );
+      setIsAdjustModalOpen(false);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to apply adjustment');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteOrArchiveMaterial = async (mat: RawMaterial) => {
+    setIsDeleting(true);
+    try {
+      const res = await deleteOrArchiveRawMaterial(mat.id, currentUser);
+      alert(res.message);
+      setDeleteConfirmMaterial(null);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to delete/archive raw material');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   const categories = Array.from(new Set(rawMaterials.map(rm => rm.category || 'General')));
@@ -589,19 +623,28 @@ export const RawMaterialsModule: React.FC = () => {
             </div>
           </div>
 
+          {submitError && (
+            <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs text-rose-400">
+              {submitError}
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-4 border-t border-slate-800">
             <button
               type="button"
+              disabled={isSubmitting}
               onClick={() => { setIsAddModalOpen(false); setIsEditModalOpen(false); }}
-              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 text-xs font-black shadow-md transition-colors"
+              disabled={isSubmitting}
+              className="px-5 py-2 rounded-xl bg-teal-500 hover:bg-teal-400 text-slate-950 text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60"
             >
-              {isEditModalOpen ? 'Save Changes' : 'Create Raw Material'}
+              {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              <span>{isSubmitting ? 'Saving Raw Material...' : (isEditModalOpen ? 'Save Changes' : 'Create Raw Material')}</span>
             </button>
           </div>
         </form>
@@ -732,23 +775,22 @@ export const RawMaterialsModule: React.FC = () => {
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
                 <button
                   type="button"
+                  disabled={isDeleting}
                   onClick={() => setDeleteConfirmMaterial(null)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    const res = deleteOrArchiveRawMaterial(deleteConfirmMaterial.id, currentUser);
-                    alert(res.message);
-                    setDeleteConfirmMaterial(null);
-                  }}
-                  className={`px-5 py-2 rounded-xl text-white text-xs font-black shadow-md transition-colors ${
+                  disabled={isDeleting}
+                  onClick={() => handleDeleteOrArchiveMaterial(deleteConfirmMaterial)}
+                  className={`px-5 py-2 rounded-xl text-white text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60 ${
                     hasHistory ? 'bg-amber-600 hover:bg-amber-500' : 'bg-rose-600 hover:bg-rose-500'
                   }`}
                 >
-                  {hasHistory ? 'Confirm & Archive Material' : 'Confirm Permanent Deletion'}
+                  {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isDeleting ? 'Processing...' : (hasHistory ? 'Confirm & Archive Material' : 'Confirm Permanent Deletion')}</span>
                 </button>
               </div>
             </div>

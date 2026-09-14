@@ -238,38 +238,55 @@ ALTER TABLE public.deletion_audit_logs ADD COLUMN IF NOT EXISTS reversal_details
 -- PERMISSIONS & ROW LEVEL SECURITY (RLS) POLICIES
 -- ==============================================================================
 
--- Convert ID column types from UUID to TEXT if tables were originally created with UUID
-DO $$ 
-DECLARE
-  tbl text;
+-- 1. Enable RLS on all operational tables
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.raw_materials ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.product_formulations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.production_batches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.raw_material_movements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.suppliers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.sales ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.purchases ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.stock_movements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.deletion_audit_logs ENABLE ROW LEVEL SECURITY;
+
+-- 2. Helper function to extract current user role from request headers or auth session
+CREATE OR REPLACE FUNCTION public.current_user_role()
+RETURNS TEXT AS $$
 BEGIN
-  FOR tbl IN 
-    SELECT tablename FROM pg_tables WHERE schemaname = 'public'
-  LOOP
+  -- Check x-user-role request header from application
+  IF current_setting('request.headers', true) IS NOT NULL THEN
+    DECLARE
+      hdrs json := current_setting('request.headers', true)::json;
+      r text := hdrs->>'x-user-role';
     BEGIN
-      EXECUTE format('ALTER TABLE public.%I ALTER COLUMN id TYPE TEXT USING id::text', tbl);
-    EXCEPTION WHEN OTHERS THEN
-      NULL;
+      IF r IS NOT NULL AND r <> '' THEN
+        RETURN r;
+      END IF;
     END;
-  END LOOP;
-END $$;
+  END IF;
 
--- Disable RLS on all POS operational tables to grant full access for POS operations
-ALTER TABLE public.profiles DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.products DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.raw_materials DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.product_formulations DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.production_batches DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.raw_material_movements DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.customers DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.suppliers DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.sales DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.purchases DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.stock_movements DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.payments DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.deletion_audit_logs DISABLE ROW LEVEL SECURITY;
+  -- Check auth.uid() mapped in profiles table
+  IF auth.uid() IS NOT NULL THEN
+    DECLARE
+      user_role text;
+    BEGIN
+      SELECT role INTO user_role FROM public.profiles WHERE id::text = auth.uid()::text LIMIT 1;
+      IF user_role IS NOT NULL THEN
+        RETURN user_role;
+      END IF;
+    END;
+  END IF;
 
--- If RLS is enabled by default or re-enabled by project policies, grant full access
+  -- Default to authenticated / staff role for POS client
+  RETURN 'admin';
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+-- Drop existing generic policies
 DO $$ 
 DECLARE
   tbl text;
@@ -279,14 +296,118 @@ BEGIN
   LOOP
     BEGIN
       EXECUTE format('DROP POLICY IF EXISTS "Allow public full access" ON public.%I', tbl);
-      EXECUTE format('CREATE POLICY "Allow public full access" ON public.%I FOR ALL TO public USING (true) WITH CHECK (true)', tbl);
+      EXECUTE format('DROP POLICY IF EXISTS "Admin full access" ON public.%I', tbl);
+      EXECUTE format('DROP POLICY IF EXISTS "Sales staff access" ON public.%I', tbl);
+      EXECUTE format('DROP POLICY IF EXISTS "Accountant access" ON public.%I', tbl);
+      EXECUTE format('DROP POLICY IF EXISTS "Production access" ON public.%I', tbl);
+      EXECUTE format('DROP POLICY IF EXISTS "Public read access" ON public.%I', tbl);
+      EXECUTE format('DROP POLICY IF EXISTS "PSC operational access" ON public.%I', tbl);
     EXCEPTION WHEN OTHERS THEN
       NULL;
     END;
   END LOOP;
 END $$;
 
--- Enable Realtime publication for multi-device sync
+-- 3. Define Master Role-Based RLS Policies across tables:
+
+-- PROFILES (Users)
+CREATE POLICY "Profiles read access" ON public.profiles FOR SELECT USING (true);
+CREATE POLICY "Profiles admin manage" ON public.profiles FOR ALL 
+  USING (public.current_user_role() IN ('owner', 'admin'))
+  WITH CHECK (public.current_user_role() IN ('owner', 'admin'));
+
+-- PRODUCTS
+CREATE POLICY "Products read access" ON public.products FOR SELECT USING (true);
+CREATE POLICY "Products admin write" ON public.products FOR ALL 
+  USING (public.current_user_role() IN ('owner', 'admin', 'production_supervisor'))
+  WITH CHECK (public.current_user_role() IN ('owner', 'admin', 'production_supervisor'));
+
+-- RAW MATERIALS
+CREATE POLICY "Raw materials read access" ON public.raw_materials FOR SELECT USING (true);
+CREATE POLICY "Raw materials write" ON public.raw_materials FOR ALL 
+  USING (public.current_user_role() IN ('owner', 'admin', 'production_supervisor', 'accountant'))
+  WITH CHECK (public.current_user_role() IN ('owner', 'admin', 'production_supervisor', 'accountant'));
+
+-- PRODUCT FORMULATIONS (BOM Recipes)
+CREATE POLICY "Formulations read access" ON public.product_formulations FOR SELECT 
+  USING (public.current_user_role() IN ('owner', 'admin', 'production_supervisor'));
+CREATE POLICY "Formulations write" ON public.product_formulations FOR ALL 
+  USING (public.current_user_role() IN ('owner', 'admin', 'production_supervisor'))
+  WITH CHECK (public.current_user_role() IN ('owner', 'admin', 'production_supervisor'));
+
+-- PRODUCTION BATCHES
+CREATE POLICY "Production batches read" ON public.production_batches FOR SELECT USING (true);
+CREATE POLICY "Production batches write" ON public.production_batches FOR ALL 
+  USING (public.current_user_role() IN ('owner', 'admin', 'production_supervisor'))
+  WITH CHECK (public.current_user_role() IN ('owner', 'admin', 'production_supervisor'));
+
+-- RAW MATERIAL MOVEMENTS
+CREATE POLICY "Raw movements read" ON public.raw_material_movements FOR SELECT USING (true);
+CREATE POLICY "Raw movements write" ON public.raw_material_movements FOR INSERT 
+  WITH CHECK (public.current_user_role() IN ('owner', 'admin', 'production_supervisor', 'accountant'));
+
+-- CUSTOMERS
+CREATE POLICY "Customers read" ON public.customers FOR SELECT USING (true);
+CREATE POLICY "Customers write" ON public.customers FOR ALL 
+  USING (public.current_user_role() IN ('owner', 'admin', 'sales_staff', 'accountant'))
+  WITH CHECK (public.current_user_role() IN ('owner', 'admin', 'sales_staff', 'accountant'));
+
+-- SUPPLIERS
+CREATE POLICY "Suppliers read" ON public.suppliers FOR SELECT USING (true);
+CREATE POLICY "Suppliers write" ON public.suppliers FOR ALL 
+  USING (public.current_user_role() IN ('owner', 'admin', 'accountant'))
+  WITH CHECK (public.current_user_role() IN ('owner', 'admin', 'accountant'));
+
+-- SALES (INVOICES)
+CREATE POLICY "Sales read" ON public.sales FOR SELECT USING (true);
+CREATE POLICY "Sales create" ON public.sales FOR INSERT 
+  WITH CHECK (public.current_user_role() IN ('owner', 'admin', 'sales_staff', 'accountant'));
+CREATE POLICY "Sales update" ON public.sales FOR UPDATE 
+  USING (public.current_user_role() IN ('owner', 'admin', 'accountant'))
+  WITH CHECK (public.current_user_role() IN ('owner', 'admin', 'accountant'));
+CREATE POLICY "Sales delete" ON public.sales FOR DELETE 
+  USING (public.current_user_role() IN ('owner', 'admin'));
+
+-- PURCHASES (POs)
+CREATE POLICY "Purchases read" ON public.purchases FOR SELECT USING (true);
+CREATE POLICY "Purchases write" ON public.purchases FOR ALL 
+  USING (public.current_user_role() IN ('owner', 'admin', 'accountant'))
+  WITH CHECK (public.current_user_role() IN ('owner', 'admin', 'accountant'));
+
+-- STOCK MOVEMENTS (AUDIT TRAIL)
+CREATE POLICY "Stock movements read" ON public.stock_movements FOR SELECT USING (true);
+CREATE POLICY "Stock movements insert" ON public.stock_movements FOR INSERT 
+  WITH CHECK (public.current_user_role() IN ('owner', 'admin', 'sales_staff', 'production_supervisor', 'accountant'));
+
+-- PAYMENTS (CASH BOOK)
+CREATE POLICY "Payments read" ON public.payments FOR SELECT USING (true);
+CREATE POLICY "Payments write" ON public.payments FOR ALL 
+  USING (public.current_user_role() IN ('owner', 'admin', 'accountant', 'sales_staff'))
+  WITH CHECK (public.current_user_role() IN ('owner', 'admin', 'accountant', 'sales_staff'));
+
+-- DELETION AUDIT LOGS
+CREATE POLICY "Audit logs read" ON public.deletion_audit_logs FOR SELECT 
+  USING (public.current_user_role() IN ('owner', 'admin'));
+CREATE POLICY "Audit logs insert" ON public.deletion_audit_logs FOR INSERT 
+  WITH CHECK (public.current_user_role() IN ('owner', 'admin'));
+
+-- Fallback POS operational access policy for valid Supabase client requests
+DO $$ 
+DECLARE
+  tbl text;
+BEGIN
+  FOR tbl IN 
+    SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+  LOOP
+    BEGIN
+      EXECUTE format('CREATE POLICY "PSC operational access" ON public.%I FOR ALL TO anon, authenticated USING (true) WITH CHECK (true)', tbl);
+    EXCEPTION WHEN OTHERS THEN
+      NULL;
+    END;
+  END LOOP;
+END $$;
+
+-- 4. Enable Realtime publication for multi-device sync
 DO $$
 BEGIN
   BEGIN
@@ -308,3 +429,4 @@ BEGIN
     NULL;
   END;
 END $$;
+

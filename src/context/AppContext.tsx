@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { 
   Product, 
   Customer, 
@@ -17,19 +17,6 @@ import {
   DeletionAuditLog,
   Profile
 } from '../types';
-import {
-  INITIAL_PRODUCTS,
-  INITIAL_RAW_MATERIALS,
-  INITIAL_FORMULATIONS,
-  INITIAL_PRODUCTION_BATCHES,
-  INITIAL_RAW_MATERIAL_MOVEMENTS,
-  INITIAL_CUSTOMERS,
-  INITIAL_SUPPLIERS,
-  INITIAL_SALES,
-  INITIAL_PURCHASES,
-  INITIAL_STOCK_MOVEMENTS,
-  INITIAL_PAYMENTS
-} from '../lib/mockData';
 import { generateInvoiceNumber } from '../utils/formatters';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { supabaseService } from '../lib/supabaseService';
@@ -50,6 +37,12 @@ interface AppContextType {
   payments: Payment[];
   deletionLogs: DeletionAuditLog[];
   
+  // Cloud & Connectivity Status
+  isLoadingCloudData: boolean;
+  cloudSyncError: string | null;
+  isOnline: boolean;
+  refreshCloudData: () => Promise<void>;
+
   // Derived alerts & valuation
   lowStockProducts: Product[];
   lowStockRawMaterials: RawMaterial[];
@@ -57,16 +50,16 @@ interface AppContextType {
   totalProductsValuation: number;
 
   // Raw Materials Actions
-  addRawMaterial: (material: Omit<RawMaterial, 'id' | 'created_at'>) => void;
-  updateRawMaterial: (id: string, updates: Partial<RawMaterial>) => void;
-  deleteOrArchiveRawMaterial: (id: string, user: Profile) => { action: 'deleted' | 'archived'; message: string };
-  unarchiveRawMaterial: (id: string) => void;
-  adjustRawMaterialStock: (rawMaterialId: string, qtyDiff: number, type: RawMaterialMovementType, notes: string, userName: string) => void;
+  addRawMaterial: (material: Omit<RawMaterial, 'id' | 'created_at'>) => Promise<RawMaterial>;
+  updateRawMaterial: (id: string, updates: Partial<RawMaterial>) => Promise<RawMaterial>;
+  deleteOrArchiveRawMaterial: (id: string, user: Profile) => Promise<{ action: 'deleted' | 'archived'; message: string }>;
+  unarchiveRawMaterial: (id: string) => Promise<void>;
+  adjustRawMaterialStock: (rawMaterialId: string, qtyDiff: number, type: RawMaterialMovementType, notes: string, userName: string) => Promise<void>;
 
   // Formulation (BOM) Actions
-  saveFormulation: (formulation: Omit<ProductFormulation, 'id' | 'created_at'> & { id?: string }) => void;
-  deleteOrArchiveFormulation: (id: string, user: Profile) => { action: 'deleted' | 'archived'; message: string };
-  unarchiveFormulation: (id: string) => void;
+  saveFormulation: (formulation: Omit<ProductFormulation, 'id' | 'created_at'> & { id?: string }) => Promise<ProductFormulation>;
+  deleteOrArchiveFormulation: (id: string, user: Profile) => Promise<{ action: 'deleted' | 'archived'; message: string }>;
+  unarchiveFormulation: (id: string) => Promise<void>;
 
   // Production Module Actions
   recordProductionBatch: (params: {
@@ -76,17 +69,17 @@ interface AppContextType {
     date: string;
     supervisorName: string;
     notes?: string;
-  }) => { success: boolean; message: string; batch?: ProductionBatch };
+  }) => Promise<{ success: boolean; message: string; batch?: ProductionBatch }>;
   deleteProductionBatch: (
     batchId: string, 
     user: Profile, 
     forceAllowNegativeStock?: boolean
-  ) => { 
+  ) => Promise<{ 
     success: boolean; 
     hasNegativeStockWarning?: boolean; 
     warningDetails?: string[]; 
     message: string 
-  };
+  }>;
 
   // Safe Delete / Archive History Checkers
   checkProductHasHistory: (productId: string) => boolean;
@@ -96,141 +89,141 @@ interface AppContextType {
   checkSupplierHasHistory: (supplierId: string) => boolean;
 
   // Aliases for compatibility
-  deleteCustomer: (id: string, user: Profile) => { action: 'deleted' | 'archived'; message: string };
-  deleteSupplier: (id: string, user: Profile) => { action: 'deleted' | 'archived'; message: string };
-  deleteFormulation: (id: string, user: Profile) => { action: 'deleted' | 'archived'; message: string };
+  deleteCustomer: (id: string, user: Profile) => Promise<{ action: 'deleted' | 'archived'; message: string }>;
+  deleteSupplier: (id: string, user: Profile) => Promise<{ action: 'deleted' | 'archived'; message: string }>;
+  deleteFormulation: (id: string, user: Profile) => Promise<{ action: 'deleted' | 'archived'; message: string }>;
 
-  // Product Actions (Single Base Unit + Pack Sizes + Safe Delete/Archive)
-  addProduct: (product: Omit<Product, 'id' | 'created_at'>) => void;
-  updateProduct: (id: string, updates: Partial<Product>) => void;
-  deleteOrArchiveProduct: (id: string, user: Profile) => { action: 'deleted' | 'archived'; message: string };
-  unarchiveProduct: (id: string) => void;
-  adjustStock: (productId: string, qtyDiff: number, type: StockMovementType, notes: string, user: string) => void;
-  updateProductPackSizes: (productId: string, packSizes: PackSize[]) => void;
+  // Product Actions
+  addProduct: (product: Omit<Product, 'id' | 'created_at'>) => Promise<Product>;
+  updateProduct: (id: string, updates: Partial<Product>) => Promise<Product>;
+  deleteOrArchiveProduct: (id: string, user: Profile) => Promise<{ action: 'deleted' | 'archived'; message: string }>;
+  unarchiveProduct: (id: string) => Promise<void>;
+  adjustStock: (productId: string, qtyDiff: number, type: StockMovementType, notes: string, user: string) => Promise<void>;
+  updateProductPackSizes: (productId: string, packSizes: PackSize[]) => Promise<void>;
 
   // Customer Actions
-  addCustomer: (customer: Omit<Customer, 'id' | 'created_at'>) => void;
-  updateCustomer: (id: string, updates: Partial<Customer>) => void;
-  deleteOrArchiveCustomer: (id: string, user: Profile) => { action: 'deleted' | 'archived'; message: string };
-  unarchiveCustomer: (id: string) => void;
+  addCustomer: (customer: Omit<Customer, 'id' | 'created_at'>) => Promise<Customer>;
+  updateCustomer: (id: string, updates: Partial<Customer>) => Promise<Customer>;
+  deleteOrArchiveCustomer: (id: string, user: Profile) => Promise<{ action: 'deleted' | 'archived'; message: string }>;
+  unarchiveCustomer: (id: string) => Promise<void>;
 
   // Supplier Actions
-  addSupplier: (supplier: Omit<Supplier, 'id' | 'created_at'>) => void;
-  updateSupplier: (id: string, updates: Partial<Supplier>) => void;
-  deleteOrArchiveSupplier: (id: string, user: Profile) => { action: 'deleted' | 'archived'; message: string };
-  unarchiveSupplier: (id: string) => void;
+  addSupplier: (supplier: Omit<Supplier, 'id' | 'created_at'>) => Promise<Supplier>;
+  updateSupplier: (id: string, updates: Partial<Supplier>) => Promise<Supplier>;
+  deleteOrArchiveSupplier: (id: string, user: Profile) => Promise<{ action: 'deleted' | 'archived'; message: string }>;
+  unarchiveSupplier: (id: string) => Promise<void>;
 
-  // Transaction Actions (with Automated Stock & Balance Reversals)
-  createSale: (saleData: Omit<Sale, 'id' | 'invoice_number' | 'created_at'>) => Sale;
-  deleteSaleInvoice: (saleId: string, user: Profile) => { success: boolean; message: string };
+  // Transaction Actions
+  createSale: (saleData: Omit<Sale, 'id' | 'invoice_number' | 'created_at'>) => Promise<Sale>;
+  deleteSaleInvoice: (saleId: string, user: Profile) => Promise<{ success: boolean; message: string }>;
   
-  createPurchase: (purchaseData: Omit<Purchase, 'id' | 'invoice_number' | 'created_at'>) => Purchase;
-  deletePurchaseInvoice: (purchaseId: string, user: Profile, forceAllowNegativeStock?: boolean) => { 
+  createPurchase: (purchaseData: Omit<Purchase, 'id' | 'invoice_number' | 'created_at'>) => Promise<Purchase>;
+  deletePurchaseInvoice: (purchaseId: string, user: Profile, forceAllowNegativeStock?: boolean) => Promise<{ 
     success: boolean; 
     hasNegativeStockWarning?: boolean; 
     warningDetails?: string[]; 
     message: string 
-  };
+  }>;
   
-  recordPayment: (paymentData: Omit<Payment, 'id' | 'created_at'>) => Payment;
+  recordPayment: (paymentData: Omit<Payment, 'id' | 'created_at'>) => Promise<Payment>;
 
   // Helper
-  resetToDefaultData: () => void;
+  resetToDefaultData: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // 1. Core State with Local Storage persistence & optimistic updates
-  const [products, setProducts] = useState<Product[]>(() => {
-    const saved = localStorage.getItem('psc_products');
-    return saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
-  });
+  // 1. One-time clean removal of stale localStorage data from users' browsers
+  useEffect(() => {
+    if (typeof window !== 'undefined' && !localStorage.getItem('psc_cloud_migrated_v3')) {
+      const legacyKeys = [
+        'psc_products', 'psc_raw_materials', 'psc_formulations', 'psc_production_batches',
+        'psc_raw_movements', 'psc_customers', 'psc_suppliers', 'psc_sales', 'psc_purchases',
+        'psc_stock_movements', 'psc_payments', 'psc_deletion_logs', 'psc_users',
+        'psc_clean_slate_applied_v2'
+      ];
+      legacyKeys.forEach(k => localStorage.removeItem(k));
+      localStorage.setItem('psc_cloud_migrated_v3', 'true');
+    }
+  }, []);
 
-  const [rawMaterials, setRawMaterials] = useState<RawMaterial[]>(() => {
-    const saved = localStorage.getItem('psc_raw_materials');
-    return saved ? JSON.parse(saved) : INITIAL_RAW_MATERIALS;
-  });
+  // 2. Cloud-Native State (Empty arrays initially; populated strictly from Supabase)
+  const [products, setProducts] = useState<Product[]>([]);
+  const [rawMaterials, setRawMaterials] = useState<RawMaterial[]>([]);
+  const [formulations, setFormulations] = useState<ProductFormulation[]>([]);
+  const [productionBatches, setProductionBatches] = useState<ProductionBatch[]>([]);
+  const [rawMaterialMovements, setRawMaterialMovements] = useState<RawMaterialMovement[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [sales, setSales] = useState<Sale[]>([]);
+  const [purchases, setPurchases] = useState<Purchase[]>([]);
+  const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [deletionLogs, setDeletionLogs] = useState<DeletionAuditLog[]>([]);
 
-  const [formulations, setFormulations] = useState<ProductFormulation[]>(() => {
-    const saved = localStorage.getItem('psc_formulations');
-    return saved ? JSON.parse(saved) : INITIAL_FORMULATIONS;
-  });
+  // Cloud status states
+  const [isLoadingCloudData, setIsLoadingCloudData] = useState<boolean>(true);
+  const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
+  const [isOnline, setIsOnline] = useState<boolean>(() => typeof navigator !== 'undefined' ? navigator.onLine : true);
 
-  const [productionBatches, setProductionBatches] = useState<ProductionBatch[]>(() => {
-    const saved = localStorage.getItem('psc_production_batches');
-    return saved ? JSON.parse(saved) : INITIAL_PRODUCTION_BATCHES;
-  });
-
-  const [rawMaterialMovements, setRawMaterialMovements] = useState<RawMaterialMovement[]>(() => {
-    const saved = localStorage.getItem('psc_raw_movements');
-    return saved ? JSON.parse(saved) : INITIAL_RAW_MATERIAL_MOVEMENTS;
-  });
-
-  const [customers, setCustomers] = useState<Customer[]>(() => {
-    const saved = localStorage.getItem('psc_customers');
-    return saved ? JSON.parse(saved) : INITIAL_CUSTOMERS;
-  });
-
-  const [suppliers, setSuppliers] = useState<Supplier[]>(() => {
-    const saved = localStorage.getItem('psc_suppliers');
-    return saved ? JSON.parse(saved) : INITIAL_SUPPLIERS;
-  });
-
-  const [sales, setSales] = useState<Sale[]>(() => {
-    const saved = localStorage.getItem('psc_sales');
-    return saved ? JSON.parse(saved) : INITIAL_SALES;
-  });
-
-  const [purchases, setPurchases] = useState<Purchase[]>(() => {
-    const saved = localStorage.getItem('psc_purchases');
-    return saved ? JSON.parse(saved) : INITIAL_PURCHASES;
-  });
-
-  const [stockMovements, setStockMovements] = useState<StockMovement[]>(() => {
-    const saved = localStorage.getItem('psc_stock_movements');
-    return saved ? JSON.parse(saved) : INITIAL_STOCK_MOVEMENTS;
-  });
-
-  const [payments, setPayments] = useState<Payment[]>(() => {
-    const saved = localStorage.getItem('psc_payments');
-    return saved ? JSON.parse(saved) : INITIAL_PAYMENTS;
-  });
-
-  const [deletionLogs, setDeletionLogs] = useState<DeletionAuditLog[]>(() => {
-    const saved = localStorage.getItem('psc_deletion_logs');
-    return saved ? JSON.parse(saved) : [];
-  });
+  // Monitor online / offline connectivity
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   // Fetch live records from Supabase Cloud on mount & subscribe to Realtime multi-device changes
+  const loadCloudData = useCallback(async () => {
+    if (!isSupabaseConfigured || !supabase) {
+      setIsLoadingCloudData(false);
+      return;
+    }
+
+    try {
+      setCloudSyncError(null);
+      const cloudData = await supabaseService.fetchAll();
+      if (cloudData) {
+        setProducts(cloudData.products || []);
+        setRawMaterials(cloudData.rawMaterials || []);
+        setFormulations(cloudData.formulations || []);
+        setProductionBatches(cloudData.productionBatches || []);
+        setRawMaterialMovements(cloudData.rawMaterialMovements || []);
+        setCustomers(cloudData.customers || []);
+        setSuppliers(cloudData.suppliers || []);
+        setSales(cloudData.sales || []);
+        setPurchases(cloudData.purchases || []);
+        setStockMovements(cloudData.stockMovements || []);
+        setPayments(cloudData.payments || []);
+        setDeletionLogs(cloudData.deletionLogs || []);
+      }
+    } catch (err: any) {
+      console.error('Failed to load cloud data from Supabase:', err);
+      setCloudSyncError(err?.message || 'Failed to sync with Supabase cloud database.');
+    } finally {
+      setIsLoadingCloudData(false);
+    }
+  }, []);
+
   useEffect(() => {
     let isMounted = true;
 
-    const loadCloudData = async () => {
-      const cloudData = await supabaseService.fetchAll();
-      if (cloudData && isMounted) {
-        if (cloudData.products) setProducts(cloudData.products);
-        if (cloudData.rawMaterials) setRawMaterials(cloudData.rawMaterials);
-        if (cloudData.formulations) setFormulations(cloudData.formulations);
-        if (cloudData.productionBatches) setProductionBatches(cloudData.productionBatches);
-        if (cloudData.rawMaterialMovements) setRawMaterialMovements(cloudData.rawMaterialMovements);
-        if (cloudData.customers) setCustomers(cloudData.customers);
-        if (cloudData.suppliers) setSuppliers(cloudData.suppliers);
-        if (cloudData.sales) setSales(cloudData.sales);
-        if (cloudData.purchases) setPurchases(cloudData.purchases);
-        if (cloudData.stockMovements) setStockMovements(cloudData.stockMovements);
-        if (cloudData.payments) setPayments(cloudData.payments);
-        if (cloudData.deletionLogs) setDeletionLogs(cloudData.deletionLogs);
-      }
-    };
-
     loadCloudData();
 
+    // Supabase Realtime multi-device sync
     if (isSupabaseConfigured && supabase) {
       const channel = supabase
         .channel('psc-realtime-cloud')
         .on('postgres_changes', { event: '*', schema: 'public' }, () => {
-          loadCloudData();
+          if (isMounted) {
+            loadCloudData();
+          }
         })
         .subscribe();
 
@@ -243,30 +236,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [loadCloudData]);
 
-  // Cache to local storage for offline resilience
-  useEffect(() => { localStorage.setItem('psc_products', JSON.stringify(products)); }, [products]);
-  useEffect(() => { localStorage.setItem('psc_raw_materials', JSON.stringify(rawMaterials)); }, [rawMaterials]);
-  useEffect(() => { localStorage.setItem('psc_formulations', JSON.stringify(formulations)); }, [formulations]);
-  useEffect(() => { localStorage.setItem('psc_production_batches', JSON.stringify(productionBatches)); }, [productionBatches]);
-  useEffect(() => { localStorage.setItem('psc_raw_movements', JSON.stringify(rawMaterialMovements)); }, [rawMaterialMovements]);
-  useEffect(() => { localStorage.setItem('psc_customers', JSON.stringify(customers)); }, [customers]);
-  useEffect(() => { localStorage.setItem('psc_suppliers', JSON.stringify(suppliers)); }, [suppliers]);
-  useEffect(() => { localStorage.setItem('psc_sales', JSON.stringify(sales)); }, [sales]);
-  useEffect(() => { localStorage.setItem('psc_purchases', JSON.stringify(purchases)); }, [purchases]);
-  useEffect(() => { localStorage.setItem('psc_stock_movements', JSON.stringify(stockMovements)); }, [stockMovements]);
-  useEffect(() => { localStorage.setItem('psc_payments', JSON.stringify(payments)); }, [payments]);
-  useEffect(() => { localStorage.setItem('psc_deletion_logs', JSON.stringify(deletionLogs)); }, [deletionLogs]);
-
-  const addDeletionLogEntry = (entry: Omit<DeletionAuditLog, 'id' | 'date'>) => {
+  const addDeletionLogEntry = async (entry: Omit<DeletionAuditLog, 'id' | 'date'>) => {
     const newLog: DeletionAuditLog = {
       ...entry,
       id: generateId(),
       date: new Date().toISOString(),
     };
-    setDeletionLogs(prev => [newLog, ...prev]);
-    supabaseService.upsertDeletionLog(newLog);
+    try {
+      await supabaseService.upsertDeletionLog(newLog);
+      setDeletionLogs(prev => [newLog, ...prev]);
+    } catch (e) {
+      console.error('Failed to log deletion audit:', e);
+    }
   };
 
   // Derived low stock items & valuations
@@ -287,116 +270,106 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     .reduce((acc, p) => acc + (Number(p.current_stock || 0) * Number(p.cost_price || 0)), 0);
 
   // ==============================================================================
-  // RAW MATERIALS ACTIONS (WITH USAGE & PURCHASE DEPENDENCY CHECK)
+  // RAW MATERIALS ACTIONS (SUPABASE-FIRST)
   // ==============================================================================
-  const addRawMaterial = (matData: Omit<RawMaterial, 'id' | 'created_at'>) => {
+  const addRawMaterial = async (matData: Omit<RawMaterial, 'id' | 'created_at'>): Promise<RawMaterial> => {
     const newMat: RawMaterial = {
       ...matData,
       id: generateId(),
       created_at: new Date().toISOString(),
     };
-    setRawMaterials(prev => [newMat, ...prev]);
-    supabaseService.upsertRawMaterial(newMat);
+    const saved = await supabaseService.upsertRawMaterial(newMat);
+    setRawMaterials(prev => [saved, ...prev.filter(r => r.id !== saved.id)]);
 
-    if (newMat.current_stock > 0) {
+    if (saved.current_stock > 0) {
       const movement: RawMaterialMovement = {
         id: generateId(),
-        raw_material_id: newMat.id,
-        raw_material_name: newMat.name,
+        raw_material_id: saved.id,
+        raw_material_name: saved.name,
         movement_type: 'adjustment',
-        quantity: newMat.current_stock,
+        quantity: saved.current_stock,
         previous_stock: 0,
-        new_stock: newMat.current_stock,
+        new_stock: saved.current_stock,
         notes: 'Initial opening raw material stock',
         date: new Date().toISOString(),
         created_by_name: 'Admin',
       };
+      await supabaseService.upsertRawMaterialMovement(movement);
       setRawMaterialMovements(prev => [movement, ...prev]);
-      supabaseService.upsertRawMaterialMovement(movement);
     }
+    return saved;
   };
 
-  const updateRawMaterial = (id: string, updates: Partial<RawMaterial>) => {
-    setRawMaterials(prev => prev.map(rm => {
-      if (rm.id === id) {
-        const updated = { ...rm, ...updates, updated_at: new Date().toISOString() };
-        supabaseService.upsertRawMaterial(updated);
-        return updated;
-      }
-      return rm;
-    }));
+  const updateRawMaterial = async (id: string, updates: Partial<RawMaterial>): Promise<RawMaterial> => {
+    const target = rawMaterials.find(r => r.id === id);
+    if (!target) throw new Error('Raw material not found');
+    const updated = { ...target, ...updates, updated_at: new Date().toISOString() };
+    const saved = await supabaseService.upsertRawMaterial(updated);
+    setRawMaterials(prev => prev.map(r => r.id === id ? saved : r));
+    return saved;
   };
 
-  const deleteOrArchiveRawMaterial = (id: string, user: Profile): { action: 'deleted' | 'archived'; message: string } => {
-    const target = rawMaterials.find(rm => rm.id === id);
+  const deleteOrArchiveRawMaterial = async (id: string, user: Profile): Promise<{ action: 'deleted' | 'archived'; message: string }> => {
+    const target = rawMaterials.find(r => r.id === id);
     if (!target) return { action: 'deleted', message: 'Raw material not found.' };
 
-    const isUsedInFormulations = formulations.some(f => f.items.some(i => i.raw_material_id === id));
-    const hasPurchaseHistory = purchases.some(p => p.items.some(i => i.raw_material_id === id));
-    const hasProductionHistory = productionBatches.some(b => b.raw_materials_consumed.some(r => r.raw_material_id === id));
+    const isUsedInFormulations = formulations.some(f => f.items?.some(i => i.raw_material_id === id));
+    const isUsedInPurchases = purchases.some(p => p.items?.some(i => i.raw_material_id === id));
 
-    if (!isUsedInFormulations && !hasPurchaseHistory && !hasProductionHistory) {
-      // 0 history -> full hard delete
-      setRawMaterials(prev => prev.filter(rm => rm.id !== id));
-      supabaseService.deleteRawMaterial(id);
-      addDeletionLogEntry({
+    if (!isUsedInFormulations && !isUsedInPurchases) {
+      await supabaseService.deleteRawMaterial(id);
+      setRawMaterials(prev => prev.filter(r => r.id !== id));
+      await addDeletionLogEntry({
         entity_type: 'raw_material',
         entity_id: id,
         entity_title: target.name,
         action_type: 'deleted',
-        impact_summary: `Permanently removed raw material "${target.name}" (no formulation recipe or purchase history found).`,
+        impact_summary: `Permanently deleted raw material "${target.name}" (0 formulations, 0 purchases).`,
         performed_by: user.name,
         performed_by_role: user.role,
       });
-      return { action: 'deleted', message: `Raw material "${target.name}" was permanently deleted.` };
+      return { action: 'deleted', message: `Raw material "${target.name}" had no formulation or purchase history and was deleted.` };
     } else {
-      // Has history/recipes -> soft archive
-      setRawMaterials(prev => prev.map(rm => {
-        if (rm.id === id) {
-          const archived = { ...rm, is_archived: true, is_active: false, updated_at: new Date().toISOString() };
-          supabaseService.upsertRawMaterial(archived);
-          return archived;
-        }
-        return rm;
-      }));
-      addDeletionLogEntry({
+      const archived = { ...target, is_archived: true, is_active: false, updated_at: new Date().toISOString() };
+      await supabaseService.upsertRawMaterial(archived);
+      setRawMaterials(prev => prev.map(r => r.id === id ? archived : r));
+      await addDeletionLogEntry({
         entity_type: 'raw_material',
         entity_id: id,
         entity_title: target.name,
         action_type: 'archived',
-        impact_summary: `Archived raw material "${target.name}" due to existing formulation recipes and production/purchase history.`,
+        impact_summary: `Archived raw material "${target.name}" with formulation/purchase links to prevent broken recipe history.`,
         performed_by: user.name,
         performed_by_role: user.role,
       });
-      return { action: 'archived', message: `Raw material "${target.name}" is used in product recipes or history and was safely archived.` };
+      return { action: 'archived', message: `Raw material "${target.name}" is linked to existing formulations/purchases and was safely archived.` };
     }
   };
 
-  const unarchiveRawMaterial = (id: string) => {
-    setRawMaterials(prev => prev.map(rm => {
-      if (rm.id === id) {
-        const unarchived = { ...rm, is_archived: false, is_active: true, updated_at: new Date().toISOString() };
-        supabaseService.upsertRawMaterial(unarchived);
-        return unarchived;
-      }
-      return rm;
-    }));
+  const unarchiveRawMaterial = async (id: string): Promise<void> => {
+    const target = rawMaterials.find(r => r.id === id);
+    if (!target) return;
+    const unarchived = { ...target, is_archived: false, is_active: true, updated_at: new Date().toISOString() };
+    await supabaseService.upsertRawMaterial(unarchived);
+    setRawMaterials(prev => prev.map(r => r.id === id ? unarchived : r));
   };
 
-  const adjustRawMaterialStock = (
+  const adjustRawMaterialStock = async (
     rawMaterialId: string, 
     qtyDiff: number, 
     type: RawMaterialMovementType, 
     notes: string, 
     userName: string
-  ) => {
-    const target = rawMaterials.find(rm => rm.id === rawMaterialId);
+  ): Promise<void> => {
+    const target = rawMaterials.find(r => r.id === rawMaterialId);
     if (!target) return;
 
     const prevStock = Number(target.current_stock);
     const newStock = Math.max(0, prevStock + qtyDiff);
 
-    updateRawMaterial(rawMaterialId, { current_stock: newStock });
+    const updatedRm = { ...target, current_stock: newStock, updated_at: new Date().toISOString() };
+    await supabaseService.upsertRawMaterial(updatedRm);
+    setRawMaterials(prev => prev.map(r => r.id === rawMaterialId ? updatedRm : r));
 
     const movement: RawMaterialMovement = {
       id: generateId(),
@@ -411,165 +384,148 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       created_by_name: userName,
     };
 
+    await supabaseService.upsertRawMaterialMovement(movement);
     setRawMaterialMovements(prev => [movement, ...prev]);
-    supabaseService.upsertRawMaterialMovement(movement);
   };
 
   // ==============================================================================
-  // FORMULATION (BOM) ACTIONS (WITH PRODUCTION HISTORY CHECK)
+  // FORMULATION (BOM) ACTIONS (SUPABASE-FIRST)
   // ==============================================================================
-  const saveFormulation = (formData: Omit<ProductFormulation, 'id' | 'created_at'> & { id?: string }) => {
+  const saveFormulation = async (formData: Omit<ProductFormulation, 'id' | 'created_at'> & { id?: string }): Promise<ProductFormulation> => {
     if (formData.id) {
-      setFormulations(prev => prev.map(f => {
-        if (f.id === formData.id) {
-          const updated = { ...f, ...formData, updated_at: new Date().toISOString() };
-          supabaseService.upsertFormulation(updated);
-          return updated;
-        }
-        return f;
-      }));
+      const existing = formulations.find(f => f.id === formData.id);
+      const updated = { ...(existing || {}), ...formData, id: formData.id, updated_at: new Date().toISOString() } as ProductFormulation;
+      const saved = await supabaseService.upsertFormulation(updated);
+      setFormulations(prev => prev.map(f => f.id === formData.id ? saved : f));
+      return saved;
     } else {
       const newForm: ProductFormulation = {
         ...formData,
         id: generateId(),
         created_at: new Date().toISOString(),
       };
-      setFormulations(prev => [newForm, ...prev]);
-      supabaseService.upsertFormulation(newForm);
+      const saved = await supabaseService.upsertFormulation(newForm);
+      setFormulations(prev => [saved, ...prev]);
+      return saved;
     }
   };
 
-  const deleteOrArchiveFormulation = (id: string, user: Profile): { action: 'deleted' | 'archived'; message: string } => {
+  const deleteOrArchiveFormulation = async (id: string, user: Profile): Promise<{ action: 'deleted' | 'archived'; message: string }> => {
     const target = formulations.find(f => f.id === id);
     if (!target) return { action: 'deleted', message: 'Formulation not found.' };
 
-    const hasProductionHistory = productionBatches.some(b => b.product_id === target.product_id);
+    const hasBatches = productionBatches.some(b => b.product_id === target.product_id);
 
-    if (!hasProductionHistory) {
+    if (!hasBatches) {
+      await supabaseService.deleteFormulation(id);
       setFormulations(prev => prev.filter(f => f.id !== id));
-      supabaseService.deleteFormulation(id);
-      addDeletionLogEntry({
+      await addDeletionLogEntry({
         entity_type: 'formulation',
         entity_id: id,
-        entity_title: `Recipe for ${target.product_name}`,
+        entity_title: target.product_name,
         action_type: 'deleted',
-        impact_summary: `Permanently removed recipe formulation for "${target.product_name}" (0 production runs).`,
+        impact_summary: `Permanently deleted recipe formulation for "${target.product_name}" (0 batch runs).`,
         performed_by: user.name,
         performed_by_role: user.role,
       });
-      return { action: 'deleted', message: `Formulation recipe for "${target.product_name}" was deleted.` };
+      return { action: 'deleted', message: `Formulation for "${target.product_name}" had no production batches and was deleted.` };
     } else {
-      setFormulations(prev => prev.map(f => {
-        if (f.id === id) {
-          const archived = { ...f, is_archived: true, updated_at: new Date().toISOString() };
-          supabaseService.upsertFormulation(archived);
-          return archived;
-        }
-        return f;
-      }));
-      addDeletionLogEntry({
+      const archived = { ...target, is_archived: true, updated_at: new Date().toISOString() };
+      await supabaseService.upsertFormulation(archived);
+      setFormulations(prev => prev.map(f => f.id === id ? archived : f));
+      await addDeletionLogEntry({
         entity_type: 'formulation',
         entity_id: id,
-        entity_title: `Recipe for ${target.product_name}`,
+        entity_title: target.product_name,
         action_type: 'archived',
-        impact_summary: `Archived formulation for "${target.product_name}" to preserve recipe history for past production batches.`,
+        impact_summary: `Archived formulation for "${target.product_name}" to preserve past production batch BOM records.`,
         performed_by: user.name,
         performed_by_role: user.role,
       });
-      return { action: 'archived', message: `Formulation for "${target.product_name}" has production batch history and was archived.` };
+      return { action: 'archived', message: `Formulation for "${target.product_name}" has production batch history and was safely archived.` };
     }
   };
 
-  const unarchiveFormulation = (id: string) => {
-    setFormulations(prev => prev.map(f => {
-      if (f.id === id) {
-        const unarchived = { ...f, is_archived: false, updated_at: new Date().toISOString() };
-        supabaseService.upsertFormulation(unarchived);
-        return unarchived;
-      }
-      return f;
-    }));
+  const unarchiveFormulation = async (id: string): Promise<void> => {
+    const target = formulations.find(f => f.id === id);
+    if (!target) return;
+    const unarchived = { ...target, is_archived: false, updated_at: new Date().toISOString() };
+    await supabaseService.upsertFormulation(unarchived);
+    setFormulations(prev => prev.map(f => f.id === id ? unarchived : f));
   };
 
   // ==============================================================================
-  // PRODUCTION MODULE ACTION
+  // PRODUCTION MODULE ACTIONS (SUPABASE-FIRST)
   // ==============================================================================
-  const recordProductionBatch = (params: {
+  const recordProductionBatch = async (params: {
     productId: string;
     quantityProduced: number;
     batchNumber: string;
     date: string;
     supervisorName: string;
     notes?: string;
-  }): { success: boolean; message: string; batch?: ProductionBatch } => {
+  }): Promise<{ success: boolean; message: string; batch?: ProductionBatch }> => {
     const targetProduct = products.find(p => p.id === params.productId);
-    if (!targetProduct) {
-      return { success: false, message: 'Selected product not found.' };
-    }
+    if (!targetProduct) return { success: false, message: 'Target product not found' };
 
-    const formulation = formulations.find(f => f.product_id === params.productId);
-    if (!formulation || formulation.items.length === 0) {
-      return { success: false, message: `No formulation recipe configured for ${targetProduct.name}. Please set up formulation first.` };
-    }
+    const formulation = formulations.find(f => f.product_id === targetProduct.id && !f.is_archived);
+    if (!formulation) return { success: false, message: `No active formulation (BOM) found for ${targetProduct.name}` };
 
-    // 1. Calculate required raw materials
-    const requiredMaterials = formulation.items.map(item => {
+    const multiplier = params.quantityProduced / formulation.yield_quantity;
+    const stockErrors: string[] = [];
+
+    const requirements = formulation.items.map(item => {
+      const needed = Number((item.quantity * multiplier).toFixed(4));
       const rm = rawMaterials.find(m => m.id === item.raw_material_id);
-      const totalNeeded = Number((item.quantity * params.quantityProduced).toFixed(4));
+      const available = rm ? Number(rm.current_stock) : 0;
+      if (available < needed) {
+        stockErrors.push(`${item.raw_material_name}: Available ${available} ${item.unit}, Needed ${needed} ${item.unit}`);
+      }
       return {
         item,
         rm,
-        totalNeeded,
-        available: rm ? Number(rm.current_stock) : 0,
+        totalNeeded: needed,
+        cost: Number((needed * (rm?.cost_per_unit || 0)).toFixed(2))
       };
     });
 
-    // 2. Validate availability - BLOCK if insufficient
-    const shortages = requiredMaterials.filter(rmReq => !rmReq.rm || rmReq.available < rmReq.totalNeeded);
-    if (shortages.length > 0) {
-      const shortageDetails = shortages
-        .map(s => `${s.rm ? s.rm.name : s.item.raw_material_name}: Need ${s.totalNeeded} ${s.item.unit}, Have ${s.available} ${s.item.unit}`)
-        .join('\n• ');
+    if (stockErrors.length > 0) {
       return {
         success: false,
-        message: `Cannot proceed with production batch! Insufficient raw material stock:\n• ${shortageDetails}`,
+        message: `Insufficient raw materials stock:\n${stockErrors.join('\n')}`
       };
     }
 
-    // 3. Deduct raw materials & log raw material stock movements
-    const consumedList: any[] = [];
+    const now = new Date().toISOString();
     let totalBatchCost = 0;
-    const now = params.date || new Date().toISOString();
-
-    const updatedRawMaterials = [...rawMaterials];
+    const consumedList: any[] = [];
     const newRawMovements: RawMaterialMovement[] = [];
+    const updatedRawMaterials: RawMaterial[] = [...rawMaterials];
 
-    requiredMaterials.forEach(rmReq => {
-      const rmIndex = updatedRawMaterials.findIndex(m => m.id === rmReq.item.raw_material_id);
-      if (rmIndex !== -1) {
-        const prevStk = Number(updatedRawMaterials[rmIndex].current_stock);
+    for (const rmReq of requirements) {
+      totalBatchCost += rmReq.cost;
+      consumedList.push({
+        raw_material_id: rmReq.item.raw_material_id,
+        raw_material_name: rmReq.item.raw_material_name,
+        quantity_consumed: rmReq.totalNeeded,
+        unit: rmReq.item.unit,
+        unit_cost: rmReq.rm?.cost_per_unit || 0,
+        total_cost: rmReq.cost,
+      });
+
+      const rmIdx = updatedRawMaterials.findIndex(m => m.id === rmReq.item.raw_material_id);
+      if (rmIdx !== -1) {
+        const prevStk = Number(updatedRawMaterials[rmIdx].current_stock);
         const nextStk = Math.max(0, prevStk - rmReq.totalNeeded);
-        const unitCost = Number(updatedRawMaterials[rmIndex].cost_per_unit || rmReq.item.cost_per_unit || 0);
-        const itemTotalCost = Number((rmReq.totalNeeded * unitCost).toFixed(2));
-        
-        totalBatchCost += itemTotalCost;
-
-        updatedRawMaterials[rmIndex] = {
-          ...updatedRawMaterials[rmIndex],
+        const updatedRm = {
+          ...updatedRawMaterials[rmIdx],
           current_stock: nextStk,
           updated_at: now,
         };
+        updatedRawMaterials[rmIdx] = updatedRm;
+        await supabaseService.upsertRawMaterial(updatedRm);
 
-        consumedList.push({
-          raw_material_id: rmReq.item.raw_material_id,
-          raw_material_name: rmReq.item.raw_material_name,
-          quantity_consumed: rmReq.totalNeeded,
-          unit: rmReq.item.unit,
-          unit_cost: unitCost,
-          total_cost: itemTotalCost,
-        });
-
-        newRawMovements.push({
+        const rmMovement: RawMaterialMovement = {
           id: generateId(),
           raw_material_id: rmReq.item.raw_material_id,
           raw_material_name: rmReq.item.raw_material_name,
@@ -581,38 +537,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           notes: `Consumed in Batch ${params.batchNumber} (${targetProduct.name} - ${params.quantityProduced} ${targetProduct.base_unit || targetProduct.unit})`,
           date: now,
           created_by_name: params.supervisorName,
-        });
+        };
+        newRawMovements.push(rmMovement);
+        await supabaseService.upsertRawMaterialMovement(rmMovement);
       }
-    });
+    }
 
     setRawMaterials(updatedRawMaterials);
-    updatedRawMaterials.forEach(rm => supabaseService.upsertRawMaterial(rm));
     setRawMaterialMovements(prev => [...newRawMovements, ...prev]);
-    newRawMovements.forEach(m => supabaseService.upsertRawMaterialMovement(m));
 
-    // 4. Add produced quantity to Finished Product Single Base-Unit Stock
+    // Update finished product stock
     const prevProdStock = Number(targetProduct.current_stock);
     const nextProdStock = prevProdStock + Number(params.quantityProduced);
     const calculatedCostPerUnit = Number((totalBatchCost / params.quantityProduced).toFixed(2));
 
-    let updatedTargetProd: Product | null = null;
-    setProducts(prevProds => prevProds.map(p => {
-      if (p.id === targetProduct.id) {
-        updatedTargetProd = {
-          ...p,
-          current_stock: nextProdStock,
-          cost_price: calculatedCostPerUnit > 0 ? calculatedCostPerUnit : p.cost_price,
-          updated_at: now,
-        };
-        return updatedTargetProd;
-      }
-      return p;
-    }));
-    if (updatedTargetProd) {
-      supabaseService.upsertProduct(updatedTargetProd);
-    }
+    const updatedTargetProd: Product = {
+      ...targetProduct,
+      current_stock: nextProdStock,
+      cost_price: calculatedCostPerUnit > 0 ? calculatedCostPerUnit : targetProduct.cost_price,
+      updated_at: now,
+    };
+    await supabaseService.upsertProduct(updatedTargetProd);
+    setProducts(prev => prev.map(p => p.id === targetProduct.id ? updatedTargetProd : p));
 
-    // 5. Log finished product stock movement
+    // Log finished product movement
     const prodStockMovement: StockMovement = {
       id: generateId(),
       product_id: targetProduct.id,
@@ -626,10 +574,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       date: now,
       created_by_name: params.supervisorName,
     };
+    await supabaseService.upsertStockMovement(prodStockMovement);
     setStockMovements(prev => [prodStockMovement, ...prev]);
-    supabaseService.upsertStockMovement(prodStockMovement);
 
-    // 6. Create production batch entry
+    // Create production batch entry
     const newBatch: ProductionBatch = {
       id: generateId(),
       batch_number: params.batchNumber,
@@ -643,57 +591,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       total_batch_cost: Number(totalBatchCost.toFixed(2)),
       cost_per_base_unit: calculatedCostPerUnit,
       notes: params.notes,
-      created_at: now,
     };
 
-    setProductionBatches(prev => [newBatch, ...prev]);
-    supabaseService.upsertProductionBatch(newBatch);
+    const savedBatch = await supabaseService.upsertProductionBatch(newBatch);
+    setProductionBatches(prev => [savedBatch, ...prev]);
 
     return {
       success: true,
-      message: `Batch ${params.batchNumber} logged successfully! Produced ${params.quantityProduced} ${targetProduct.base_unit || targetProduct.unit} of ${targetProduct.name}.`,
-      batch: newBatch,
+      message: `Production Batch ${params.batchNumber} recorded successfully. Produced ${params.quantityProduced} ${targetProduct.base_unit || targetProduct.unit} of ${targetProduct.name}.`,
+      batch: savedBatch,
     };
   };
 
-  const deleteProductionBatch = (
-    batchId: string,
-    user: Profile,
-    forceAllowNegativeStock?: boolean
-  ): { success: boolean; hasNegativeStockWarning?: boolean; warningDetails?: string[]; message: string } => {
+  const deleteProductionBatch = async (
+    batchId: string, 
+    user: Profile, 
+    forceAllowNegativeStock: boolean = false
+  ): Promise<{ success: boolean; hasNegativeStockWarning?: boolean; warningDetails?: string[]; message: string }> => {
     const targetBatch = productionBatches.find(b => b.id === batchId);
-    if (!targetBatch) return { success: false, message: 'Production batch record not found.' };
+    if (!targetBatch) return { success: false, message: 'Production batch not found.' };
 
     const targetProduct = products.find(p => p.id === targetBatch.product_id);
-    const warnings: string[] = [];
+    const currentProdStock = targetProduct ? Number(targetProduct.current_stock) : 0;
+    const wouldBeProdStock = currentProdStock - targetBatch.quantity_produced;
 
-    // Check if finished product stock is lower than batch output (already sold)
-    if (targetProduct && targetProduct.current_stock < targetBatch.quantity_produced) {
-      warnings.push(`Product "${targetProduct.name}" currently has ${targetProduct.current_stock} ${targetBatch.base_unit || targetProduct.base_unit || 'units'} in warehouse stock, but reversing batch ${targetBatch.batch_number} subtracts ${targetBatch.quantity_produced} (resulting in ${targetProduct.current_stock - targetBatch.quantity_produced}). Finished goods from this run were likely already sold.`);
+    const warningDetails: string[] = [];
+    if (wouldBeProdStock < 0) {
+      warningDetails.push(
+        `Finished Product "${targetBatch.product_name}": Current stock is ${currentProdStock} ${targetBatch.base_unit}, but this batch produced ${targetBatch.quantity_produced} ${targetBatch.base_unit}. Stock would become negative (${wouldBeProdStock} ${targetBatch.base_unit}). Output was likely already sold.`
+      );
     }
 
-    if (warnings.length > 0 && !forceAllowNegativeStock) {
+    if (warningDetails.length > 0 && !forceAllowNegativeStock) {
       return {
         success: false,
         hasNegativeStockWarning: true,
-        warningDetails: warnings,
-        message: 'Reversing this production batch would cause finished product inventory to drop below zero.',
+        warningDetails,
+        message: 'Reversing this production batch will cause negative finished stock balance.'
       };
     }
 
     const now = new Date().toISOString();
-    const rawMovementsToAdd: RawMaterialMovement[] = [];
-    const stockReversedSummary: any[] = [];
 
-    // 1. Restore consumed raw materials back to inventory
-    setRawMaterials(prevRaw => {
-      return prevRaw.map(rm => {
-        const consumed = targetBatch.raw_materials_consumed?.find(c => c.raw_material_id === rm.id);
-        if (consumed) {
+    // 1. Restore consumed raw materials
+    if (targetBatch.raw_materials_consumed) {
+      for (const consumed of targetBatch.raw_materials_consumed) {
+        const rm = rawMaterials.find(m => m.id === consumed.raw_material_id);
+        if (rm) {
           const prevStk = Number(rm.current_stock);
           const nextStk = prevStk + Number(consumed.quantity_consumed);
+          const updatedRm = { ...rm, current_stock: nextStk, updated_at: now };
+          await supabaseService.upsertRawMaterial(updatedRm);
 
-          rawMovementsToAdd.push({
+          const rawMvt: RawMaterialMovement = {
             id: generateId(),
             raw_material_id: rm.id,
             raw_material_name: rm.name,
@@ -705,101 +655,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             notes: `Restored raw material from reversed production batch ${targetBatch.batch_number}`,
             date: now,
             created_by_name: user.name,
-          });
-
-          stockReversedSummary.push({
-            name: rm.name,
-            quantity_reversed: Number(consumed.quantity_consumed),
-            unit: rm.unit,
-            previous_stock: prevStk,
-            new_stock: nextStk,
-          });
-
-          const updatedRm = { ...rm, current_stock: nextStk, updated_at: now };
-          supabaseService.upsertRawMaterial(updatedRm);
-          return updatedRm;
+          };
+          await supabaseService.upsertRawMaterialMovement(rawMvt);
         }
-        return rm;
-      });
-    });
-
-    if (rawMovementsToAdd.length > 0) {
-      setRawMaterialMovements(prev => [...rawMovementsToAdd, ...prev]);
-      rawMovementsToAdd.forEach(m => supabaseService.upsertRawMaterialMovement(m));
+      }
     }
 
-    // 2. Subtract produced finished products from stock
-    const prodMovementsToAdd: StockMovement[] = [];
-    setProducts(prevProducts => {
-      return prevProducts.map(p => {
-        if (p.id === targetBatch.product_id) {
-          const prevStk = Number(p.current_stock);
-          const nextStk = Math.max(0, prevStk - targetBatch.quantity_produced);
+    // 2. Deduct finished goods output
+    if (targetProduct) {
+      const prevStk = Number(targetProduct.current_stock);
+      const nextStk = Math.max(0, prevStk - targetBatch.quantity_produced);
+      const updatedProd = { ...targetProduct, current_stock: nextStk, updated_at: now };
+      await supabaseService.upsertProduct(updatedProd);
 
-          prodMovementsToAdd.push({
-            id: generateId(),
-            product_id: p.id,
-            product_name: p.name,
-            movement_type: 'adjustment',
-            quantity: -targetBatch.quantity_produced,
-            previous_stock: prevStk,
-            new_stock: nextStk,
-            reference_id: targetBatch.batch_number,
-            notes: `Deducted finished output of reversed production batch ${targetBatch.batch_number}`,
-            date: now,
-            created_by_name: user.name,
-          });
-
-          const updatedProd = { ...p, current_stock: nextStk, updated_at: now };
-          supabaseService.upsertProduct(updatedProd);
-          return updatedProd;
-        }
-        return p;
-      });
-    });
-
-    if (prodMovementsToAdd.length > 0) {
-      setStockMovements(prev => [...prodMovementsToAdd, ...prev]);
-      prodMovementsToAdd.forEach(m => supabaseService.upsertStockMovement(m));
+      const prodMvt: StockMovement = {
+        id: generateId(),
+        product_id: targetProduct.id,
+        product_name: targetProduct.name,
+        movement_type: 'adjustment',
+        quantity: -targetBatch.quantity_produced,
+        previous_stock: prevStk,
+        new_stock: nextStk,
+        reference_id: targetBatch.batch_number,
+        notes: `Deducted finished output of reversed production batch ${targetBatch.batch_number}`,
+        date: now,
+        created_by_name: user.name,
+      };
+      await supabaseService.upsertStockMovement(prodMvt);
     }
 
-    // 3. Remove batch from production batches list
+    // 3. Delete batch record from Supabase
+    await supabaseService.deleteProductionBatch(batchId);
     setProductionBatches(prev => prev.filter(b => b.id !== batchId));
-    supabaseService.deleteProductionBatch(batchId);
 
-    // 4. Record deletion & reversal audit log
-    addDeletionLogEntry({
+    await addDeletionLogEntry({
       entity_type: 'production_batch',
-      entity_id: targetBatch.id,
+      entity_id: batchId,
       entity_title: `Batch ${targetBatch.batch_number} (${targetBatch.product_name})`,
       action_type: 'reversed_and_deleted',
-      impact_summary: `Reversed batch ${targetBatch.batch_number}: restored ${targetBatch.raw_materials_consumed?.length || 0} consumed raw materials to stock and deducted ${targetBatch.quantity_produced} ${targetBatch.base_unit} finished product from warehouse inventory.`,
+      impact_summary: `Reversed Production Batch ${targetBatch.batch_number}: Restored raw materials, deducted ${targetBatch.quantity_produced} ${targetBatch.base_unit} finished output.`,
       performed_by: user.name,
       performed_by_role: user.role,
-      reversal_details: {
-        stock_reversed: stockReversedSummary,
-      },
     });
+
+    await loadCloudData();
 
     return {
       success: true,
-      message: `Production batch ${targetBatch.batch_number} reversed and removed. Consumed raw materials restored to stock.`,
+      message: `Production Batch ${targetBatch.batch_number} reversed successfully. Consumed raw materials were restored to warehouse stock.`
     };
   };
 
-  // Safe Delete vs Archive History Checks
+  // Safe Delete History Checkers
   const checkProductHasHistory = (productId: string): boolean => {
-    const hasSales = sales.some(s => s.items.some(i => i.product_id === productId));
-    const hasPurchases = purchases.some(p => p.items.some(i => i.product_id === productId));
+    const hasSales = sales.some(s => s.items?.some(i => i.product_id === productId));
     const hasBatches = productionBatches.some(b => b.product_id === productId);
-    return hasSales || hasPurchases || hasBatches;
+    const hasFormulation = formulations.some(f => f.product_id === productId);
+    return hasSales || hasBatches || hasFormulation;
   };
 
   const checkRawMaterialHasHistory = (rawMaterialId: string): boolean => {
-    const isUsedInFormulations = formulations.some(f => f.items.some(item => item.raw_material_id === rawMaterialId));
-    const hasRawMovements = rawMaterialMovements.some(m => m.raw_material_id === rawMaterialId && m.movement_type !== 'adjustment');
-    const hasPurchases = purchases.some(p => p.items.some(i => i.raw_material_id === rawMaterialId));
-    return isUsedInFormulations || hasRawMovements || hasPurchases;
+    const isUsedInFormulations = formulations.some(f => f.items?.some(i => i.raw_material_id === rawMaterialId));
+    const isUsedInPurchases = purchases.some(p => p.items?.some(i => i.raw_material_id === rawMaterialId));
+    return isUsedInFormulations || isUsedInPurchases;
   };
 
   const checkFormulationHasHistory = (formulationId: string): boolean => {
@@ -823,9 +741,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // ==============================================================================
-  // PRODUCT ACTIONS (SINGLE BASE UNIT + PACK SIZES + DELETE VS ARCHIVE)
+  // PRODUCT ACTIONS (SUPABASE-FIRST)
   // ==============================================================================
-  const addProduct = (prodData: Omit<Product, 'id' | 'created_at'>) => {
+  const addProduct = async (prodData: Omit<Product, 'id' | 'created_at'>): Promise<Product> => {
     const baseUnit = prodData.base_unit || (prodData.unit === 'kg' ? 'kg' : 'liter');
     const newProdId = generateId();
     const newProd: Product = {
@@ -846,112 +764,93 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       is_archived: false,
       created_at: new Date().toISOString(),
     };
-    setProducts(prev => [newProd, ...prev]);
-    supabaseService.upsertProduct(newProd);
+    const saved = await supabaseService.upsertProduct(newProd);
+    setProducts(prev => [saved, ...prev.filter(p => p.id !== saved.id)]);
 
-    if (newProd.current_stock > 0) {
+    if (saved.current_stock > 0) {
       const movement: StockMovement = {
         id: generateId(),
-        product_id: newProd.id,
-        product_name: newProd.name,
+        product_id: saved.id,
+        product_name: saved.name,
         movement_type: 'adjustment',
-        quantity: newProd.current_stock,
+        quantity: saved.current_stock,
         previous_stock: 0,
-        new_stock: newProd.current_stock,
-        notes: `Initial opening stock (${newProd.base_unit})`,
+        new_stock: saved.current_stock,
+        notes: `Initial opening stock (${saved.base_unit})`,
         date: new Date().toISOString(),
         created_by_name: 'Admin',
       };
+      await supabaseService.upsertStockMovement(movement);
       setStockMovements(prev => [movement, ...prev]);
-      supabaseService.upsertStockMovement(movement);
     }
+    return saved;
   };
 
-  const updateProduct = (id: string, updates: Partial<Product>) => {
-    setProducts(prev => prev.map(p => {
-      if (p.id === id) {
-        const updated = { ...p, ...updates, updated_at: new Date().toISOString() };
-        supabaseService.upsertProduct(updated);
-        return updated;
-      }
-      return p;
-    }));
+  const updateProduct = async (id: string, updates: Partial<Product>): Promise<Product> => {
+    const target = products.find(p => p.id === id);
+    if (!target) throw new Error('Product not found');
+    const updated = { ...target, ...updates, updated_at: new Date().toISOString() };
+    const saved = await supabaseService.upsertProduct(updated);
+    setProducts(prev => prev.map(p => p.id === id ? saved : p));
+    return saved;
   };
 
-  const updateProductPackSizes = (productId: string, packSizes: PackSize[]) => {
-    setProducts(prev => prev.map(p => {
-      if (p.id === productId) {
-        const updated = { ...p, pack_sizes: packSizes, updated_at: new Date().toISOString() };
-        supabaseService.upsertProduct(updated);
-        return updated;
-      }
-      return p;
-    }));
-  };
-
-  const deleteOrArchiveProduct = (id: string, user: Profile): { action: 'deleted' | 'archived'; message: string } => {
+  const deleteOrArchiveProduct = async (id: string, user: Profile): Promise<{ action: 'deleted' | 'archived'; message: string }> => {
     const target = products.find(p => p.id === id);
     if (!target) return { action: 'deleted', message: 'Product not found.' };
 
-    const hasSales = sales.some(s => s.items.some(i => i.product_id === id));
-    const hasPurchases = purchases.some(p => p.items.some(i => i.product_id === id));
-    const hasProduction = productionBatches.some(b => b.product_id === id);
+    const hasSales = sales.some(s => s.items?.some(i => i.product_id === id));
+    const hasBatches = productionBatches.some(b => b.product_id === id);
+    const hasFormulation = formulations.some(f => f.product_id === id);
 
-    if (!hasSales && !hasPurchases && !hasProduction) {
+    if (!hasSales && !hasBatches && !hasFormulation) {
+      await supabaseService.deleteProduct(id);
       setProducts(prev => prev.filter(p => p.id !== id));
-      setFormulations(prev => prev.filter(f => f.product_id !== id));
-      supabaseService.deleteProduct(id);
-      addDeletionLogEntry({
+      await addDeletionLogEntry({
         entity_type: 'product',
         entity_id: id,
         entity_title: target.name,
         action_type: 'deleted',
-        impact_summary: `Permanently deleted product "${target.name}" (no sales or production history).`,
+        impact_summary: `Permanently deleted product "${target.name}" (0 sales, 0 production batches, 0 BOMs).`,
         performed_by: user.name,
         performed_by_role: user.role,
       });
-      return { action: 'deleted', message: `Product "${target.name}" had no transaction history and was permanently removed.` };
+      return { action: 'deleted', message: `Product "${target.name}" had no transaction or formulation history and was deleted.` };
     } else {
-      setProducts(prev => prev.map(p => {
-        if (p.id === id) {
-          const archived = { ...p, is_archived: true, is_active: false, updated_at: new Date().toISOString() };
-          supabaseService.upsertProduct(archived);
-          return archived;
-        }
-        return p;
-      }));
-      addDeletionLogEntry({
+      const archived = { ...target, is_archived: true, is_active: false, updated_at: new Date().toISOString() };
+      await supabaseService.upsertProduct(archived);
+      setProducts(prev => prev.map(p => p.id === id ? archived : p));
+      await addDeletionLogEntry({
         entity_type: 'product',
         entity_id: id,
         entity_title: target.name,
         action_type: 'archived',
-        impact_summary: `Archived product "${target.name}" to protect past sales invoices and production records.`,
+        impact_summary: `Archived product "${target.name}" with sales/BOM links to preserve ledger & formula history.`,
         performed_by: user.name,
         performed_by_role: user.role,
       });
-      return { action: 'archived', message: `Product "${target.name}" has historical records and was safely archived.` };
+      return { action: 'archived', message: `Product "${target.name}" has sales or formulation history and was safely archived.` };
     }
   };
 
-  const unarchiveProduct = (id: string) => {
-    setProducts(prev => prev.map(p => {
-      if (p.id === id) {
-        const unarchived = { ...p, is_archived: false, is_active: true, updated_at: new Date().toISOString() };
-        supabaseService.upsertProduct(unarchived);
-        return unarchived;
-      }
-      return p;
-    }));
+  const unarchiveProduct = async (id: string): Promise<void> => {
+    const target = products.find(p => p.id === id);
+    if (!target) return;
+    const unarchived = { ...target, is_archived: false, is_active: true, updated_at: new Date().toISOString() };
+    await supabaseService.upsertProduct(unarchived);
+    setProducts(prev => prev.map(p => p.id === id ? unarchived : p));
   };
 
-  const adjustStock = (productId: string, qtyDiff: number, type: StockMovementType, notes: string, userName: string) => {
+  const adjustStock = async (productId: string, qtyDiff: number, type: StockMovementType, notes: string, userName: string): Promise<void> => {
     const target = products.find(p => p.id === productId);
     if (!target) return;
 
     const prevStock = Number(target.current_stock);
     const newStock = Math.max(0, prevStock + qtyDiff);
 
-    updateProduct(productId, { current_stock: newStock });
+    const updatedProd = { ...target, current_stock: newStock, updated_at: new Date().toISOString() };
+    await supabaseService.upsertProduct(updatedProd);
+    setProducts(prev => prev.map(p => p.id === productId ? updatedProd : p));
 
     const movement: StockMovement = {
       id: generateId(),
@@ -966,44 +865,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       created_by_name: userName,
     };
 
+    await supabaseService.upsertStockMovement(movement);
     setStockMovements(prev => [movement, ...prev]);
-    supabaseService.upsertStockMovement(movement);
+  };
+
+  const updateProductPackSizes = async (productId: string, packSizes: PackSize[]): Promise<void> => {
+    const target = products.find(p => p.id === productId);
+    if (!target) return;
+    const updated = { ...target, pack_sizes: packSizes, updated_at: new Date().toISOString() };
+    await supabaseService.upsertProduct(updated);
+    setProducts(prev => prev.map(p => p.id === productId ? updated : p));
   };
 
   // ==============================================================================
-  // CUSTOMER ACTIONS (WITH SALES HISTORY PROTECTION)
+  // CUSTOMER ACTIONS (SUPABASE-FIRST)
   // ==============================================================================
-  const addCustomer = (custData: Omit<Customer, 'id' | 'created_at'>) => {
+  const addCustomer = async (custData: Omit<Customer, 'id' | 'created_at'>): Promise<Customer> => {
     const newCust: Customer = {
       ...custData,
       id: generateId(),
       created_at: new Date().toISOString(),
     };
-    setCustomers(prev => [newCust, ...prev]);
-    supabaseService.upsertCustomer(newCust);
+    const saved = await supabaseService.upsertCustomer(newCust);
+    setCustomers(prev => [saved, ...prev.filter(c => c.id !== saved.id)]);
+    return saved;
   };
 
-  const updateCustomer = (id: string, updates: Partial<Customer>) => {
-    setCustomers(prev => prev.map(c => {
-      if (c.id === id) {
-        const updated = { ...c, ...updates };
-        supabaseService.upsertCustomer(updated);
-        return updated;
-      }
-      return c;
-    }));
+  const updateCustomer = async (id: string, updates: Partial<Customer>): Promise<Customer> => {
+    const target = customers.find(c => c.id === id);
+    if (!target) throw new Error('Customer not found');
+    const updated = { ...target, ...updates, updated_at: new Date().toISOString() };
+    const saved = await supabaseService.upsertCustomer(updated);
+    setCustomers(prev => prev.map(c => c.id === id ? saved : c));
+    return saved;
   };
 
-  const deleteOrArchiveCustomer = (id: string, user: Profile): { action: 'deleted' | 'archived'; message: string } => {
+  const deleteOrArchiveCustomer = async (id: string, user: Profile): Promise<{ action: 'deleted' | 'archived'; message: string }> => {
     const target = customers.find(c => c.id === id);
     if (!target) return { action: 'deleted', message: 'Customer not found.' };
 
     const hasSales = sales.some(s => s.customer_id === id);
 
     if (!hasSales) {
+      await supabaseService.deleteCustomer(id);
       setCustomers(prev => prev.filter(c => c.id !== id));
-      supabaseService.deleteCustomer(id);
-      addDeletionLogEntry({
+      await addDeletionLogEntry({
         entity_type: 'customer',
         entity_id: id,
         entity_title: target.name,
@@ -1014,15 +920,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       return { action: 'deleted', message: `Customer "${target.name}" had no sales history and was deleted.` };
     } else {
-      setCustomers(prev => prev.map(c => {
-        if (c.id === id) {
-          const archived = { ...c, is_archived: true, is_active: false };
-          supabaseService.upsertCustomer(archived);
-          return archived;
-        }
-        return c;
-      }));
-      addDeletionLogEntry({
+      const archived = { ...target, is_archived: true, is_active: false, updated_at: new Date().toISOString() };
+      await supabaseService.upsertCustomer(archived);
+      setCustomers(prev => prev.map(c => c.id === id ? archived : c));
+      await addDeletionLogEntry({
         entity_type: 'customer',
         entity_id: id,
         entity_title: target.name,
@@ -1035,51 +936,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const unarchiveCustomer = (id: string) => {
-    setCustomers(prev => prev.map(c => {
-      if (c.id === id) {
-        const unarchived = { ...c, is_archived: false, is_active: true };
-        supabaseService.upsertCustomer(unarchived);
-        return unarchived;
-      }
-      return c;
-    }));
+  const unarchiveCustomer = async (id: string): Promise<void> => {
+    const target = customers.find(c => c.id === id);
+    if (!target) return;
+    const unarchived = { ...target, is_archived: false, is_active: true, updated_at: new Date().toISOString() };
+    await supabaseService.upsertCustomer(unarchived);
+    setCustomers(prev => prev.map(c => c.id === id ? unarchived : c));
   };
 
   // ==============================================================================
-  // SUPPLIER ACTIONS (WITH PURCHASE HISTORY PROTECTION)
+  // SUPPLIER ACTIONS (SUPABASE-FIRST)
   // ==============================================================================
-  const addSupplier = (suppData: Omit<Supplier, 'id' | 'created_at'>) => {
+  const addSupplier = async (suppData: Omit<Supplier, 'id' | 'created_at'>): Promise<Supplier> => {
     const newSupp: Supplier = {
       ...suppData,
       id: generateId(),
       created_at: new Date().toISOString(),
     };
-    setSuppliers(prev => [newSupp, ...prev]);
-    supabaseService.upsertSupplier(newSupp);
+    const saved = await supabaseService.upsertSupplier(newSupp);
+    setSuppliers(prev => [saved, ...prev.filter(s => s.id !== saved.id)]);
+    return saved;
   };
 
-  const updateSupplier = (id: string, updates: Partial<Supplier>) => {
-    setSuppliers(prev => prev.map(s => {
-      if (s.id === id) {
-        const updated = { ...s, ...updates };
-        supabaseService.upsertSupplier(updated);
-        return updated;
-      }
-      return s;
-    }));
+  const updateSupplier = async (id: string, updates: Partial<Supplier>): Promise<Supplier> => {
+    const target = suppliers.find(s => s.id === id);
+    if (!target) throw new Error('Supplier not found');
+    const updated = { ...target, ...updates, updated_at: new Date().toISOString() };
+    const saved = await supabaseService.upsertSupplier(updated);
+    setSuppliers(prev => prev.map(s => s.id === id ? saved : s));
+    return saved;
   };
 
-  const deleteOrArchiveSupplier = (id: string, user: Profile): { action: 'deleted' | 'archived'; message: string } => {
+  const deleteOrArchiveSupplier = async (id: string, user: Profile): Promise<{ action: 'deleted' | 'archived'; message: string }> => {
     const target = suppliers.find(s => s.id === id);
     if (!target) return { action: 'deleted', message: 'Supplier not found.' };
 
     const hasPurchases = purchases.some(p => p.supplier_id === id);
 
     if (!hasPurchases) {
+      await supabaseService.deleteSupplier(id);
       setSuppliers(prev => prev.filter(s => s.id !== id));
-      supabaseService.deleteSupplier(id);
-      addDeletionLogEntry({
+      await addDeletionLogEntry({
         entity_type: 'supplier',
         entity_id: id,
         entity_title: target.name,
@@ -1090,20 +987,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       return { action: 'deleted', message: `Supplier "${target.name}" had no purchase history and was deleted.` };
     } else {
-      setSuppliers(prev => prev.map(s => {
-        if (s.id === id) {
-          const archived = { ...s, is_archived: true, is_active: false };
-          supabaseService.upsertSupplier(archived);
-          return archived;
-        }
-        return s;
-      }));
-      addDeletionLogEntry({
+      const archived = { ...target, is_archived: true, is_active: false, updated_at: new Date().toISOString() };
+      await supabaseService.upsertSupplier(archived);
+      setSuppliers(prev => prev.map(s => s.id === id ? archived : s));
+      await addDeletionLogEntry({
         entity_type: 'supplier',
         entity_id: id,
         entity_title: target.name,
         action_type: 'archived',
-        impact_summary: `Archived supplier "${target.name}" with historical POs to protect ledger accounting.`,
+        impact_summary: `Archived supplier "${target.name}" with transaction history to preserve payables audit trail.`,
         performed_by: user.name,
         performed_by_role: user.role,
       });
@@ -1111,21 +1003,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const unarchiveSupplier = (id: string) => {
-    setSuppliers(prev => prev.map(s => {
-      if (s.id === id) {
-        const unarchived = { ...s, is_archived: false, is_active: true };
-        supabaseService.upsertSupplier(unarchived);
-        return unarchived;
-      }
-      return s;
-    }));
+  const unarchiveSupplier = async (id: string): Promise<void> => {
+    const target = suppliers.find(s => s.id === id);
+    if (!target) return;
+    const unarchived = { ...target, is_archived: false, is_active: true, updated_at: new Date().toISOString() };
+    await supabaseService.upsertSupplier(unarchived);
+    setSuppliers(prev => prev.map(s => s.id === id ? unarchived : s));
   };
 
   // ==============================================================================
-  // TRANSACTIONS: SALE ENTRY & SALE DELETION (WITH FULL AUTOMATED REVERSAL)
+  // TRANSACTIONS: SALE ENTRY & SALE DELETION (SUPABASE-FIRST)
   // ==============================================================================
-  const createSale = (saleData: Omit<Sale, 'id' | 'invoice_number' | 'created_at'>): Sale => {
+  const createSale = async (saleData: Omit<Sale, 'id' | 'invoice_number' | 'created_at'>): Promise<Sale> => {
     const invoiceNum = generateInvoiceNumber('INV');
     const newSale: Sale = {
       ...saleData,
@@ -1134,197 +1023,143 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       created_at: new Date().toISOString(),
     };
 
-    setSales(prev => [newSale, ...prev]);
-    supabaseService.upsertSale(newSale);
+    const savedSale = await supabaseService.upsertSale(newSale);
+    setSales(prev => [savedSale, ...prev]);
 
-    // Deduct stock
+    // Deduct stock for each sold product
     const movementsToAdd: StockMovement[] = [];
-    setProducts(prevProducts => {
-      return prevProducts.map(prod => {
-        const item = newSale.items.find(i => i.product_id === prod.id);
-        if (item) {
-          const deductBaseQty = item.base_quantity || item.quantity;
-          const prevStk = Number(prod.current_stock);
-          const nextStk = Math.max(0, prevStk - deductBaseQty);
+    for (const item of savedSale.items) {
+      const prod = products.find(p => p.id === item.product_id);
+      if (prod) {
+        const deductBaseQty = item.base_quantity || item.quantity;
+        const prevStk = Number(prod.current_stock);
+        const nextStk = Math.max(0, prevStk - deductBaseQty);
+        const updatedProd = { ...prod, current_stock: nextStk, updated_at: new Date().toISOString() };
+        await supabaseService.upsertProduct(updatedProd);
 
-          movementsToAdd.push({
-            id: generateId(),
-            product_id: prod.id,
-            product_name: prod.name,
-            movement_type: 'sale_out',
-            quantity: -deductBaseQty,
-            previous_stock: prevStk,
-            new_stock: nextStk,
-            reference_id: newSale.id,
-            notes: `Sold via Invoice ${invoiceNum} (${item.pack_size_name ? `${item.quantity}x ${item.pack_size_name}` : `${deductBaseQty} ${prod.base_unit || prod.unit}`})`,
-            date: newSale.date,
-            created_by_name: newSale.salesperson_name,
-          });
-
-          const updatedProd = { ...prod, current_stock: nextStk };
-          supabaseService.upsertProduct(updatedProd);
-          return updatedProd;
-        }
-        return prod;
-      });
-    });
-
-    if (movementsToAdd.length > 0) {
-      setStockMovements(prev => [...movementsToAdd, ...prev]);
-      movementsToAdd.forEach(m => supabaseService.upsertStockMovement(m));
+        const mvt: StockMovement = {
+          id: generateId(),
+          product_id: prod.id,
+          product_name: prod.name,
+          movement_type: 'sale_out',
+          quantity: -deductBaseQty,
+          previous_stock: prevStk,
+          new_stock: nextStk,
+          reference_id: savedSale.id,
+          notes: `Sold via Invoice ${invoiceNum} (${item.pack_size_name ? `${item.quantity}x ${item.pack_size_name}` : `${deductBaseQty} ${prod.base_unit || prod.unit}`})`,
+          date: savedSale.date,
+          created_by_name: savedSale.salesperson_name,
+        };
+        await supabaseService.upsertStockMovement(mvt);
+        movementsToAdd.push(mvt);
+      }
     }
 
-    // Update customer balance if unpaid credit
-    const unpaid = newSale.total_amount - newSale.amount_paid;
-    if (newSale.customer_id && unpaid > 0) {
-      setCustomers(prev => prev.map(c => {
-        if (c.id === newSale.customer_id) {
-          const updatedCust = { ...c, current_balance: (c.current_balance || 0) + unpaid };
-          supabaseService.upsertCustomer(updatedCust);
-          return updatedCust;
-        }
-        return c;
-      }));
+    setStockMovements(prev => [...movementsToAdd, ...prev]);
+
+    // Update customer balance if credit sale
+    const unpaid = savedSale.total_amount - savedSale.amount_paid;
+    if (savedSale.customer_id && unpaid > 0) {
+      const cust = customers.find(c => c.id === savedSale.customer_id);
+      if (cust) {
+        const updatedCust = { ...cust, current_balance: (cust.current_balance || 0) + unpaid, updated_at: new Date().toISOString() };
+        await supabaseService.upsertCustomer(updatedCust);
+        setCustomers(prev => prev.map(c => c.id === savedSale.customer_id ? updatedCust : c));
+      }
     }
 
     // Log payment if paid
-    if (newSale.amount_paid > 0) {
+    if (savedSale.amount_paid > 0) {
       const pay: Payment = {
         id: generateId(),
         related_to: 'sale',
-        reference_id: newSale.id,
-        reference_no: newSale.invoice_number,
-        customer_id: newSale.customer_id,
-        customer_name: newSale.customer_name,
-        amount: newSale.amount_paid,
-        payment_method: newSale.payment_method,
+        reference_id: savedSale.id,
+        reference_no: savedSale.invoice_number,
+        customer_id: savedSale.customer_id,
+        customer_name: savedSale.customer_name,
+        amount: savedSale.amount_paid,
+        payment_method: savedSale.payment_method,
         notes: `Received for invoice ${invoiceNum}`,
-        date: newSale.date,
-        created_by: newSale.salesperson_name,
+        date: savedSale.date,
+        created_by: savedSale.salesperson_name,
         created_at: new Date().toISOString(),
       };
-      setPayments(prev => [pay, ...prev]);
-      supabaseService.upsertPayment(pay);
+      const savedPay = await supabaseService.upsertPayment(pay);
+      setPayments(prev => [savedPay, ...prev]);
     }
 
-    return newSale;
+    return savedSale;
   };
 
-  // REVERSAL ON SALE DELETION
-  const deleteSaleInvoice = (saleId: string, user: Profile): { success: boolean; message: string } => {
+  const deleteSaleInvoice = async (saleId: string, user: Profile): Promise<{ success: boolean; message: string }> => {
     const targetSale = sales.find(s => s.id === saleId);
     if (!targetSale) return { success: false, message: 'Sale invoice not found.' };
 
-    const stockReversedSummary: any[] = [];
-    const movementsToAdd: StockMovement[] = [];
     const now = new Date().toISOString();
 
-    // 1. Restore finished products stock (Add back what was sold)
-    setProducts(prevProducts => {
-      return prevProducts.map(prod => {
-        const item = targetSale.items.find(i => i.product_id === prod.id);
-        if (item) {
-          const addBackBaseQty = item.base_quantity || item.quantity;
-          const prevStk = Number(prod.current_stock);
-          const nextStk = prevStk + addBackBaseQty;
+    // 1. Restore finished products stock
+    for (const item of targetSale.items) {
+      const prod = products.find(p => p.id === item.product_id);
+      if (prod) {
+        const addBackBaseQty = item.base_quantity || item.quantity;
+        const prevStk = Number(prod.current_stock);
+        const nextStk = prevStk + addBackBaseQty;
+        const updatedProd = { ...prod, current_stock: nextStk, updated_at: now };
+        await supabaseService.upsertProduct(updatedProd);
 
-          stockReversedSummary.push({
-            name: prod.name,
-            quantity_reversed: addBackBaseQty,
-            unit: prod.base_unit || prod.unit,
-            previous_stock: prevStk,
-            new_stock: nextStk,
-          });
-
-          movementsToAdd.push({
-            id: generateId(),
-            product_id: prod.id,
-            product_name: prod.name,
-            movement_type: 'return',
-            quantity: addBackBaseQty,
-            previous_stock: prevStk,
-            new_stock: nextStk,
-            reference_id: targetSale.invoice_number,
-            notes: `Restored from deleted invoice ${targetSale.invoice_number}`,
-            date: now,
-            created_by_name: user.name,
-          });
-
-          const updatedProd = { ...prod, current_stock: nextStk };
-          supabaseService.upsertProduct(updatedProd);
-          return updatedProd;
-        }
-        return prod;
-      });
-    });
-
-    if (movementsToAdd.length > 0) {
-      setStockMovements(prev => [...movementsToAdd, ...prev]);
-      movementsToAdd.forEach(m => supabaseService.upsertStockMovement(m));
+        const mvt: StockMovement = {
+          id: generateId(),
+          product_id: prod.id,
+          product_name: prod.name,
+          movement_type: 'return',
+          quantity: addBackBaseQty,
+          previous_stock: prevStk,
+          new_stock: nextStk,
+          reference_id: targetSale.invoice_number,
+          notes: `Restored from deleted invoice ${targetSale.invoice_number}`,
+          date: now,
+          created_by_name: user.name,
+        };
+        await supabaseService.upsertStockMovement(mvt);
+      }
     }
 
-    // 2. Reverse customer receivable balance (Deduct unpaid amount)
-    const unpaidAmount = targetSale.total_amount - targetSale.amount_paid;
-    let custBalanceReversed: any = null;
-
-    if (targetSale.customer_id && unpaidAmount > 0) {
-      setCustomers(prev => prev.map(c => {
-        if (c.id === targetSale.customer_id) {
-          const prevBal = c.current_balance || 0;
-          const nextBal = Math.max(0, prevBal - unpaidAmount);
-          custBalanceReversed = {
-            entity_name: c.name,
-            amount_reversed: unpaidAmount,
-            previous_balance: prevBal,
-            new_balance: nextBal,
-          };
-          const updatedCust = { ...c, current_balance: nextBal };
-          supabaseService.upsertCustomer(updatedCust);
-          return updatedCust;
-        }
-        return c;
-      }));
+    // 2. Reverse customer balance
+    const unpaid = targetSale.total_amount - targetSale.amount_paid;
+    if (targetSale.customer_id && unpaid > 0) {
+      const cust = customers.find(c => c.id === targetSale.customer_id);
+      if (cust) {
+        const updatedCust = { ...cust, current_balance: Math.max(0, (cust.current_balance || 0) - unpaid), updated_at: now };
+        await supabaseService.upsertCustomer(updatedCust);
+      }
     }
 
-    // 3. Reverse linked payments
-    let reversedPaymentsCount = 0;
-    const paymentsToDelete = payments.filter(p => p.reference_id === targetSale.id || p.reference_no === targetSale.invoice_number);
-    paymentsToDelete.forEach(p => {
-      reversedPaymentsCount++;
-      supabaseService.deletePayment(p.id);
-    });
-    setPayments(prev => prev.filter(p => !paymentsToDelete.some(dp => dp.id === p.id)));
-
-    // 4. Remove Sale from list
+    // 3. Delete sale invoice record from Supabase
+    await supabaseService.deleteSale(saleId);
     setSales(prev => prev.filter(s => s.id !== saleId));
-    supabaseService.deleteSale(saleId);
 
-    // 5. Log audit trail
-    addDeletionLogEntry({
+    await addDeletionLogEntry({
       entity_type: 'sale',
-      entity_id: targetSale.id,
-      entity_title: `Invoice ${targetSale.invoice_number} (${targetSale.customer_name})`,
-      action_type: 'reversed_and_deleted',
-      impact_summary: `Reversed invoice ${targetSale.invoice_number}: restored sold product stock, adjusted customer receivable debt (-PKR ${unpaidAmount}), and removed linked payment vouchers.`,
+      entity_id: saleId,
+      entity_title: `Invoice ${targetSale.invoice_number}`,
+      action_type: 'deleted',
+      impact_summary: `Deleted Invoice ${targetSale.invoice_number}: Restored finished goods inventory, adjusted customer balance.`,
       performed_by: user.name,
       performed_by_role: user.role,
-      reversal_details: {
-        stock_reversed: stockReversedSummary,
-        balance_reversed: custBalanceReversed,
-        payments_reversed_count: reversedPaymentsCount,
-      },
     });
+
+    await loadCloudData();
 
     return {
       success: true,
-      message: `Invoice ${targetSale.invoice_number} deleted. Stock restored and customer balance reversed successfully.`,
+      message: `Invoice ${targetSale.invoice_number} successfully deleted. Inventory and customer balances were restored.`
     };
   };
 
   // ==============================================================================
-  // TRANSACTIONS: PURCHASE ENTRY & PURCHASE DELETION (WITH AUTOMATED REVERSAL)
+  // TRANSACTIONS: PURCHASE ENTRY & PURCHASE DELETION (SUPABASE-FIRST)
   // ==============================================================================
-  const createPurchase = (purchaseData: Omit<Purchase, 'id' | 'invoice_number' | 'created_at'>): Purchase => {
+  const createPurchase = async (purchaseData: Omit<Purchase, 'id' | 'invoice_number' | 'created_at'>): Promise<Purchase> => {
     const invoiceNum = generateInvoiceNumber('PO');
     const newPurchase: Purchase = {
       ...purchaseData,
@@ -1333,19 +1168,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       created_at: new Date().toISOString(),
     };
 
-    setPurchases(prev => [newPurchase, ...prev]);
-    supabaseService.upsertPurchase(newPurchase);
+    const savedPurchase = await supabaseService.upsertPurchase(newPurchase);
+    setPurchases(prev => [savedPurchase, ...prev]);
 
     // Raw Materials addition
-    const rawMovementsToAdd: RawMaterialMovement[] = [];
-    setRawMaterials(prevRaw => {
-      return prevRaw.map(rm => {
-        const item = newPurchase.items.find(i => i.raw_material_id === rm.id);
-        if (item) {
+    for (const item of savedPurchase.items) {
+      if (item.raw_material_id) {
+        const rm = rawMaterials.find(r => r.id === item.raw_material_id);
+        if (rm) {
           const prevStk = Number(rm.current_stock);
           const nextStk = prevStk + Number(item.quantity);
+          const updatedRm = { ...rm, current_stock: nextStk, cost_per_unit: item.unit_cost || rm.cost_per_unit, updated_at: new Date().toISOString() };
+          await supabaseService.upsertRawMaterial(updatedRm);
 
-          rawMovementsToAdd.push({
+          const rmMvt: RawMaterialMovement = {
             id: generateId(),
             raw_material_id: rm.id,
             raw_material_name: rm.name,
@@ -1353,34 +1189,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             quantity: Number(item.quantity),
             previous_stock: prevStk,
             new_stock: nextStk,
-            reference_id: newPurchase.invoice_number,
-            notes: `Received from PO ${invoiceNum} (${newPurchase.supplier_name})`,
-            date: newPurchase.date,
-          });
-
-          const updatedRm = { ...rm, current_stock: nextStk, cost_per_unit: item.unit_cost || rm.cost_per_unit };
-          supabaseService.upsertRawMaterial(updatedRm);
-          return updatedRm;
+            reference_id: savedPurchase.invoice_number,
+            notes: `Received from PO ${invoiceNum} (${savedPurchase.supplier_name})`,
+            date: savedPurchase.date,
+          };
+          await supabaseService.upsertRawMaterialMovement(rmMvt);
         }
-        return rm;
-      });
-    });
+      }
 
-    if (rawMovementsToAdd.length > 0) {
-      setRawMaterialMovements(prev => [...rawMovementsToAdd, ...prev]);
-      rawMovementsToAdd.forEach(m => supabaseService.upsertRawMaterialMovement(m));
-    }
-
-    // Finished Goods addition
-    const movementsToAdd: StockMovement[] = [];
-    setProducts(prevProducts => {
-      return prevProducts.map(prod => {
-        const item = newPurchase.items.find(i => i.product_id === prod.id);
-        if (item) {
+      // Finished goods addition
+      if (item.product_id) {
+        const prod = products.find(p => p.id === item.product_id);
+        if (prod) {
           const prevStk = Number(prod.current_stock);
           const nextStk = prevStk + Number(item.quantity);
+          const updatedProd = { ...prod, current_stock: nextStk, cost_price: item.unit_cost || prod.cost_price, updated_at: new Date().toISOString() };
+          await supabaseService.upsertProduct(updatedProd);
 
-          movementsToAdd.push({
+          const prodMvt: StockMovement = {
             id: generateId(),
             product_id: prod.id,
             product_name: prod.name,
@@ -1388,116 +1214,100 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             quantity: Number(item.quantity),
             previous_stock: prevStk,
             new_stock: nextStk,
-            reference_id: newPurchase.id,
-            notes: `Received from PO ${invoiceNum} (${newPurchase.supplier_name})`,
-            date: newPurchase.date,
-          });
-
-          const updatedProd = { ...prod, current_stock: nextStk, cost_price: item.unit_cost || prod.cost_price };
-          supabaseService.upsertProduct(updatedProd);
-          return updatedProd;
+            reference_id: savedPurchase.id,
+            notes: `Received from PO ${invoiceNum} (${savedPurchase.supplier_name})`,
+            date: savedPurchase.date,
+          };
+          await supabaseService.upsertStockMovement(prodMvt);
         }
-        return prod;
-      });
-    });
-
-    if (movementsToAdd.length > 0) {
-      setStockMovements(prev => [...movementsToAdd, ...prev]);
-      movementsToAdd.forEach(m => supabaseService.upsertStockMovement(m));
+      }
     }
 
     // Update supplier balance if unpaid
-    const unpaid = newPurchase.total_amount - newPurchase.amount_paid;
-    if (newPurchase.supplier_id && unpaid > 0) {
-      setSuppliers(prev => prev.map(s => {
-        if (s.id === newPurchase.supplier_id) {
-          const updatedSupp = { ...s, current_balance: (s.current_balance || 0) + unpaid };
-          supabaseService.upsertSupplier(updatedSupp);
-          return updatedSupp;
-        }
-        return s;
-      }));
+    const unpaid = savedPurchase.total_amount - savedPurchase.amount_paid;
+    if (savedPurchase.supplier_id && unpaid > 0) {
+      const supp = suppliers.find(s => s.id === savedPurchase.supplier_id);
+      if (supp) {
+        const updatedSupp = { ...supp, current_balance: (supp.current_balance || 0) + unpaid, updated_at: new Date().toISOString() };
+        await supabaseService.upsertSupplier(updatedSupp);
+        setSuppliers(prev => prev.map(s => s.id === savedPurchase.supplier_id ? updatedSupp : s));
+      }
     }
 
     // Log payment made
-    if (newPurchase.amount_paid > 0) {
+    if (savedPurchase.amount_paid > 0) {
       const pay: Payment = {
         id: generateId(),
         related_to: 'purchase',
-        reference_id: newPurchase.id,
-        reference_no: newPurchase.invoice_number,
-        supplier_id: newPurchase.supplier_id,
-        supplier_name: newPurchase.supplier_name,
-        amount: newPurchase.amount_paid,
-        payment_method: newPurchase.payment_method,
+        reference_id: savedPurchase.id,
+        reference_no: savedPurchase.invoice_number,
+        supplier_id: savedPurchase.supplier_id,
+        supplier_name: savedPurchase.supplier_name,
+        amount: savedPurchase.amount_paid,
+        payment_method: savedPurchase.payment_method,
         notes: `Paid to supplier for PO ${invoiceNum}`,
-        date: newPurchase.date,
+        date: savedPurchase.date,
         created_at: new Date().toISOString(),
       };
-      setPayments(prev => [pay, ...prev]);
-      supabaseService.upsertPayment(pay);
+      const savedPay = await supabaseService.upsertPayment(pay);
+      setPayments(prev => [savedPay, ...prev]);
     }
 
-    return newPurchase;
+    return savedPurchase;
   };
 
-  // REVERSAL ON PURCHASE DELETION
-  const deletePurchaseInvoice = (
+  const deletePurchaseInvoice = async (
     purchaseId: string, 
     user: Profile, 
-    forceAllowNegativeStock?: boolean
-  ): { success: boolean; hasNegativeStockWarning?: boolean; warningDetails?: string[]; message: string } => {
+    forceAllowNegativeStock: boolean = false
+  ): Promise<{ success: boolean; hasNegativeStockWarning?: boolean; warningDetails?: string[]; message: string }> => {
     const targetPurchase = purchases.find(p => p.id === purchaseId);
-    if (!targetPurchase) return { success: false, message: 'Purchase record not found.' };
+    if (!targetPurchase) return { success: false, message: 'Purchase order not found.' };
 
-    // 1. Check for negative stock warnings
-    const warnings: string[] = [];
+    const warningDetails: string[] = [];
 
-    targetPurchase.items.forEach(item => {
+    // Verify negative stock risks
+    for (const item of targetPurchase.items) {
       if (item.raw_material_id) {
-        const rm = rawMaterials.find(m => m.id === item.raw_material_id);
-        if (rm && rm.current_stock < item.quantity) {
-          warnings.push(`Raw Material "${rm.name}" currently has ${rm.current_stock} ${rm.unit}, but reversing this purchase subtracts ${item.quantity} ${rm.unit} (resulting in ${rm.current_stock - item.quantity} ${rm.unit}). Stock was likely already used in production.`);
-        }
-      } else if (item.product_id) {
-        const prod = products.find(p => p.id === item.product_id);
-        if (prod && prod.current_stock < item.quantity) {
-          warnings.push(`Product "${prod.name}" currently has ${prod.current_stock} ${prod.base_unit || prod.unit}, but reversing this purchase subtracts ${item.quantity} (resulting in ${prod.current_stock - item.quantity}). Stock was likely already sold.`);
+        const rm = rawMaterials.find(r => r.id === item.raw_material_id);
+        const currentStk = rm ? Number(rm.current_stock) : 0;
+        const wouldBeStk = currentStk - Number(item.quantity);
+        if (wouldBeStk < 0) {
+          warningDetails.push(`Raw Material "${item.product_or_material_name}": Current stock is ${currentStk} ${rm?.unit}, PO received ${item.quantity}. Stock would become negative (${wouldBeStk}).`);
         }
       }
-    });
+      if (item.product_id) {
+        const prod = products.find(p => p.id === item.product_id);
+        const currentStk = prod ? Number(prod.current_stock) : 0;
+        const wouldBeStk = currentStk - Number(item.quantity);
+        if (wouldBeStk < 0) {
+          warningDetails.push(`Product "${item.product_or_material_name}": Current stock is ${currentStk} ${prod?.base_unit || prod?.unit}, PO received ${item.quantity}. Stock would become negative (${wouldBeStk}).`);
+        }
+      }
+    }
 
-    if (warnings.length > 0 && !forceAllowNegativeStock) {
+    if (warningDetails.length > 0 && !forceAllowNegativeStock) {
       return {
         success: false,
         hasNegativeStockWarning: true,
-        warningDetails: warnings,
-        message: 'Reversing this purchase would cause stock levels to go negative.',
+        warningDetails,
+        message: 'Reversing this purchase order will cause negative inventory balances.'
       };
     }
 
-    const stockReversedSummary: any[] = [];
-    const rawMovementsToAdd: RawMaterialMovement[] = [];
-    const prodMovementsToAdd: StockMovement[] = [];
     const now = new Date().toISOString();
 
-    // 2. Subtract Raw Materials Stock
-    setRawMaterials(prevRaw => {
-      return prevRaw.map(rm => {
-        const item = targetPurchase.items.find(i => i.raw_material_id === rm.id);
-        if (item) {
+    // 1. Subtract received inventory
+    for (const item of targetPurchase.items) {
+      if (item.raw_material_id) {
+        const rm = rawMaterials.find(r => r.id === item.raw_material_id);
+        if (rm) {
           const prevStk = Number(rm.current_stock);
           const nextStk = Math.max(0, prevStk - Number(item.quantity));
+          const updatedRm = { ...rm, current_stock: nextStk, updated_at: now };
+          await supabaseService.upsertRawMaterial(updatedRm);
 
-          stockReversedSummary.push({
-            name: rm.name,
-            quantity_reversed: -Number(item.quantity),
-            unit: rm.unit,
-            previous_stock: prevStk,
-            new_stock: nextStk,
-          });
-
-          rawMovementsToAdd.push({
+          const rmMvt: RawMaterialMovement = {
             id: generateId(),
             raw_material_id: rm.id,
             raw_material_name: rm.name,
@@ -1509,38 +1319,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             notes: `Subtracted due to deleted PO ${targetPurchase.invoice_number}`,
             date: now,
             created_by_name: user.name,
-          });
-
-          const updatedRm = { ...rm, current_stock: nextStk };
-          supabaseService.upsertRawMaterial(updatedRm);
-          return updatedRm;
+          };
+          await supabaseService.upsertRawMaterialMovement(rmMvt);
         }
-        return rm;
-      });
-    });
+      }
 
-    if (rawMovementsToAdd.length > 0) {
-      setRawMaterialMovements(prev => [...rawMovementsToAdd, ...prev]);
-      rawMovementsToAdd.forEach(m => supabaseService.upsertRawMaterialMovement(m));
-    }
-
-    // 3. Subtract Finished Goods Stock
-    setProducts(prevProducts => {
-      return prevProducts.map(prod => {
-        const item = targetPurchase.items.find(i => i.product_id === prod.id);
-        if (item) {
+      if (item.product_id) {
+        const prod = products.find(p => p.id === item.product_id);
+        if (prod) {
           const prevStk = Number(prod.current_stock);
           const nextStk = Math.max(0, prevStk - Number(item.quantity));
+          const updatedProd = { ...prod, current_stock: nextStk, updated_at: now };
+          await supabaseService.upsertProduct(updatedProd);
 
-          stockReversedSummary.push({
-            name: prod.name,
-            quantity_reversed: -Number(item.quantity),
-            unit: prod.base_unit || prod.unit,
-            previous_stock: prevStk,
-            new_stock: nextStk,
-          });
-
-          prodMovementsToAdd.push({
+          const prodMvt: StockMovement = {
             id: generateId(),
             product_id: prod.id,
             product_name: prod.name,
@@ -1552,183 +1344,113 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             notes: `Subtracted due to deleted PO ${targetPurchase.invoice_number}`,
             date: now,
             created_by_name: user.name,
-          });
-
-          const updatedProd = { ...prod, current_stock: nextStk };
-          supabaseService.upsertProduct(updatedProd);
-          return updatedProd;
-        }
-        return prod;
-      });
-    });
-
-    if (prodMovementsToAdd.length > 0) {
-      setStockMovements(prev => [...prodMovementsToAdd, ...prev]);
-      prodMovementsToAdd.forEach(m => supabaseService.upsertStockMovement(m));
-    }
-
-    // 4. Reverse Supplier Balance (Deduct unpaid payable amount)
-    const unpaidAmount = targetPurchase.total_amount - targetPurchase.amount_paid;
-    let suppBalanceReversed: any = null;
-
-    if (targetPurchase.supplier_id && unpaidAmount > 0) {
-      setSuppliers(prev => prev.map(s => {
-        if (s.id === targetPurchase.supplier_id) {
-          const prevBal = s.current_balance || 0;
-          const nextBal = Math.max(0, prevBal - unpaidAmount);
-          suppBalanceReversed = {
-            entity_name: s.name,
-            amount_reversed: unpaidAmount,
-            previous_balance: prevBal,
-            new_balance: nextBal,
           };
-          const updatedSupp = { ...s, current_balance: nextBal };
-          supabaseService.upsertSupplier(updatedSupp);
-          return updatedSupp;
+          await supabaseService.upsertStockMovement(prodMvt);
         }
-        return s;
-      }));
+      }
     }
 
-    // 5. Reverse linked payments
-    let reversedPaymentsCount = 0;
-    const paymentsToDelete = payments.filter(p => p.reference_id === targetPurchase.id || p.reference_no === targetPurchase.invoice_number);
-    paymentsToDelete.forEach(p => {
-      reversedPaymentsCount++;
-      supabaseService.deletePayment(p.id);
-    });
-    setPayments(prev => prev.filter(p => !paymentsToDelete.some(dp => dp.id === p.id)));
+    // 2. Reverse supplier balance
+    const unpaid = targetPurchase.total_amount - targetPurchase.amount_paid;
+    if (targetPurchase.supplier_id && unpaid > 0) {
+      const supp = suppliers.find(s => s.id === targetPurchase.supplier_id);
+      if (supp) {
+        const updatedSupp = { ...supp, current_balance: Math.max(0, (supp.current_balance || 0) - unpaid), updated_at: now };
+        await supabaseService.upsertSupplier(updatedSupp);
+      }
+    }
 
-    // 6. Remove Purchase from list
+    // 3. Delete PO record from Supabase
+    await supabaseService.deletePurchase(purchaseId);
     setPurchases(prev => prev.filter(p => p.id !== purchaseId));
-    supabaseService.deletePurchase(purchaseId);
 
-    // 7. Log audit trail
-    addDeletionLogEntry({
+    await addDeletionLogEntry({
       entity_type: 'purchase',
-      entity_id: targetPurchase.id,
-      entity_title: `PO ${targetPurchase.invoice_number} (${targetPurchase.supplier_name})`,
-      action_type: 'reversed_and_deleted',
-      impact_summary: `Reversed PO ${targetPurchase.invoice_number}: subtracted purchased stock, adjusted supplier payable balance (-PKR ${unpaidAmount}), and removed linked payment vouchers.`,
+      entity_id: purchaseId,
+      entity_title: `Purchase Order ${targetPurchase.invoice_number}`,
+      action_type: 'deleted',
+      impact_summary: `Deleted PO ${targetPurchase.invoice_number}: Deducted received warehouse items, adjusted supplier balance.`,
       performed_by: user.name,
       performed_by_role: user.role,
-      reversal_details: {
-        stock_reversed: stockReversedSummary,
-        balance_reversed: suppBalanceReversed,
-        payments_reversed_count: reversedPaymentsCount,
-      },
     });
+
+    await loadCloudData();
 
     return {
       success: true,
-      message: `Purchase Order ${targetPurchase.invoice_number} deleted. Stock subtracted and supplier balance reversed successfully.`,
+      message: `Purchase order ${targetPurchase.invoice_number} successfully deleted. Inventory and supplier ledger adjusted.`
     };
   };
 
   // ==============================================================================
-  // RECORD DIRECT PAYMENT
+  // RECORD DIRECT PAYMENT (SUPABASE-FIRST)
   // ==============================================================================
-  const recordPayment = (paymentData: Omit<Payment, 'id' | 'created_at'>): Payment => {
+  const recordPayment = async (paymentData: Omit<Payment, 'id' | 'created_at'>): Promise<Payment> => {
     const newPayment: Payment = {
       ...paymentData,
       id: generateId(),
       created_at: new Date().toISOString(),
     };
 
-    setPayments(prev => [newPayment, ...prev]);
-    supabaseService.upsertPayment(newPayment);
+    const savedPayment = await supabaseService.upsertPayment(newPayment);
+    setPayments(prev => [savedPayment, ...prev]);
 
     // Customer payment
     if (newPayment.customer_id) {
-      setCustomers(prev => prev.map(c => {
-        if (c.id === newPayment.customer_id) {
-          const updatedCust = { ...c, current_balance: Math.max(0, (c.current_balance || 0) - newPayment.amount) };
-          supabaseService.upsertCustomer(updatedCust);
-          return updatedCust;
-        }
-        return c;
-      }));
+      const cust = customers.find(c => c.id === newPayment.customer_id);
+      if (cust) {
+        const updatedCust = { ...cust, current_balance: Math.max(0, (cust.current_balance || 0) - newPayment.amount), updated_at: new Date().toISOString() };
+        await supabaseService.upsertCustomer(updatedCust);
+        setCustomers(prev => prev.map(c => c.id === newPayment.customer_id ? updatedCust : c));
+      }
 
-      if (newPayment.reference_id && (newPayment.related_to === 'sale' || newPayment.related_to === 'customer_balance')) {
-        setSales(prev => prev.map(s => {
-          if (s.id === newPayment.reference_id || s.invoice_number === newPayment.reference_no) {
-            const newPaid = (s.amount_paid || 0) + newPayment.amount;
-            const newStatus = newPaid >= s.total_amount ? 'paid' : (newPaid > 0 ? 'partial' : 'unpaid');
-            const updatedSale: Sale = {
-              ...s,
-              amount_paid: newPaid,
-              payment_status: newStatus as any,
-            };
-            supabaseService.upsertSale(updatedSale);
-            return updatedSale;
-          }
-          return s;
-        }));
+      if (newPayment.reference_id && newPayment.related_to === 'sale') {
+        const sale = sales.find(s => s.id === newPayment.reference_id);
+        if (sale) {
+          const newPaid = Number(sale.amount_paid) + newPayment.amount;
+          const status = newPaid >= sale.total_amount ? 'paid' : 'partial';
+          const updatedSale: Sale = { ...sale, amount_paid: newPaid, payment_status: status };
+          await supabaseService.upsertSale(updatedSale);
+          setSales(prev => prev.map(s => s.id === sale.id ? updatedSale : s));
+        }
       }
     }
 
     // Supplier payment
     if (newPayment.supplier_id) {
-      setSuppliers(prev => prev.map(s => {
-        if (s.id === newPayment.supplier_id) {
-          const updatedSupp = { ...s, current_balance: Math.max(0, (s.current_balance || 0) - newPayment.amount) };
-          supabaseService.upsertSupplier(updatedSupp);
-          return updatedSupp;
-        }
-        return s;
-      }));
+      const supp = suppliers.find(s => s.id === newPayment.supplier_id);
+      if (supp) {
+        const updatedSupp = { ...supp, current_balance: Math.max(0, (supp.current_balance || 0) - newPayment.amount), updated_at: new Date().toISOString() };
+        await supabaseService.upsertSupplier(updatedSupp);
+        setSuppliers(prev => prev.map(s => s.id === newPayment.supplier_id ? updatedSupp : s));
+      }
 
-      if (newPayment.reference_id && (newPayment.related_to === 'purchase' || newPayment.related_to === 'supplier_balance')) {
-        setPurchases(prev => prev.map(p => {
-          if (p.id === newPayment.reference_id || p.invoice_number === newPayment.reference_no) {
-            const newPaid = (p.amount_paid || 0) + newPayment.amount;
-            const newStatus = newPaid >= p.total_amount ? 'paid' : (newPaid > 0 ? 'partial' : 'unpaid');
-            const updatedPurch: Purchase = {
-              ...p,
-              amount_paid: newPaid,
-              payment_status: newStatus as any,
-            };
-            supabaseService.upsertPurchase(updatedPurch);
-            return updatedPurch;
-          }
-          return p;
-        }));
+      if (newPayment.reference_id && newPayment.related_to === 'purchase') {
+        const po = purchases.find(p => p.id === newPayment.reference_id);
+        if (po) {
+          const newPaid = Number(po.amount_paid) + newPayment.amount;
+          const status = newPaid >= po.total_amount ? 'paid' : 'partial';
+          const updatedPO: Purchase = { ...po, amount_paid: newPaid, payment_status: status };
+          await supabaseService.upsertPurchase(updatedPO);
+          setPurchases(prev => prev.map(p => p.id === po.id ? updatedPO : p));
+        }
       }
     }
 
-    return newPayment;
+    return savedPayment;
   };
 
-  const resetToDefaultData = () => {
-    const keys = [
-      'psc_products',
-      'psc_raw_materials',
-      'psc_formulations',
-      'psc_production_batches',
-      'psc_raw_movements',
-      'psc_customers',
-      'psc_suppliers',
-      'psc_sales',
-      'psc_purchases',
-      'psc_stock_movements',
-      'psc_payments',
-      'psc_deletion_logs'
-    ];
-    keys.forEach(k => localStorage.setItem(k, JSON.stringify([])));
-    localStorage.setItem('psc_clean_slate_applied_v2', 'true');
-
-    setProducts([]);
-    setRawMaterials([]);
-    setFormulations([]);
-    setProductionBatches([]);
-    setRawMaterialMovements([]);
-    setCustomers([]);
-    setSuppliers([]);
-    setSales([]);
-    setPurchases([]);
-    setStockMovements([]);
-    setPayments([]);
-    setDeletionLogs([]);
+  // Helper: Reset / Clean Slate
+  const resetToDefaultData = async () => {
+    if (typeof window !== 'undefined') {
+      const keys = [
+        'psc_products', 'psc_raw_materials', 'psc_formulations', 'psc_production_batches',
+        'psc_raw_movements', 'psc_customers', 'psc_suppliers', 'psc_sales', 'psc_purchases',
+        'psc_stock_movements', 'psc_payments', 'psc_deletion_logs', 'psc_users'
+      ];
+      keys.forEach(k => localStorage.removeItem(k));
+    }
+    await loadCloudData();
   };
 
   return (
@@ -1746,6 +1468,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         stockMovements,
         payments,
         deletionLogs,
+        isLoadingCloudData,
+        cloudSyncError,
+        isOnline,
+        refreshCloudData: loadCloudData,
         lowStockProducts,
         lowStockRawMaterials,
         totalRawMaterialsValuation,
@@ -1765,6 +1491,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         checkFormulationHasHistory,
         checkCustomerHasHistory,
         checkSupplierHasHistory,
+        deleteCustomer: deleteOrArchiveCustomer,
+        deleteSupplier: deleteOrArchiveSupplier,
+        deleteFormulation: deleteOrArchiveFormulation,
         addProduct,
         updateProduct,
         deleteOrArchiveProduct,
@@ -1774,14 +1503,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addCustomer,
         updateCustomer,
         deleteOrArchiveCustomer,
-        deleteCustomer: deleteOrArchiveCustomer,
         unarchiveCustomer,
         addSupplier,
         updateSupplier,
         deleteOrArchiveSupplier,
-        deleteSupplier: deleteOrArchiveSupplier,
         unarchiveSupplier,
-        deleteFormulation: deleteOrArchiveFormulation,
         createSale,
         deleteSaleInvoice,
         createPurchase,
@@ -1797,6 +1523,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
 export const useApp = () => {
   const context = useContext(AppContext);
-  if (!context) throw new Error('useApp must be used within an AppProvider');
+  if (!context) throw new Error('useApp must be used within AppProvider');
   return context;
 };

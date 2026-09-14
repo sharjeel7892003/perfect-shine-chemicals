@@ -17,7 +17,8 @@ import {
   Box,
   Archive,
   RefreshCw,
-  Layers
+  Layers,
+  Loader2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -55,6 +56,9 @@ export const InventoryModule: React.FC = () => {
   const [isPackModalOpen, setIsPackModalOpen] = useState(false);
   const [deleteConfirmProduct, setDeleteConfirmProduct] = useState<Product | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Form states for Add/Edit
   const [formData, setFormData] = useState({
@@ -93,6 +97,7 @@ export const InventoryModule: React.FC = () => {
       description: '',
       is_active: true,
     });
+    setSubmitError(null);
     setIsAddModalOpen(true);
   };
 
@@ -111,6 +116,7 @@ export const InventoryModule: React.FC = () => {
       description: product.description || '',
       is_active: product.is_active,
     });
+    setSubmitError(null);
     setIsEditModalOpen(true);
   };
 
@@ -132,35 +138,57 @@ export const InventoryModule: React.FC = () => {
     setIsPackModalOpen(true);
   };
 
-  const handleSaveProduct = (e: React.FormEvent) => {
+  const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isEditModalOpen && selectedProduct) {
-      updateProduct(selectedProduct.id, formData);
-      setIsEditModalOpen(false);
-    } else {
-      addProduct(formData);
-      setIsAddModalOpen(false);
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      if (isEditModalOpen && selectedProduct) {
+        await updateProduct(selectedProduct.id, formData);
+        setIsEditModalOpen(false);
+      } else {
+        await addProduct(formData);
+        setIsAddModalOpen(false);
+      }
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Failed to save product. Please check your internet connection.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const handleApplyAdjustment = (e: React.FormEvent) => {
+  const handleApplyAdjustment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!adjustData.productId || adjustData.qtyDiff === 0) return;
 
-    adjustStock(
-      adjustData.productId,
-      adjustData.qtyDiff,
-      adjustData.type,
-      adjustData.notes,
-      currentUser.name
-    );
-    setIsAdjustModalOpen(false);
+    setIsSubmitting(true);
+    try {
+      await adjustStock(
+        adjustData.productId,
+        adjustData.qtyDiff,
+        adjustData.type,
+        adjustData.notes,
+        currentUser.name
+      );
+      setIsAdjustModalOpen(false);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to apply stock adjustment');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleDeleteOrArchive = (product: Product) => {
-    const res = deleteOrArchiveProduct(product.id, currentUser);
-    alert(res.message);
-    setDeleteConfirmProduct(null);
+  const handleDeleteOrArchive = async (product: Product) => {
+    setIsDeleting(true);
+    try {
+      const res = await deleteOrArchiveProduct(product.id, currentUser);
+      alert(res.message);
+      setDeleteConfirmProduct(null);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to delete/archive product');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   // Filter products
@@ -618,19 +646,28 @@ export const InventoryModule: React.FC = () => {
             </div>
           </div>
 
+          {submitError && (
+            <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs text-rose-400">
+              {submitError}
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-4 border-t border-slate-800">
             <button
               type="button"
+              disabled={isSubmitting}
               onClick={() => { setIsAddModalOpen(false); setIsEditModalOpen(false); }}
-              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-md transition-colors"
+              disabled={isSubmitting}
+              className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60"
             >
-              {isEditModalOpen ? 'Save Changes' : 'Create Finished Product'}
+              {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              <span>{isSubmitting ? 'Saving to Cloud...' : (isEditModalOpen ? 'Save Changes' : 'Create Finished Product')}</span>
             </button>
           </div>
         </form>
@@ -771,19 +808,22 @@ export const InventoryModule: React.FC = () => {
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
                 <button
                   type="button"
+                  disabled={isDeleting}
                   onClick={() => setDeleteConfirmProduct(null)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
+                  disabled={isDeleting}
                   onClick={() => handleDeleteOrArchive(deleteConfirmProduct)}
-                  className={`px-5 py-2 rounded-xl text-white text-xs font-black shadow-md transition-colors ${
+                  className={`px-5 py-2 rounded-xl text-white text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60 ${
                     hasHistory ? 'bg-amber-600 hover:bg-amber-500' : 'bg-rose-600 hover:bg-rose-500'
                   }`}
                 >
-                  {hasHistory ? 'Confirm & Archive Product' : 'Confirm Permanent Deletion'}
+                  {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isDeleting ? 'Processing...' : (hasHistory ? 'Confirm & Archive Product' : 'Confirm Permanent Deletion')}</span>
                 </button>
               </div>
             </div>

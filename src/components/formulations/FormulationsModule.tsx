@@ -16,7 +16,8 @@ import {
   Search,
   ArrowRight,
   Archive,
-  RefreshCw
+  RefreshCw,
+  Loader2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -42,6 +43,9 @@ export const FormulationsModule: React.FC = () => {
   const [selectedFormulation, setSelectedFormulation] = useState<ProductFormulation | null>(null);
   const [deleteConfirmFormulation, setDeleteConfirmFormulation] = useState<ProductFormulation | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Formulation Editor State
   const [formProductId, setFormProductId] = useState('');
@@ -67,6 +71,7 @@ export const FormulationsModule: React.FC = () => {
       }
     ]);
     setSelectedFormulation(null);
+    setSubmitError(null);
     setIsEditModalOpen(true);
   };
 
@@ -75,6 +80,7 @@ export const FormulationsModule: React.FC = () => {
     setFormProductId(formulation.product_id);
     setInstructions(formulation.instructions || '');
     setRecipeItems(formulation.items.map(item => ({ ...item })));
+    setSubmitError(null);
     setIsEditModalOpen(true);
   };
 
@@ -126,7 +132,7 @@ export const FormulationsModule: React.FC = () => {
     return acc + (Number(item.quantity || 0) * unitCost);
   }, 0);
 
-  const handleSaveRecipe = (e: React.FormEvent) => {
+  const handleSaveRecipe = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formProductId || recipeItems.length === 0) {
       alert('Please select a product and add at least one raw material to the formulation.');
@@ -136,20 +142,28 @@ export const FormulationsModule: React.FC = () => {
     const prod = products.find(p => p.id === formProductId);
     if (!prod) return;
 
-    saveFormulation({
-      id: selectedFormulation?.id,
-      product_id: prod.id,
-      product_name: prod.name,
-      base_unit: (prod.base_unit || 'liter') as BaseUnit,
-      yield_quantity: 1.0, // standard per 1 base unit
-      items: recipeItems.map(i => ({
-        ...i,
-        quantity: parseFloat(String(i.quantity)) || 0,
-      })),
-      instructions,
-    });
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      await saveFormulation({
+        id: selectedFormulation?.id,
+        product_id: prod.id,
+        product_name: prod.name,
+        base_unit: (prod.base_unit || 'liter') as BaseUnit,
+        yield_quantity: 1.0, // standard per 1 base unit
+        items: recipeItems.map(i => ({
+          ...i,
+          quantity: parseFloat(String(i.quantity)) || 0,
+        })),
+        instructions,
+      });
 
-    setIsEditModalOpen(false);
+      setIsEditModalOpen(false);
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Failed to save formulation. Please check your internet connection.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const filteredFormulations = formulations.filter(f => {
@@ -533,18 +547,24 @@ export const FormulationsModule: React.FC = () => {
             )}
 
             <div className="flex items-center gap-2 ml-auto">
+              {submitError && (
+                <span className="text-xs text-rose-400 mr-2">{submitError}</span>
+              )}
               <button
                 type="button"
+                disabled={isSubmitting}
                 onClick={() => setIsEditModalOpen(false)}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-black shadow-md transition-colors"
+                disabled={isSubmitting}
+                className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60"
               >
-                Save Recipe Formulation
+                {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>{isSubmitting ? 'Saving Recipe...' : 'Save Recipe Formulation'}</span>
               </button>
             </div>
           </div>
@@ -594,23 +614,33 @@ export const FormulationsModule: React.FC = () => {
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
                 <button
                   type="button"
+                  disabled={isDeleting}
                   onClick={() => setDeleteConfirmFormulation(null)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    const res = deleteOrArchiveFormulation(deleteConfirmFormulation.id, currentUser);
-                    alert(res.message);
-                    setDeleteConfirmFormulation(null);
+                  disabled={isDeleting}
+                  onClick={async () => {
+                    setIsDeleting(true);
+                    try {
+                      const res = await deleteOrArchiveFormulation(deleteConfirmFormulation.id, currentUser);
+                      alert(res.message);
+                      setDeleteConfirmFormulation(null);
+                    } catch (err: any) {
+                      alert(err?.message || 'Failed to delete/archive recipe');
+                    } finally {
+                      setIsDeleting(false);
+                    }
                   }}
-                  className={`px-5 py-2 rounded-xl text-white text-xs font-black shadow-md transition-colors ${
+                  className={`px-5 py-2 rounded-xl text-white text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60 ${
                     hasHistory ? 'bg-amber-600 hover:bg-amber-500' : 'bg-rose-600 hover:bg-rose-500'
                   }`}
                 >
-                  {hasHistory ? 'Confirm & Archive Recipe' : 'Confirm Permanent Deletion'}
+                  {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isDeleting ? 'Processing...' : (hasHistory ? 'Confirm & Archive Recipe' : 'Confirm Permanent Deletion')}</span>
                 </button>
               </div>
             </div>
