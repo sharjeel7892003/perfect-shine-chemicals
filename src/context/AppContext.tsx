@@ -1442,6 +1442,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Helper: Reset / Clean Slate
   const resetToDefaultData = async () => {
+    try {
+      await supabaseService.resetAllDatabaseData();
+    } catch (err) {
+      console.error('Failed to reset cloud database tables:', err);
+    }
     if (typeof window !== 'undefined') {
       const keys = [
         'psc_products', 'psc_raw_materials', 'psc_formulations', 'psc_production_batches',

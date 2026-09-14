@@ -50,10 +50,10 @@ export const supabaseService = {
         supabase.from('customers').select('*').order('created_at', { ascending: false }),
         supabase.from('suppliers').select('*').order('created_at', { ascending: false }),
         supabase.from('raw_materials').select('*').order('created_at', { ascending: false }),
-        supabase.from('product_formulations').select('*').order('created_at', { ascending: false }),
+        supabase.from('product_formulations').select('*, formulation_items(*)').order('created_at', { ascending: false }),
         supabase.from('production_batches').select('*').order('date', { ascending: false }),
-        supabase.from('sales').select('*').order('date', { ascending: false }),
-        supabase.from('purchases').select('*').order('date', { ascending: false }),
+        supabase.from('sales').select('*, sale_items(*)').order('date', { ascending: false }),
+        supabase.from('purchases').select('*, purchase_items(*)').order('date', { ascending: false }),
         supabase.from('payments').select('*').order('date', { ascending: false }),
         supabase.from('stock_movements').select('*').order('date', { ascending: false }),
         supabase.from('raw_material_movements').select('*').order('date', { ascending: false }),
@@ -61,23 +61,70 @@ export const supabaseService = {
         supabase.from('profiles').select('*').order('created_at', { ascending: false })
       ]);
 
-      const normalizedBatches = batchRes.data ? (batchRes.data as any[]).map(b => ({
+      // Maps for enriching relational names in memory for UI presentation
+      const prodMap = new Map((prodRes.data || []).map((p: any) => [p.id, p.name]));
+      const custMap = new Map((custRes.data || []).map((c: any) => [c.id, c.name]));
+      const suppMap = new Map((suppRes.data || []).map((s: any) => [s.id, s.name]));
+      const rmMap = new Map((rmRes.data || []).map((r: any) => [r.id, r.name]));
+      const profMap = new Map((profRes.data || []).map((pr: any) => [pr.id, pr.name]));
+
+      // 1. Normalized Formulations (extract formulation_items into .items)
+      const normalizedFormulations = (formRes.data || []).map((f: any) => ({
+        ...f,
+        items: f.formulation_items || []
+      }));
+
+      // 2. Normalized Batches
+      const normalizedBatches = (batchRes.data || []).map((b: any) => ({
         ...b,
-        raw_materials_consumed: b.raw_materials_consumed || b.consumed_materials || []
-      })) : null;
+        raw_materials_consumed: b.raw_materials_consumed || (b as any).consumed_materials || []
+      }));
+
+      // 3. Normalized Sales (extract sale_items into .items)
+      const normalizedSales = (salesRes.data || []).map((s: any) => ({
+        ...s,
+        items: s.sale_items || []
+      }));
+
+      // 4. Normalized Purchases (extract purchase_items into .items)
+      const normalizedPurchases = (purchRes.data || []).map((p: any) => ({
+        ...p,
+        items: p.purchase_items || []
+      }));
+
+      // 5. Normalized Payments (enrich customer/supplier names)
+      const normalizedPayments = (payRes.data || []).map((p: any) => ({
+        ...p,
+        customer_name: p.customer_id ? custMap.get(p.customer_id) || '' : '',
+        supplier_name: p.supplier_id ? suppMap.get(p.supplier_id) || '' : '',
+      }));
+
+      // 6. Normalized Stock Movements (enrich product_name & created_by_name)
+      const normalizedStockMovements = (smRes.data || []).map((sm: any) => ({
+        ...sm,
+        product_name: sm.product_id ? prodMap.get(sm.product_id) || 'Chemical Product' : 'Chemical Product',
+        created_by_name: sm.created_by ? profMap.get(sm.created_by) || 'Staff' : (sm.created_by_name || 'Staff')
+      }));
+
+      // 7. Normalized Raw Material Movements
+      const normalizedRawMovements = (rmmRes.data || []).map((rmm: any) => ({
+        ...rmm,
+        raw_material_name: rmm.raw_material_id ? rmMap.get(rmm.raw_material_id) || rmm.raw_material_name : (rmm.raw_material_name || 'Raw Material'),
+        created_by_name: rmm.created_by ? profMap.get(rmm.created_by) || 'Staff' : (rmm.created_by_name || 'Staff')
+      }));
 
       return {
         products: (prodRes.data as Product[]) || [],
         customers: (custRes.data as Customer[]) || [],
         suppliers: (suppRes.data as Supplier[]) || [],
         rawMaterials: (rmRes.data as RawMaterial[]) || [],
-        formulations: (formRes.data as ProductFormulation[]) || [],
+        formulations: (normalizedFormulations as ProductFormulation[]) || [],
         productionBatches: (normalizedBatches as ProductionBatch[]) || [],
-        sales: (salesRes.data as Sale[]) || [],
-        purchases: (purchRes.data as Purchase[]) || [],
-        payments: (payRes.data as Payment[]) || [],
-        stockMovements: (smRes.data as StockMovement[]) || [],
-        rawMaterialMovements: (rmmRes.data as RawMaterialMovement[]) || [],
+        sales: (normalizedSales as Sale[]) || [],
+        purchases: (normalizedPurchases as Purchase[]) || [],
+        payments: (normalizedPayments as Payment[]) || [],
+        stockMovements: (normalizedStockMovements as StockMovement[]) || [],
+        rawMaterialMovements: (normalizedRawMovements as RawMaterialMovement[]) || [],
         deletionLogs: (logsRes.data as DeletionAuditLog[]) || [],
         profiles: (profRes.data as Profile[]) || [],
       };
@@ -159,7 +206,6 @@ export const supabaseService = {
       updated_at: new Date().toISOString()
     };
 
-    console.log('[Supabase Customer Write] Inserting into table "customers", payload ID:', validId);
     const { data, error } = await supabase.from('customers').upsert(payload).select().single();
     if (error) {
       console.error('Supabase upsertCustomer error:', error);
@@ -266,7 +312,7 @@ export const supabaseService = {
   },
 
   // ============================================================================
-  // PRODUCT FORMULATIONS (BOM)
+  // PRODUCT FORMULATIONS (BOM) & FORMULATION ITEMS
   // ============================================================================
   async upsertFormulation(formulation: ProductFormulation): Promise<ProductFormulation> {
     if (!isSupabaseConfigured || !supabase) return formulation;
@@ -275,40 +321,54 @@ export const supabaseService = {
     const validId = ensureUUID(formulation.id);
     formulation.id = validId;
 
-    const payload: any = {
+    const payload = {
       id: validId,
-      product_id: isValidUUID(formulation.product_id) ? formulation.product_id : ensureUUID(formulation.product_id),
+      product_id: isValidUUID(formulation.product_id) ? formulation.product_id : null,
       product_name: formulation.product_name,
       base_unit: formulation.base_unit || 'liter',
       yield_quantity: Number(formulation.yield_quantity || 1.0),
       instructions: formulation.instructions || '',
-      is_archived: Boolean(formulation.is_archived),
       updated_at: new Date().toISOString()
     };
 
-    if (formulation.items) {
-      payload.items = formulation.items;
+    const { error: formError } = await supabase.from('product_formulations').upsert(payload);
+    if (formError) {
+      console.error('Supabase upsertFormulation error:', formError);
+      throw new Error(`Formulation database write failed: ${formError.message}`);
     }
 
-    let { data, error } = await supabase.from('product_formulations').upsert(payload).select().single();
-    if (error && error.code === 'PGRST204' && String(error.message).includes('items')) {
-      delete payload.items;
-      const retry = await supabase.from('product_formulations').upsert(payload).select().single();
-      error = retry.error;
-      data = retry.data;
+    // Line items: delete old items and insert fresh
+    await supabase.from('formulation_items').delete().eq('formulation_id', validId);
+
+    if (formulation.items && formulation.items.length > 0) {
+      const itemsToInsert = formulation.items.map(item => ({
+        id: ensureUUID((item as any).id),
+        formulation_id: validId,
+        raw_material_id: isValidUUID(item.raw_material_id) ? item.raw_material_id : null,
+        raw_material_name: item.raw_material_name || '',
+        quantity: Number(item.quantity || 0),
+        unit: item.unit || 'kg',
+        cost_per_unit: Number(item.cost_per_unit || 0)
+      }));
+
+      const { error: itemsError } = await supabase.from('formulation_items').insert(itemsToInsert);
+      if (itemsError) {
+        console.error('Supabase formulation_items insert error:', itemsError);
+        throw new Error(`Formulation items write failed: ${itemsError.message}`);
+      }
     }
 
-    if (error) {
-      console.error('Supabase upsertFormulation error:', error);
-      throw new Error(`Formulation database write failed: ${error.message}`);
-    }
-    return (data as ProductFormulation) || formulation;
+    return formulation;
   },
 
   async deleteFormulation(id: string): Promise<void> {
     if (!isSupabaseConfigured || !supabase || !isValidUUID(id)) return;
     assertOnline();
 
+    // 1. Delete items first
+    await supabase.from('formulation_items').delete().eq('formulation_id', id);
+
+    // 2. Delete parent
     const { error } = await supabase.from('product_formulations').delete().eq('id', id);
     if (error) {
       console.error('Supabase deleteFormulation error:', error);
@@ -339,7 +399,6 @@ export const supabaseService = {
       total_batch_cost: Number(batch.total_batch_cost || 0),
       cost_per_base_unit: Number(batch.cost_per_base_unit || 0),
       raw_materials_consumed: consumed,
-      consumed_materials: consumed,
       notes: batch.notes || ''
     };
 
@@ -363,7 +422,7 @@ export const supabaseService = {
   },
 
   // ============================================================================
-  // SALES (INVOICES)
+  // SALES (INVOICES) & SALE ITEMS
   // ============================================================================
   async upsertSale(sale: Sale): Promise<Sale> {
     if (!isSupabaseConfigured || !supabase) return sale;
@@ -372,13 +431,13 @@ export const supabaseService = {
     const validId = ensureUUID(sale.id);
     sale.id = validId;
 
+    // 1. Insert parent sale
     const payload = {
       id: validId,
       invoice_number: sale.invoice_number,
       customer_id: isValidUUID(sale.customer_id) ? sale.customer_id : null,
       customer_name: sale.customer_name,
       date: sale.date || new Date().toISOString(),
-      items: sale.items || [],
       subtotal: Number(sale.subtotal || 0),
       discount: Number(sale.discount || 0),
       tax: Number(sale.tax || 0),
@@ -387,22 +446,53 @@ export const supabaseService = {
       payment_status: sale.payment_status || 'unpaid',
       payment_method: sale.payment_method || 'cash',
       salesperson_id: isValidUUID(sale.salesperson_id) ? sale.salesperson_id : null,
-      salesperson_name: sale.salesperson_name || '',
       notes: sale.notes || ''
     };
 
-    const { data, error } = await supabase.from('sales').upsert(payload).select().single();
-    if (error) {
-      console.error('Supabase upsertSale error:', error);
-      throw new Error(`Sale database write failed: ${error.message}`);
+    const { error: saleError } = await supabase.from('sales').upsert(payload);
+    if (saleError) {
+      console.error('Supabase upsertSale error:', saleError);
+      throw new Error(`Sale database write failed: ${saleError.message}`);
     }
-    return (data as Sale) || sale;
+
+    // 2. Insert line items
+    await supabase.from('sale_items').delete().eq('sale_id', validId);
+
+    if (sale.items && sale.items.length > 0) {
+      const itemsToInsert = sale.items.map(item => ({
+        id: ensureUUID(item.id),
+        sale_id: validId,
+        product_id: isValidUUID(item.product_id) ? item.product_id : null,
+        product_name: item.product_name || '',
+        pack_size_id: isValidUUID(item.pack_size_id) ? item.pack_size_id : null,
+        pack_size_name: item.pack_size_name || null,
+        pack_quantity: item.pack_quantity ? Number(item.pack_quantity) : null,
+        size_in_base_unit: item.size_in_base_unit ? Number(item.size_in_base_unit) : null,
+        base_quantity: item.base_quantity ? Number(item.base_quantity) : Number(item.quantity || 0),
+        quantity: Number(item.quantity || 0),
+        unit_cost: Number(item.unit_cost || 0),
+        unit_price: Number(item.unit_price || 0),
+        subtotal: Number(item.subtotal || 0)
+      }));
+
+      const { error: itemsError } = await supabase.from('sale_items').insert(itemsToInsert);
+      if (itemsError) {
+        console.error('Supabase sale_items insert error:', itemsError);
+        throw new Error(`Sale items write failed: ${itemsError.message}`);
+      }
+    }
+
+    return sale;
   },
 
   async deleteSale(id: string): Promise<void> {
     if (!isSupabaseConfigured || !supabase || !isValidUUID(id)) return;
     assertOnline();
 
+    // 1. Delete items first
+    await supabase.from('sale_items').delete().eq('sale_id', id);
+
+    // 2. Delete parent
     const { error } = await supabase.from('sales').delete().eq('id', id);
     if (error) {
       console.error('Supabase deleteSale error:', error);
@@ -411,7 +501,7 @@ export const supabaseService = {
   },
 
   // ============================================================================
-  // PURCHASES (PURCHASE ORDERS)
+  // PURCHASES (PURCHASE ORDERS) & PURCHASE ITEMS
   // ============================================================================
   async upsertPurchase(purchase: Purchase): Promise<Purchase> {
     if (!isSupabaseConfigured || !supabase) return purchase;
@@ -420,13 +510,13 @@ export const supabaseService = {
     const validId = ensureUUID(purchase.id);
     purchase.id = validId;
 
+    // 1. Insert parent purchase
     const payload = {
       id: validId,
       invoice_number: purchase.invoice_number,
       supplier_id: isValidUUID(purchase.supplier_id) ? purchase.supplier_id : null,
       supplier_name: purchase.supplier_name,
       date: purchase.date || new Date().toISOString(),
-      items: purchase.items || [],
       total_amount: Number(purchase.total_amount || 0),
       amount_paid: Number(purchase.amount_paid || 0),
       payment_status: purchase.payment_status || 'unpaid',
@@ -434,18 +524,46 @@ export const supabaseService = {
       notes: purchase.notes || ''
     };
 
-    const { data, error } = await supabase.from('purchases').upsert(payload).select().single();
-    if (error) {
-      console.error('Supabase upsertPurchase error:', error);
-      throw new Error(`Purchase database write failed: ${error.message}`);
+    const { error: purchError } = await supabase.from('purchases').upsert(payload);
+    if (purchError) {
+      console.error('Supabase upsertPurchase error:', purchError);
+      throw new Error(`Purchase database write failed: ${purchError.message}`);
     }
-    return (data as Purchase) || purchase;
+
+    // 2. Insert line items
+    await supabase.from('purchase_items').delete().eq('purchase_id', validId);
+
+    if (purchase.items && purchase.items.length > 0) {
+      const itemsToInsert = purchase.items.map(item => ({
+        id: ensureUUID(item.id),
+        purchase_id: validId,
+        item_type: item.item_type || 'raw_material',
+        raw_material_id: isValidUUID(item.raw_material_id) ? item.raw_material_id : null,
+        product_id: isValidUUID(item.product_id) ? item.product_id : null,
+        product_or_material_name: item.product_or_material_name || '',
+        quantity: Number(item.quantity || 0),
+        unit_cost: Number(item.unit_cost || 0),
+        subtotal: Number(item.subtotal || 0)
+      }));
+
+      const { error: itemsError } = await supabase.from('purchase_items').insert(itemsToInsert);
+      if (itemsError) {
+        console.error('Supabase purchase_items insert error:', itemsError);
+        throw new Error(`Purchase items write failed: ${itemsError.message}`);
+      }
+    }
+
+    return purchase;
   },
 
   async deletePurchase(id: string): Promise<void> {
     if (!isSupabaseConfigured || !supabase || !isValidUUID(id)) return;
     assertOnline();
 
+    // 1. Delete items first
+    await supabase.from('purchase_items').delete().eq('purchase_id', id);
+
+    // 2. Delete parent
     const { error } = await supabase.from('purchases').delete().eq('id', id);
     if (error) {
       console.error('Supabase deletePurchase error:', error);
@@ -466,18 +584,15 @@ export const supabaseService = {
     const payload = {
       id: validId,
       related_to: payment.related_to,
-      reference_id: payment.reference_id || '',
-      reference_no: payment.reference_no || '',
+      reference_id: isValidUUID(payment.reference_id) ? payment.reference_id : null,
       customer_id: isValidUUID(payment.customer_id) ? payment.customer_id : null,
-      customer_name: payment.customer_name || '',
       supplier_id: isValidUUID(payment.supplier_id) ? payment.supplier_id : null,
-      supplier_name: payment.supplier_name || '',
       amount: Number(payment.amount || 0),
       payment_method: payment.payment_method || 'cash',
       transaction_ref: payment.transaction_ref || '',
       notes: payment.notes || '',
       date: payment.date || new Date().toISOString(),
-      created_by: payment.created_by || ''
+      created_by: isValidUUID(payment.created_by) ? payment.created_by : null
     };
 
     const { data, error } = await supabase.from('payments').upsert(payload).select().single();
@@ -498,7 +613,11 @@ export const supabaseService = {
     const validId = ensureUUID(movement.id);
     movement.id = validId;
 
-    const payload: any = {
+    const notes = movement.created_by_name && !movement.notes?.includes(movement.created_by_name)
+      ? `[By ${movement.created_by_name}] ${movement.notes || ''}`.trim()
+      : (movement.notes || '');
+
+    const payload = {
       id: validId,
       product_id: isValidUUID(movement.product_id) ? movement.product_id : null,
       movement_type: movement.movement_type,
@@ -506,22 +625,12 @@ export const supabaseService = {
       previous_stock: Number(movement.previous_stock || 0),
       new_stock: Number(movement.new_stock || 0),
       reference_id: movement.reference_id || '',
-      notes: movement.notes || '',
+      notes: notes,
       date: movement.date || new Date().toISOString(),
-      created_by_name: movement.created_by_name || ''
+      created_by: isValidUUID((movement as any).created_by) ? (movement as any).created_by : null
     };
 
-    if (movement.product_name) {
-      payload.product_name = movement.product_name;
-    }
-
-    let { error } = await supabase.from('stock_movements').upsert(payload);
-    if (error && error.code === 'PGRST204' && String(error.message).includes('product_name')) {
-      delete payload.product_name;
-      const retry = await supabase.from('stock_movements').upsert(payload);
-      error = retry.error;
-    }
-
+    const { error } = await supabase.from('stock_movements').upsert(payload);
     if (error) {
       console.error('Supabase upsertStockMovement error:', error);
       throw new Error(`Stock movement database write failed: ${error.message}`);
@@ -535,6 +644,10 @@ export const supabaseService = {
     const validId = ensureUUID(movement.id);
     movement.id = validId;
 
+    const notes = movement.created_by_name && !movement.notes?.includes(movement.created_by_name)
+      ? `[By ${movement.created_by_name}] ${movement.notes || ''}`.trim()
+      : (movement.notes || '');
+
     const payload = {
       id: validId,
       raw_material_id: isValidUUID(movement.raw_material_id) ? movement.raw_material_id : null,
@@ -544,9 +657,9 @@ export const supabaseService = {
       previous_stock: Number(movement.previous_stock || 0),
       new_stock: Number(movement.new_stock || 0),
       reference_id: movement.reference_id || '',
-      notes: movement.notes || '',
+      notes: notes,
       date: movement.date || new Date().toISOString(),
-      created_by_name: movement.created_by_name || ''
+      created_by: isValidUUID((movement as any).created_by) ? (movement as any).created_by : null
     };
 
     const { error } = await supabase.from('raw_material_movements').upsert(payload);
@@ -603,7 +716,6 @@ export const supabaseService = {
       role: profile.role,
       phone: profile.phone || '',
       is_active: profile.is_active !== false,
-      is_deactivated: Boolean(profile.is_deactivated),
       updated_at: new Date().toISOString()
     };
 
@@ -623,6 +735,45 @@ export const supabaseService = {
     if (error) {
       console.error('Supabase deleteProfile error:', error);
       throw new Error(`Profile deletion failed: ${error.message}`);
+    }
+  },
+
+  // ============================================================================
+  // RESET ALL DATABASE DATA (CLEAN SLATE IN REVERSE FOREIGN KEY ORDER)
+  // ============================================================================
+  async resetAllDatabaseData(): Promise<void> {
+    if (!isSupabaseConfigured || !supabase) return;
+    assertOnline();
+
+    const dummyZeroUUID = '00000000-0000-0000-0000-000000000000';
+
+    const tablesToWipe = [
+      'deletion_audit_logs',
+      'payments',
+      'stock_movements',
+      'raw_material_movements',
+      'sale_items',
+      'sales',
+      'purchase_items',
+      'purchases',
+      'production_batches',
+      'formulation_items',
+      'product_formulations',
+      'products',
+      'raw_materials',
+      'customers',
+      'suppliers'
+    ];
+
+    for (const table of tablesToWipe) {
+      try {
+        const { error } = await supabase.from(table).delete().neq('id', dummyZeroUUID);
+        if (error) {
+          console.warn(`Warning while wiping table ${table}:`, error.message);
+        }
+      } catch (err) {
+        console.warn(`Exception wiping table ${table}:`, err);
+      }
     }
   }
 };
