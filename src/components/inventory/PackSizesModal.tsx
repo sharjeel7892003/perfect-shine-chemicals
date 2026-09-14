@@ -3,6 +3,7 @@ import { Product, PackSize } from '../../types';
 import { formatPKR } from '../../utils/formatters';
 import { Modal } from '../common/Modal';
 import { Plus, Trash2, CheckCircle2, Box, Info, Sparkles } from 'lucide-react';
+import { generateId } from '../../utils/uuid';
 
 interface PackSizesModalProps {
   product: Product;
@@ -22,7 +23,7 @@ export const PackSizesModal: React.FC<PackSizesModalProps> = ({
     ? product.pack_sizes 
     : [
         {
-          id: `pk-${Date.now()}-1`,
+          id: generateId(),
           product_id: product.id,
           name: 'Standard 1 ' + (baseUnit === 'kg' ? 'Kg' : 'Liter'),
           size_in_base_unit: 1.0,
@@ -36,7 +37,7 @@ export const PackSizesModal: React.FC<PackSizesModalProps> = ({
 
   const handleAddPackSize = () => {
     const newPack: PackSize = {
-      id: `pk-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      id: generateId(),
       product_id: product.id,
       name: '5L Commercial Can',
       size_in_base_unit: 5.0,

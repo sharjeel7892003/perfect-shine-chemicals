@@ -33,6 +33,7 @@ import {
 import { generateInvoiceNumber } from '../utils/formatters';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { supabaseService } from '../lib/supabaseService';
+import { generateId } from '../utils/uuid';
 
 interface AppContextType {
   // State
@@ -261,7 +262,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addDeletionLogEntry = (entry: Omit<DeletionAuditLog, 'id' | 'date'>) => {
     const newLog: DeletionAuditLog = {
       ...entry,
-      id: `del-${Date.now()}`,
+      id: generateId(),
       date: new Date().toISOString(),
     };
     setDeletionLogs(prev => [newLog, ...prev]);
@@ -291,7 +292,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addRawMaterial = (matData: Omit<RawMaterial, 'id' | 'created_at'>) => {
     const newMat: RawMaterial = {
       ...matData,
-      id: `rm-${Date.now()}`,
+      id: generateId(),
       created_at: new Date().toISOString(),
     };
     setRawMaterials(prev => [newMat, ...prev]);
@@ -299,7 +300,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (newMat.current_stock > 0) {
       const movement: RawMaterialMovement = {
-        id: `rmm-${Date.now()}`,
+        id: generateId(),
         raw_material_id: newMat.id,
         raw_material_name: newMat.name,
         movement_type: 'adjustment',
@@ -398,7 +399,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     updateRawMaterial(rawMaterialId, { current_stock: newStock });
 
     const movement: RawMaterialMovement = {
-      id: `rmm-${Date.now()}`,
+      id: generateId(),
       raw_material_id: rawMaterialId,
       raw_material_name: target.name,
       movement_type: type,
@@ -430,7 +431,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } else {
       const newForm: ProductFormulation = {
         ...formData,
-        id: `form-${Date.now()}`,
+        id: generateId(),
         created_at: new Date().toISOString(),
       };
       setFormulations(prev => [newForm, ...prev]);
@@ -569,7 +570,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
 
         newRawMovements.push({
-          id: `rmm-${Date.now()}-${rmReq.item.raw_material_id}`,
+          id: generateId(),
           raw_material_id: rmReq.item.raw_material_id,
           raw_material_name: rmReq.item.raw_material_name,
           movement_type: 'production_out',
@@ -613,7 +614,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 5. Log finished product stock movement
     const prodStockMovement: StockMovement = {
-      id: `sm-${Date.now()}-${targetProduct.id}`,
+      id: generateId(),
       product_id: targetProduct.id,
       product_name: targetProduct.name,
       movement_type: 'production',
@@ -630,7 +631,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 6. Create production batch entry
     const newBatch: ProductionBatch = {
-      id: `pb-${Date.now()}`,
+      id: generateId(),
       batch_number: params.batchNumber,
       product_id: targetProduct.id,
       product_name: targetProduct.name,
@@ -693,7 +694,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const nextStk = prevStk + Number(consumed.quantity_consumed);
 
           rawMovementsToAdd.push({
-            id: `rmm-${Date.now()}-${rm.id}`,
+            id: generateId(),
             raw_material_id: rm.id,
             raw_material_name: rm.name,
             movement_type: 'adjustment',
@@ -736,7 +737,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const nextStk = Math.max(0, prevStk - targetBatch.quantity_produced);
 
           prodMovementsToAdd.push({
-            id: `sm-${Date.now()}-${p.id}`,
+            id: generateId(),
             product_id: p.id,
             product_name: p.name,
             movement_type: 'adjustment',
@@ -826,14 +827,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // ==============================================================================
   const addProduct = (prodData: Omit<Product, 'id' | 'created_at'>) => {
     const baseUnit = prodData.base_unit || (prodData.unit === 'kg' ? 'kg' : 'liter');
+    const newProdId = generateId();
     const newProd: Product = {
       ...prodData,
-      id: `prod-${Date.now()}`,
+      id: newProdId,
       base_unit: baseUnit,
       pack_sizes: prodData.pack_sizes || [
         {
-          id: `pk-${Date.now()}-1`,
-          product_id: `prod-${Date.now()}`,
+          id: generateId(),
+          product_id: newProdId,
           name: `Standard 1 ${baseUnit === 'kg' ? 'Kg' : 'L'}`,
           size_in_base_unit: 1.0,
           unit_label: baseUnit,
@@ -849,7 +851,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (newProd.current_stock > 0) {
       const movement: StockMovement = {
-        id: `sm-${Date.now()}`,
+        id: generateId(),
         product_id: newProd.id,
         product_name: newProd.name,
         movement_type: 'adjustment',
@@ -952,7 +954,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     updateProduct(productId, { current_stock: newStock });
 
     const movement: StockMovement = {
-      id: `sm-${Date.now()}`,
+      id: generateId(),
       product_id: productId,
       product_name: target.name,
       movement_type: type,
@@ -974,7 +976,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addCustomer = (custData: Omit<Customer, 'id' | 'created_at'>) => {
     const newCust: Customer = {
       ...custData,
-      id: `cust-${Date.now()}`,
+      id: generateId(),
       created_at: new Date().toISOString(),
     };
     setCustomers(prev => [newCust, ...prev]);
@@ -1050,7 +1052,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addSupplier = (suppData: Omit<Supplier, 'id' | 'created_at'>) => {
     const newSupp: Supplier = {
       ...suppData,
-      id: `supp-${Date.now()}`,
+      id: generateId(),
       created_at: new Date().toISOString(),
     };
     setSuppliers(prev => [newSupp, ...prev]);
@@ -1127,7 +1129,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const invoiceNum = generateInvoiceNumber('INV');
     const newSale: Sale = {
       ...saleData,
-      id: `sale-${Date.now()}`,
+      id: generateId(),
       invoice_number: invoiceNum,
       created_at: new Date().toISOString(),
     };
@@ -1146,7 +1148,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const nextStk = Math.max(0, prevStk - deductBaseQty);
 
           movementsToAdd.push({
-            id: `sm-${Date.now()}-${prod.id}`,
+            id: generateId(),
             product_id: prod.id,
             product_name: prod.name,
             movement_type: 'sale_out',
@@ -1188,7 +1190,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Log payment if paid
     if (newSale.amount_paid > 0) {
       const pay: Payment = {
-        id: `pay-${Date.now()}`,
+        id: generateId(),
         related_to: 'sale',
         reference_id: newSale.id,
         reference_no: newSale.invoice_number,
@@ -1235,7 +1237,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
 
           movementsToAdd.push({
-            id: `sm-${Date.now()}-${prod.id}`,
+            id: generateId(),
             product_id: prod.id,
             product_name: prod.name,
             movement_type: 'return',
@@ -1326,7 +1328,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const invoiceNum = generateInvoiceNumber('PO');
     const newPurchase: Purchase = {
       ...purchaseData,
-      id: `po-${Date.now()}`,
+      id: generateId(),
       invoice_number: invoiceNum,
       created_at: new Date().toISOString(),
     };
@@ -1344,7 +1346,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const nextStk = prevStk + Number(item.quantity);
 
           rawMovementsToAdd.push({
-            id: `rmm-${Date.now()}-${rm.id}`,
+            id: generateId(),
             raw_material_id: rm.id,
             raw_material_name: rm.name,
             movement_type: 'purchase_in',
@@ -1379,7 +1381,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const nextStk = prevStk + Number(item.quantity);
 
           movementsToAdd.push({
-            id: `sm-${Date.now()}-${prod.id}`,
+            id: generateId(),
             product_id: prod.id,
             product_name: prod.name,
             movement_type: 'purchase_in',
@@ -1420,7 +1422,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Log payment made
     if (newPurchase.amount_paid > 0) {
       const pay: Payment = {
-        id: `pay-${Date.now()}`,
+        id: generateId(),
         related_to: 'purchase',
         reference_id: newPurchase.id,
         reference_no: newPurchase.invoice_number,
@@ -1496,7 +1498,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
 
           rawMovementsToAdd.push({
-            id: `rmm-${Date.now()}-${rm.id}`,
+            id: generateId(),
             raw_material_id: rm.id,
             raw_material_name: rm.name,
             movement_type: 'adjustment',
@@ -1539,7 +1541,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
 
           prodMovementsToAdd.push({
-            id: `sm-${Date.now()}-${prod.id}`,
+            id: generateId(),
             product_id: prod.id,
             product_name: prod.name,
             movement_type: 'adjustment',
@@ -1629,7 +1631,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const recordPayment = (paymentData: Omit<Payment, 'id' | 'created_at'>): Payment => {
     const newPayment: Payment = {
       ...paymentData,
-      id: `pay-${Date.now()}`,
+      id: generateId(),
       created_at: new Date().toISOString(),
     };
 

@@ -3,6 +3,7 @@ import { Profile, UserRole } from '../types';
 import { INITIAL_PROFILES } from '../lib/mockData';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { supabaseService } from '../lib/supabaseService';
+import { generateId } from '../utils/uuid';
 
 interface AuthContextType {
   currentUser: Profile;
@@ -116,7 +117,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const addUser = (userData: Omit<Profile, 'id' | 'created_at'>) => {
     const newUser: Profile = {
       ...userData,
-      id: `user-${Date.now()}`,
+      id: generateId(),
       is_active: true,
       is_deactivated: false,
       created_at: new Date().toISOString(),
