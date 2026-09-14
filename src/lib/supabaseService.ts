@@ -722,6 +722,11 @@ export const supabaseService = {
     const { data, error } = await supabase.from('profiles').upsert(payload).select().single();
     if (error) {
       console.error('Supabase upsertProfile error:', error);
+      if (error.code === '23503' && String(error.message).includes('profiles_id_fkey')) {
+        throw new Error(
+          'Supabase profiles table has a foreign key constraint to auth.users. Please run: ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_id_fkey; in Supabase SQL Editor.'
+        );
+      }
       throw new Error(`Profile database write failed: ${error.message}`);
     }
     return (data as Profile) || profile;

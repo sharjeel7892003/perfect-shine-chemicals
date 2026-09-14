@@ -23,7 +23,8 @@ import {
   Check,
   X,
   Archive,
-  RefreshCw
+  RefreshCw,
+  Loader2
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useApp } from '../../context/AppContext';
@@ -43,6 +44,8 @@ export const UsersModule: React.FC = () => {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<Profile | null>(null);
   const [deleteConfirmUser, setDeleteConfirmUser] = useState<Profile | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const checkUserHasHistory = (userName: string): boolean => {
     const hasSales = sales.some(s => s.salesperson_name === userName);
@@ -70,6 +73,7 @@ export const UsersModule: React.FC = () => {
       phone: '',
       is_active: true,
     });
+    setErrorMessage(null);
     setIsAddModalOpen(true);
   };
 
@@ -82,20 +86,37 @@ export const UsersModule: React.FC = () => {
       phone: user.phone || '',
       is_active: user.is_active,
     });
+    setErrorMessage(null);
     setIsEditModalOpen(true);
   };
 
-  const handleAddUser = (e: React.FormEvent) => {
+  const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    addUser(formData);
-    setIsAddModalOpen(false);
+    setIsSaving(true);
+    setErrorMessage(null);
+    try {
+      await addUser(formData);
+      setIsAddModalOpen(false);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to save staff member');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleSaveEditUser = (e: React.FormEvent) => {
+  const handleSaveEditUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedUser) return;
-    updateUser(selectedUser.id, formData);
-    setIsEditModalOpen(false);
+    setIsSaving(true);
+    setErrorMessage(null);
+    try {
+      await updateUser(selectedUser.id, formData);
+      setIsEditModalOpen(false);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to update staff member');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const getRoleBadgeVariant = (role: UserRole) => {
@@ -522,19 +543,35 @@ export const UsersModule: React.FC = () => {
             </select>
           </div>
 
+          {errorMessage && (
+            <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+              <span>{errorMessage}</span>
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-4 border-t border-slate-800">
             <button
               type="button"
+              disabled={isSaving}
               onClick={() => setIsAddModalOpen(false)}
-              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-md transition-colors"
+              disabled={isSaving}
+              className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-50"
             >
-              Add Staff Member
+              {isSaving ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Saving to Cloud...</span>
+                </>
+              ) : (
+                <span>Add Staff Member</span>
+              )}
             </button>
           </div>
         </form>
@@ -544,11 +581,18 @@ export const UsersModule: React.FC = () => {
       {selectedUser && (
         <Modal
           isOpen={isEditModalOpen}
-          onClose={() => setIsEditModalOpen(false)}
+          onClose={() => !isSaving && setIsEditModalOpen(false)}
           title={`Edit Staff Details: ${selectedUser.name}`}
           subtitle="Update contact info or reassign factory authorization role"
         >
           <form onSubmit={handleSaveEditUser} className="space-y-4">
+            {errorMessage && (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-400" />
+                <span>{errorMessage}</span>
+              </div>
+            )}
+
             <div>
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Full Name</label>
               <input
@@ -601,16 +645,25 @@ export const UsersModule: React.FC = () => {
             <div className="flex justify-end gap-2 pt-4 border-t border-slate-800">
               <button
                 type="button"
+                disabled={isSaving}
                 onClick={() => setIsEditModalOpen(false)}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-md transition-colors"
+                disabled={isSaving}
+                className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-50"
               >
-                Save Changes
+                {isSaving ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving to Cloud...</span>
+                  </>
+                ) : (
+                  <span>Save Changes</span>
+                )}
               </button>
             </div>
           </form>
@@ -667,15 +720,19 @@ export const UsersModule: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (hasHistory) {
-                      toggleUserStatus(deleteConfirmUser.id);
-                      alert(`Account "${deleteConfirmUser.name}" was deactivated (archived). Login access revoked.`);
-                    } else {
-                      deleteUser(deleteConfirmUser.id);
-                      alert(`Account "${deleteConfirmUser.name}" was permanently deleted.`);
+                  onClick={async () => {
+                    try {
+                      if (hasHistory) {
+                        await toggleUserStatus(deleteConfirmUser.id);
+                        alert(`Account "${deleteConfirmUser.name}" was deactivated (archived). Login access revoked.`);
+                      } else {
+                        await deleteUser(deleteConfirmUser.id);
+                        alert(`Account "${deleteConfirmUser.name}" was permanently deleted.`);
+                      }
+                      setDeleteConfirmUser(null);
+                    } catch (err: any) {
+                      alert(`Error updating staff account: ${err.message}`);
                     }
-                    setDeleteConfirmUser(null);
                   }}
                   className={`px-5 py-2 rounded-xl text-white text-xs font-black shadow-md transition-colors ${
                     hasHistory ? 'bg-amber-600 hover:bg-amber-500' : 'bg-rose-600 hover:bg-rose-500'

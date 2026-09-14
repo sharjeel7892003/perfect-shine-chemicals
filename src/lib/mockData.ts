@@ -53,7 +53,7 @@ export const INITIAL_SUPPLIERS: Supplier[] = [];
 // ==============================================================================
 export const INITIAL_PROFILES: Profile[] = [
   {
-    id: 'user-1',
+    id: 'a1b2c3d4-e5f6-4a7b-8c9d-000000000001',
     name: 'Haji Muhammad Sharjeel (Owner)',
     email: 'owner@perfectshine.pk',
     role: 'owner',
@@ -62,7 +62,7 @@ export const INITIAL_PROFILES: Profile[] = [
     created_at: '2026-01-01',
   },
   {
-    id: 'user-2',
+    id: 'a1b2c3d4-e5f6-4a7b-8c9d-000000000002',
     name: 'Usman Tariq (Sales Lead)',
     email: 'sales@perfectshine.pk',
     role: 'sales_staff',
@@ -71,7 +71,7 @@ export const INITIAL_PROFILES: Profile[] = [
     created_at: '2026-01-15',
   },
   {
-    id: 'user-3',
+    id: 'a1b2c3d4-e5f6-4a7b-8c9d-000000000003',
     name: 'Farhan Sheikh (Accounts & Ledger)',
     email: 'accounts@perfectshine.pk',
     role: 'accounts_staff',
@@ -80,7 +80,7 @@ export const INITIAL_PROFILES: Profile[] = [
     created_at: '2026-02-01',
   },
   {
-    id: 'user-4',
+    id: 'a1b2c3d4-e5f6-4a7b-8c9d-000000000004',
     name: 'Bilal Ahmed (Plant Supervisor)',
     email: 'plant@perfectshine.pk',
     role: 'general_staff',

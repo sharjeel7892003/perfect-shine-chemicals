@@ -6,15 +6,18 @@
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- 1. PROFILES & USER ROLES
+-- 1. PROFILES & USER ROLES (FACTORY SHIFT STAFF)
+-- Drop any lingering foreign key to auth.users if profiles was created by default Supabase template
+ALTER TABLE IF EXISTS public.profiles DROP CONSTRAINT IF EXISTS profiles_id_fkey;
+ALTER TABLE IF EXISTS public.profiles DROP CONSTRAINT IF EXISTS profiles_user_id_fkey;
+
 CREATE TABLE IF NOT EXISTS public.profiles (
-    id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name TEXT NOT NULL,
     email TEXT,
     role TEXT NOT NULL DEFAULT 'sales_staff',
     phone TEXT,
     is_active BOOLEAN NOT NULL DEFAULT true,
-    is_deactivated BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
