@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Profile, UserRole } from '../types';
 import { INITIAL_PROFILES } from '../lib/mockData';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabaseService } from '../lib/supabaseService';
 
 interface AuthContextType {
   currentUser: Profile;
@@ -37,6 +39,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   });
 
   useEffect(() => {
+    let isMounted = true;
+    const loadProfiles = async () => {
+      if (!isSupabaseConfigured || !supabase) return;
+      try {
+        const { data } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
+        if (data && data.length > 0 && isMounted) {
+          setAllUsers(data as Profile[]);
+        }
+      } catch (err) {
+        console.error('Failed to load profiles from Supabase:', err);
+      }
+    };
+    loadProfiles();
+
+    if (isSupabaseConfigured && supabase) {
+      const channel = supabase
+        .channel('psc-profiles-cloud')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
+          loadProfiles();
+        })
+        .subscribe();
+
+      return () => {
+        isMounted = false;
+        if (supabase) supabase.removeChannel(channel);
+      };
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem('psc_users', JSON.stringify(allUsers));
   }, [allUsers]);
 
@@ -56,11 +92,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const updateUserRole = (userId: string, newRole: UserRole) => {
-    setAllUsers(prev => prev.map(u => u.id === userId ? { ...u, role: newRole, updated_at: new Date().toISOString() } : u));
+    setAllUsers(prev => prev.map(u => {
+      if (u.id === userId) {
+        const updated = { ...u, role: newRole, updated_at: new Date().toISOString() };
+        supabaseService.upsertProfile(updated);
+        return updated;
+      }
+      return u;
+    }));
   };
 
   const updateUser = (userId: string, updates: Partial<Profile>) => {
-    setAllUsers(prev => prev.map(u => u.id === userId ? { ...u, ...updates, updated_at: new Date().toISOString() } : u));
+    setAllUsers(prev => prev.map(u => {
+      if (u.id === userId) {
+        const updated = { ...u, ...updates, updated_at: new Date().toISOString() };
+        supabaseService.upsertProfile(updated);
+        return updated;
+      }
+      return u;
+    }));
   };
 
   const addUser = (userData: Omit<Profile, 'id' | 'created_at'>) => {
@@ -72,18 +122,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       created_at: new Date().toISOString(),
     };
     setAllUsers(prev => [...prev, newUser]);
+    supabaseService.upsertProfile(newUser);
   };
 
   const toggleUserStatus = (userId: string) => {
     setAllUsers(prev => prev.map(u => {
       if (u.id === userId) {
         const nextActive = !u.is_active;
-        return { 
+        const updated = { 
           ...u, 
           is_active: nextActive, 
           is_deactivated: !nextActive, 
           updated_at: new Date().toISOString() 
         };
+        supabaseService.upsertProfile(updated);
+        return updated;
       }
       return u;
     }));
@@ -91,6 +144,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const deleteUser = (userId: string) => {
     setAllUsers(prev => prev.filter(u => u.id !== userId));
+    supabaseService.deleteProfile(userId);
   };
 
   const role = currentUser.role;

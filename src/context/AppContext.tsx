@@ -31,6 +31,8 @@ import {
   INITIAL_PAYMENTS
 } from '../lib/mockData';
 import { generateInvoiceNumber } from '../utils/formatters';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabaseService } from '../lib/supabaseService';
 
 interface AppContextType {
   // State
@@ -138,30 +140,7 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Ensure clean slate by purging any stale mock test data once
-  if (typeof window !== 'undefined') {
-    const isCleanSlateV2 = localStorage.getItem('psc_clean_slate_applied_v2') === 'true';
-    if (!isCleanSlateV2) {
-      const keys = [
-        'psc_products',
-        'psc_raw_materials',
-        'psc_formulations',
-        'psc_production_batches',
-        'psc_raw_movements',
-        'psc_customers',
-        'psc_suppliers',
-        'psc_sales',
-        'psc_purchases',
-        'psc_stock_movements',
-        'psc_payments',
-        'psc_deletion_logs'
-      ];
-      keys.forEach(k => localStorage.setItem(k, JSON.stringify([])));
-      localStorage.setItem('psc_clean_slate_applied_v2', 'true');
-    }
-  }
-
-  // 1. Core State with Local Storage persistence
+  // 1. Core State with Local Storage persistence & optimistic updates
   const [products, setProducts] = useState<Product[]>(() => {
     const saved = localStorage.getItem('psc_products');
     return saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
@@ -222,7 +201,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return saved ? JSON.parse(saved) : [];
   });
 
-  // Sync to local storage
+  // Fetch live records from Supabase Cloud on mount & subscribe to Realtime multi-device changes
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadCloudData = async () => {
+      const cloudData = await supabaseService.fetchAll();
+      if (cloudData && isMounted) {
+        if (cloudData.products) setProducts(cloudData.products);
+        if (cloudData.rawMaterials) setRawMaterials(cloudData.rawMaterials);
+        if (cloudData.formulations) setFormulations(cloudData.formulations);
+        if (cloudData.productionBatches) setProductionBatches(cloudData.productionBatches);
+        if (cloudData.rawMaterialMovements) setRawMaterialMovements(cloudData.rawMaterialMovements);
+        if (cloudData.customers) setCustomers(cloudData.customers);
+        if (cloudData.suppliers) setSuppliers(cloudData.suppliers);
+        if (cloudData.sales) setSales(cloudData.sales);
+        if (cloudData.purchases) setPurchases(cloudData.purchases);
+        if (cloudData.stockMovements) setStockMovements(cloudData.stockMovements);
+        if (cloudData.payments) setPayments(cloudData.payments);
+        if (cloudData.deletionLogs) setDeletionLogs(cloudData.deletionLogs);
+      }
+    };
+
+    loadCloudData();
+
+    if (isSupabaseConfigured && supabase) {
+      const channel = supabase
+        .channel('psc-realtime-cloud')
+        .on('postgres_changes', { event: '*', schema: 'public' }, () => {
+          loadCloudData();
+        })
+        .subscribe();
+
+      return () => {
+        isMounted = false;
+        if (supabase) supabase.removeChannel(channel);
+      };
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Cache to local storage for offline resilience
   useEffect(() => { localStorage.setItem('psc_products', JSON.stringify(products)); }, [products]);
   useEffect(() => { localStorage.setItem('psc_raw_materials', JSON.stringify(rawMaterials)); }, [rawMaterials]);
   useEffect(() => { localStorage.setItem('psc_formulations', JSON.stringify(formulations)); }, [formulations]);
@@ -243,6 +265,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       date: new Date().toISOString(),
     };
     setDeletionLogs(prev => [newLog, ...prev]);
+    supabaseService.upsertDeletionLog(newLog);
   };
 
   // Derived low stock items & valuations
@@ -272,6 +295,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       created_at: new Date().toISOString(),
     };
     setRawMaterials(prev => [newMat, ...prev]);
+    supabaseService.upsertRawMaterial(newMat);
 
     if (newMat.current_stock > 0) {
       const movement: RawMaterialMovement = {
@@ -287,11 +311,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         created_by_name: 'Admin',
       };
       setRawMaterialMovements(prev => [movement, ...prev]);
+      supabaseService.upsertRawMaterialMovement(movement);
     }
   };
 
   const updateRawMaterial = (id: string, updates: Partial<RawMaterial>) => {
-    setRawMaterials(prev => prev.map(rm => rm.id === id ? { ...rm, ...updates, updated_at: new Date().toISOString() } : rm));
+    setRawMaterials(prev => prev.map(rm => {
+      if (rm.id === id) {
+        const updated = { ...rm, ...updates, updated_at: new Date().toISOString() };
+        supabaseService.upsertRawMaterial(updated);
+        return updated;
+      }
+      return rm;
+    }));
   };
 
   const deleteOrArchiveRawMaterial = (id: string, user: Profile): { action: 'deleted' | 'archived'; message: string } => {
@@ -305,6 +337,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!isUsedInFormulations && !hasPurchaseHistory && !hasProductionHistory) {
       // 0 history -> full hard delete
       setRawMaterials(prev => prev.filter(rm => rm.id !== id));
+      supabaseService.deleteRawMaterial(id);
       addDeletionLogEntry({
         entity_type: 'raw_material',
         entity_id: id,
@@ -317,7 +350,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { action: 'deleted', message: `Raw material "${target.name}" was permanently deleted.` };
     } else {
       // Has history/recipes -> soft archive
-      setRawMaterials(prev => prev.map(rm => rm.id === id ? { ...rm, is_archived: true, is_active: false, updated_at: new Date().toISOString() } : rm));
+      setRawMaterials(prev => prev.map(rm => {
+        if (rm.id === id) {
+          const archived = { ...rm, is_archived: true, is_active: false, updated_at: new Date().toISOString() };
+          supabaseService.upsertRawMaterial(archived);
+          return archived;
+        }
+        return rm;
+      }));
       addDeletionLogEntry({
         entity_type: 'raw_material',
         entity_id: id,
@@ -332,7 +372,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const unarchiveRawMaterial = (id: string) => {
-    setRawMaterials(prev => prev.map(rm => rm.id === id ? { ...rm, is_archived: false, is_active: true, updated_at: new Date().toISOString() } : rm));
+    setRawMaterials(prev => prev.map(rm => {
+      if (rm.id === id) {
+        const unarchived = { ...rm, is_archived: false, is_active: true, updated_at: new Date().toISOString() };
+        supabaseService.upsertRawMaterial(unarchived);
+        return unarchived;
+      }
+      return rm;
+    }));
   };
 
   const adjustRawMaterialStock = (
@@ -364,6 +411,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setRawMaterialMovements(prev => [movement, ...prev]);
+    supabaseService.upsertRawMaterialMovement(movement);
   };
 
   // ==============================================================================
@@ -371,7 +419,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // ==============================================================================
   const saveFormulation = (formData: Omit<ProductFormulation, 'id' | 'created_at'> & { id?: string }) => {
     if (formData.id) {
-      setFormulations(prev => prev.map(f => f.id === formData.id ? { ...f, ...formData, updated_at: new Date().toISOString() } : f));
+      setFormulations(prev => prev.map(f => {
+        if (f.id === formData.id) {
+          const updated = { ...f, ...formData, updated_at: new Date().toISOString() };
+          supabaseService.upsertFormulation(updated);
+          return updated;
+        }
+        return f;
+      }));
     } else {
       const newForm: ProductFormulation = {
         ...formData,
@@ -379,6 +434,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         created_at: new Date().toISOString(),
       };
       setFormulations(prev => [newForm, ...prev]);
+      supabaseService.upsertFormulation(newForm);
     }
   };
 
@@ -390,6 +446,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (!hasProductionHistory) {
       setFormulations(prev => prev.filter(f => f.id !== id));
+      supabaseService.deleteFormulation(id);
       addDeletionLogEntry({
         entity_type: 'formulation',
         entity_id: id,
@@ -401,7 +458,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       return { action: 'deleted', message: `Formulation recipe for "${target.product_name}" was deleted.` };
     } else {
-      setFormulations(prev => prev.map(f => f.id === id ? { ...f, is_archived: true, updated_at: new Date().toISOString() } : f));
+      setFormulations(prev => prev.map(f => {
+        if (f.id === id) {
+          const archived = { ...f, is_archived: true, updated_at: new Date().toISOString() };
+          supabaseService.upsertFormulation(archived);
+          return archived;
+        }
+        return f;
+      }));
       addDeletionLogEntry({
         entity_type: 'formulation',
         entity_id: id,
@@ -416,7 +480,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const unarchiveFormulation = (id: string) => {
-    setFormulations(prev => prev.map(f => f.id === id ? { ...f, is_archived: false, updated_at: new Date().toISOString() } : f));
+    setFormulations(prev => prev.map(f => {
+      if (f.id === id) {
+        const unarchived = { ...f, is_archived: false, updated_at: new Date().toISOString() };
+        supabaseService.upsertFormulation(unarchived);
+        return unarchived;
+      }
+      return f;
+    }));
   };
 
   // ==============================================================================
@@ -514,24 +585,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     setRawMaterials(updatedRawMaterials);
+    updatedRawMaterials.forEach(rm => supabaseService.upsertRawMaterial(rm));
     setRawMaterialMovements(prev => [...newRawMovements, ...prev]);
+    newRawMovements.forEach(m => supabaseService.upsertRawMaterialMovement(m));
 
     // 4. Add produced quantity to Finished Product Single Base-Unit Stock
     const prevProdStock = Number(targetProduct.current_stock);
     const nextProdStock = prevProdStock + Number(params.quantityProduced);
     const calculatedCostPerUnit = Number((totalBatchCost / params.quantityProduced).toFixed(2));
 
+    let updatedTargetProd: Product | null = null;
     setProducts(prevProds => prevProds.map(p => {
       if (p.id === targetProduct.id) {
-        return {
+        updatedTargetProd = {
           ...p,
           current_stock: nextProdStock,
           cost_price: calculatedCostPerUnit > 0 ? calculatedCostPerUnit : p.cost_price,
           updated_at: now,
         };
+        return updatedTargetProd;
       }
       return p;
     }));
+    if (updatedTargetProd) {
+      supabaseService.upsertProduct(updatedTargetProd);
+    }
 
     // 5. Log finished product stock movement
     const prodStockMovement: StockMovement = {
@@ -548,6 +626,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       created_by_name: params.supervisorName,
     };
     setStockMovements(prev => [prodStockMovement, ...prev]);
+    supabaseService.upsertStockMovement(prodStockMovement);
 
     // 6. Create production batch entry
     const newBatch: ProductionBatch = {
@@ -567,6 +646,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setProductionBatches(prev => [newBatch, ...prev]);
+    supabaseService.upsertProductionBatch(newBatch);
 
     return {
       success: true,
@@ -634,7 +714,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             new_stock: nextStk,
           });
 
-          return { ...rm, current_stock: nextStk, updated_at: now };
+          const updatedRm = { ...rm, current_stock: nextStk, updated_at: now };
+          supabaseService.upsertRawMaterial(updatedRm);
+          return updatedRm;
         }
         return rm;
       });
@@ -642,6 +724,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (rawMovementsToAdd.length > 0) {
       setRawMaterialMovements(prev => [...rawMovementsToAdd, ...prev]);
+      rawMovementsToAdd.forEach(m => supabaseService.upsertRawMaterialMovement(m));
     }
 
     // 2. Subtract produced finished products from stock
@@ -666,7 +749,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             created_by_name: user.name,
           });
 
-          return { ...p, current_stock: nextStk, updated_at: now };
+          const updatedProd = { ...p, current_stock: nextStk, updated_at: now };
+          supabaseService.upsertProduct(updatedProd);
+          return updatedProd;
         }
         return p;
       });
@@ -674,10 +759,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (prodMovementsToAdd.length > 0) {
       setStockMovements(prev => [...prodMovementsToAdd, ...prev]);
+      prodMovementsToAdd.forEach(m => supabaseService.upsertStockMovement(m));
     }
 
     // 3. Remove batch from production batches list
     setProductionBatches(prev => prev.filter(b => b.id !== batchId));
+    supabaseService.deleteProductionBatch(batchId);
 
     // 4. Record deletion & reversal audit log
     addDeletionLogEntry({
@@ -758,6 +845,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       created_at: new Date().toISOString(),
     };
     setProducts(prev => [newProd, ...prev]);
+    supabaseService.upsertProduct(newProd);
 
     if (newProd.current_stock > 0) {
       const movement: StockMovement = {
@@ -773,15 +861,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         created_by_name: 'Admin',
       };
       setStockMovements(prev => [movement, ...prev]);
+      supabaseService.upsertStockMovement(movement);
     }
   };
 
   const updateProduct = (id: string, updates: Partial<Product>) => {
-    setProducts(prev => prev.map(p => p.id === id ? { ...p, ...updates, updated_at: new Date().toISOString() } : p));
+    setProducts(prev => prev.map(p => {
+      if (p.id === id) {
+        const updated = { ...p, ...updates, updated_at: new Date().toISOString() };
+        supabaseService.upsertProduct(updated);
+        return updated;
+      }
+      return p;
+    }));
   };
 
   const updateProductPackSizes = (productId: string, packSizes: PackSize[]) => {
-    setProducts(prev => prev.map(p => p.id === productId ? { ...p, pack_sizes: packSizes, updated_at: new Date().toISOString() } : p));
+    setProducts(prev => prev.map(p => {
+      if (p.id === productId) {
+        const updated = { ...p, pack_sizes: packSizes, updated_at: new Date().toISOString() };
+        supabaseService.upsertProduct(updated);
+        return updated;
+      }
+      return p;
+    }));
   };
 
   const deleteOrArchiveProduct = (id: string, user: Profile): { action: 'deleted' | 'archived'; message: string } => {
@@ -795,6 +898,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!hasSales && !hasPurchases && !hasProduction) {
       setProducts(prev => prev.filter(p => p.id !== id));
       setFormulations(prev => prev.filter(f => f.product_id !== id));
+      supabaseService.deleteProduct(id);
       addDeletionLogEntry({
         entity_type: 'product',
         entity_id: id,
@@ -806,7 +910,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       return { action: 'deleted', message: `Product "${target.name}" had no transaction history and was permanently removed.` };
     } else {
-      setProducts(prev => prev.map(p => p.id === id ? { ...p, is_archived: true, is_active: false, updated_at: new Date().toISOString() } : p));
+      setProducts(prev => prev.map(p => {
+        if (p.id === id) {
+          const archived = { ...p, is_archived: true, is_active: false, updated_at: new Date().toISOString() };
+          supabaseService.upsertProduct(archived);
+          return archived;
+        }
+        return p;
+      }));
       addDeletionLogEntry({
         entity_type: 'product',
         entity_id: id,
@@ -821,7 +932,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const unarchiveProduct = (id: string) => {
-    setProducts(prev => prev.map(p => p.id === id ? { ...p, is_archived: false, is_active: true, updated_at: new Date().toISOString() } : p));
+    setProducts(prev => prev.map(p => {
+      if (p.id === id) {
+        const unarchived = { ...p, is_archived: false, is_active: true, updated_at: new Date().toISOString() };
+        supabaseService.upsertProduct(unarchived);
+        return unarchived;
+      }
+      return p;
+    }));
   };
 
   const adjustStock = (productId: string, qtyDiff: number, type: StockMovementType, notes: string, userName: string) => {
@@ -847,6 +965,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setStockMovements(prev => [movement, ...prev]);
+    supabaseService.upsertStockMovement(movement);
   };
 
   // ==============================================================================
@@ -859,10 +978,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       created_at: new Date().toISOString(),
     };
     setCustomers(prev => [newCust, ...prev]);
+    supabaseService.upsertCustomer(newCust);
   };
 
   const updateCustomer = (id: string, updates: Partial<Customer>) => {
-    setCustomers(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
+    setCustomers(prev => prev.map(c => {
+      if (c.id === id) {
+        const updated = { ...c, ...updates };
+        supabaseService.upsertCustomer(updated);
+        return updated;
+      }
+      return c;
+    }));
   };
 
   const deleteOrArchiveCustomer = (id: string, user: Profile): { action: 'deleted' | 'archived'; message: string } => {
@@ -873,6 +1000,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (!hasSales) {
       setCustomers(prev => prev.filter(c => c.id !== id));
+      supabaseService.deleteCustomer(id);
       addDeletionLogEntry({
         entity_type: 'customer',
         entity_id: id,
@@ -884,7 +1012,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       return { action: 'deleted', message: `Customer "${target.name}" had no sales history and was deleted.` };
     } else {
-      setCustomers(prev => prev.map(c => c.id === id ? { ...c, is_archived: true, is_active: false } : c));
+      setCustomers(prev => prev.map(c => {
+        if (c.id === id) {
+          const archived = { ...c, is_archived: true, is_active: false };
+          supabaseService.upsertCustomer(archived);
+          return archived;
+        }
+        return c;
+      }));
       addDeletionLogEntry({
         entity_type: 'customer',
         entity_id: id,
@@ -899,7 +1034,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const unarchiveCustomer = (id: string) => {
-    setCustomers(prev => prev.map(c => c.id === id ? { ...c, is_archived: false, is_active: true } : c));
+    setCustomers(prev => prev.map(c => {
+      if (c.id === id) {
+        const unarchived = { ...c, is_archived: false, is_active: true };
+        supabaseService.upsertCustomer(unarchived);
+        return unarchived;
+      }
+      return c;
+    }));
   };
 
   // ==============================================================================
@@ -912,10 +1054,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       created_at: new Date().toISOString(),
     };
     setSuppliers(prev => [newSupp, ...prev]);
+    supabaseService.upsertSupplier(newSupp);
   };
 
   const updateSupplier = (id: string, updates: Partial<Supplier>) => {
-    setSuppliers(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
+    setSuppliers(prev => prev.map(s => {
+      if (s.id === id) {
+        const updated = { ...s, ...updates };
+        supabaseService.upsertSupplier(updated);
+        return updated;
+      }
+      return s;
+    }));
   };
 
   const deleteOrArchiveSupplier = (id: string, user: Profile): { action: 'deleted' | 'archived'; message: string } => {
@@ -926,6 +1076,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (!hasPurchases) {
       setSuppliers(prev => prev.filter(s => s.id !== id));
+      supabaseService.deleteSupplier(id);
       addDeletionLogEntry({
         entity_type: 'supplier',
         entity_id: id,
@@ -937,7 +1088,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       return { action: 'deleted', message: `Supplier "${target.name}" had no purchase history and was deleted.` };
     } else {
-      setSuppliers(prev => prev.map(s => s.id === id ? { ...s, is_archived: true, is_active: false } : s));
+      setSuppliers(prev => prev.map(s => {
+        if (s.id === id) {
+          const archived = { ...s, is_archived: true, is_active: false };
+          supabaseService.upsertSupplier(archived);
+          return archived;
+        }
+        return s;
+      }));
       addDeletionLogEntry({
         entity_type: 'supplier',
         entity_id: id,
@@ -952,7 +1110,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const unarchiveSupplier = (id: string) => {
-    setSuppliers(prev => prev.map(s => s.id === id ? { ...s, is_archived: false, is_active: true } : s));
+    setSuppliers(prev => prev.map(s => {
+      if (s.id === id) {
+        const unarchived = { ...s, is_archived: false, is_active: true };
+        supabaseService.upsertSupplier(unarchived);
+        return unarchived;
+      }
+      return s;
+    }));
   };
 
   // ==============================================================================
@@ -968,6 +1133,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setSales(prev => [newSale, ...prev]);
+    supabaseService.upsertSale(newSale);
 
     // Deduct stock
     const movementsToAdd: StockMovement[] = [];
@@ -993,7 +1159,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             created_by_name: newSale.salesperson_name,
           });
 
-          return { ...prod, current_stock: nextStk };
+          const updatedProd = { ...prod, current_stock: nextStk };
+          supabaseService.upsertProduct(updatedProd);
+          return updatedProd;
         }
         return prod;
       });
@@ -1001,6 +1169,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (movementsToAdd.length > 0) {
       setStockMovements(prev => [...movementsToAdd, ...prev]);
+      movementsToAdd.forEach(m => supabaseService.upsertStockMovement(m));
     }
 
     // Update customer balance if unpaid credit
@@ -1008,7 +1177,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (newSale.customer_id && unpaid > 0) {
       setCustomers(prev => prev.map(c => {
         if (c.id === newSale.customer_id) {
-          return { ...c, current_balance: (c.current_balance || 0) + unpaid };
+          const updatedCust = { ...c, current_balance: (c.current_balance || 0) + unpaid };
+          supabaseService.upsertCustomer(updatedCust);
+          return updatedCust;
         }
         return c;
       }));
@@ -1031,6 +1202,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         created_at: new Date().toISOString(),
       };
       setPayments(prev => [pay, ...prev]);
+      supabaseService.upsertPayment(pay);
     }
 
     return newSale;
@@ -1076,7 +1248,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             created_by_name: user.name,
           });
 
-          return { ...prod, current_stock: nextStk };
+          const updatedProd = { ...prod, current_stock: nextStk };
+          supabaseService.upsertProduct(updatedProd);
+          return updatedProd;
         }
         return prod;
       });
@@ -1084,6 +1258,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (movementsToAdd.length > 0) {
       setStockMovements(prev => [...movementsToAdd, ...prev]);
+      movementsToAdd.forEach(m => supabaseService.upsertStockMovement(m));
     }
 
     // 2. Reverse customer receivable balance (Deduct unpaid amount)
@@ -1101,7 +1276,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             previous_balance: prevBal,
             new_balance: nextBal,
           };
-          return { ...c, current_balance: nextBal };
+          const updatedCust = { ...c, current_balance: nextBal };
+          supabaseService.upsertCustomer(updatedCust);
+          return updatedCust;
         }
         return c;
       }));
@@ -1109,14 +1286,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 3. Reverse linked payments
     let reversedPaymentsCount = 0;
-    setPayments(prev => prev.filter(p => {
-      const isLinked = (p.reference_id === targetSale.id || p.reference_no === targetSale.invoice_number);
-      if (isLinked) reversedPaymentsCount++;
-      return !isLinked;
-    }));
+    const paymentsToDelete = payments.filter(p => p.reference_id === targetSale.id || p.reference_no === targetSale.invoice_number);
+    paymentsToDelete.forEach(p => {
+      reversedPaymentsCount++;
+      supabaseService.deletePayment(p.id);
+    });
+    setPayments(prev => prev.filter(p => !paymentsToDelete.some(dp => dp.id === p.id)));
 
     // 4. Remove Sale from list
     setSales(prev => prev.filter(s => s.id !== saleId));
+    supabaseService.deleteSale(saleId);
 
     // 5. Log audit trail
     addDeletionLogEntry({
@@ -1153,6 +1332,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setPurchases(prev => [newPurchase, ...prev]);
+    supabaseService.upsertPurchase(newPurchase);
 
     // Raw Materials addition
     const rawMovementsToAdd: RawMaterialMovement[] = [];
@@ -1176,7 +1356,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             date: newPurchase.date,
           });
 
-          return { ...rm, current_stock: nextStk, cost_per_unit: item.unit_cost || rm.cost_per_unit };
+          const updatedRm = { ...rm, current_stock: nextStk, cost_per_unit: item.unit_cost || rm.cost_per_unit };
+          supabaseService.upsertRawMaterial(updatedRm);
+          return updatedRm;
         }
         return rm;
       });
@@ -1184,6 +1366,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (rawMovementsToAdd.length > 0) {
       setRawMaterialMovements(prev => [...rawMovementsToAdd, ...prev]);
+      rawMovementsToAdd.forEach(m => supabaseService.upsertRawMaterialMovement(m));
     }
 
     // Finished Goods addition
@@ -1208,7 +1391,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             date: newPurchase.date,
           });
 
-          return { ...prod, current_stock: nextStk, cost_price: item.unit_cost || prod.cost_price };
+          const updatedProd = { ...prod, current_stock: nextStk, cost_price: item.unit_cost || prod.cost_price };
+          supabaseService.upsertProduct(updatedProd);
+          return updatedProd;
         }
         return prod;
       });
@@ -1216,6 +1401,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (movementsToAdd.length > 0) {
       setStockMovements(prev => [...movementsToAdd, ...prev]);
+      movementsToAdd.forEach(m => supabaseService.upsertStockMovement(m));
     }
 
     // Update supplier balance if unpaid
@@ -1223,7 +1409,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (newPurchase.supplier_id && unpaid > 0) {
       setSuppliers(prev => prev.map(s => {
         if (s.id === newPurchase.supplier_id) {
-          return { ...s, current_balance: (s.current_balance || 0) + unpaid };
+          const updatedSupp = { ...s, current_balance: (s.current_balance || 0) + unpaid };
+          supabaseService.upsertSupplier(updatedSupp);
+          return updatedSupp;
         }
         return s;
       }));
@@ -1245,6 +1433,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         created_at: new Date().toISOString(),
       };
       setPayments(prev => [pay, ...prev]);
+      supabaseService.upsertPayment(pay);
     }
 
     return newPurchase;
@@ -1320,7 +1509,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             created_by_name: user.name,
           });
 
-          return { ...rm, current_stock: nextStk };
+          const updatedRm = { ...rm, current_stock: nextStk };
+          supabaseService.upsertRawMaterial(updatedRm);
+          return updatedRm;
         }
         return rm;
       });
@@ -1328,6 +1519,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (rawMovementsToAdd.length > 0) {
       setRawMaterialMovements(prev => [...rawMovementsToAdd, ...prev]);
+      rawMovementsToAdd.forEach(m => supabaseService.upsertRawMaterialMovement(m));
     }
 
     // 3. Subtract Finished Goods Stock
@@ -1360,7 +1552,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             created_by_name: user.name,
           });
 
-          return { ...prod, current_stock: nextStk };
+          const updatedProd = { ...prod, current_stock: nextStk };
+          supabaseService.upsertProduct(updatedProd);
+          return updatedProd;
         }
         return prod;
       });
@@ -1368,6 +1562,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (prodMovementsToAdd.length > 0) {
       setStockMovements(prev => [...prodMovementsToAdd, ...prev]);
+      prodMovementsToAdd.forEach(m => supabaseService.upsertStockMovement(m));
     }
 
     // 4. Reverse Supplier Balance (Deduct unpaid payable amount)
@@ -1385,7 +1580,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             previous_balance: prevBal,
             new_balance: nextBal,
           };
-          return { ...s, current_balance: nextBal };
+          const updatedSupp = { ...s, current_balance: nextBal };
+          supabaseService.upsertSupplier(updatedSupp);
+          return updatedSupp;
         }
         return s;
       }));
@@ -1393,14 +1590,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 5. Reverse linked payments
     let reversedPaymentsCount = 0;
-    setPayments(prev => prev.filter(p => {
-      const isLinked = (p.reference_id === targetPurchase.id || p.reference_no === targetPurchase.invoice_number);
-      if (isLinked) reversedPaymentsCount++;
-      return !isLinked;
-    }));
+    const paymentsToDelete = payments.filter(p => p.reference_id === targetPurchase.id || p.reference_no === targetPurchase.invoice_number);
+    paymentsToDelete.forEach(p => {
+      reversedPaymentsCount++;
+      supabaseService.deletePayment(p.id);
+    });
+    setPayments(prev => prev.filter(p => !paymentsToDelete.some(dp => dp.id === p.id)));
 
     // 6. Remove Purchase from list
     setPurchases(prev => prev.filter(p => p.id !== purchaseId));
+    supabaseService.deletePurchase(purchaseId);
 
     // 7. Log audit trail
     addDeletionLogEntry({
@@ -1435,12 +1634,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setPayments(prev => [newPayment, ...prev]);
+    supabaseService.upsertPayment(newPayment);
 
     // Customer payment
     if (newPayment.customer_id) {
       setCustomers(prev => prev.map(c => {
         if (c.id === newPayment.customer_id) {
-          return { ...c, current_balance: Math.max(0, (c.current_balance || 0) - newPayment.amount) };
+          const updatedCust = { ...c, current_balance: Math.max(0, (c.current_balance || 0) - newPayment.amount) };
+          supabaseService.upsertCustomer(updatedCust);
+          return updatedCust;
         }
         return c;
       }));
@@ -1450,11 +1652,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (s.id === newPayment.reference_id || s.invoice_number === newPayment.reference_no) {
             const newPaid = (s.amount_paid || 0) + newPayment.amount;
             const newStatus = newPaid >= s.total_amount ? 'paid' : (newPaid > 0 ? 'partial' : 'unpaid');
-            return {
+            const updatedSale: Sale = {
               ...s,
               amount_paid: newPaid,
               payment_status: newStatus as any,
             };
+            supabaseService.upsertSale(updatedSale);
+            return updatedSale;
           }
           return s;
         }));
@@ -1465,7 +1669,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (newPayment.supplier_id) {
       setSuppliers(prev => prev.map(s => {
         if (s.id === newPayment.supplier_id) {
-          return { ...s, current_balance: Math.max(0, (s.current_balance || 0) - newPayment.amount) };
+          const updatedSupp = { ...s, current_balance: Math.max(0, (s.current_balance || 0) - newPayment.amount) };
+          supabaseService.upsertSupplier(updatedSupp);
+          return updatedSupp;
         }
         return s;
       }));
@@ -1475,11 +1681,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (p.id === newPayment.reference_id || p.invoice_number === newPayment.reference_no) {
             const newPaid = (p.amount_paid || 0) + newPayment.amount;
             const newStatus = newPaid >= p.total_amount ? 'paid' : (newPaid > 0 ? 'partial' : 'unpaid');
-            return {
+            const updatedPurch: Purchase = {
               ...p,
               amount_paid: newPaid,
               payment_status: newStatus as any,
             };
+            supabaseService.upsertPurchase(updatedPurch);
+            return updatedPurch;
           }
           return p;
         }));
