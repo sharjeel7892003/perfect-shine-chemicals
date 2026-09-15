@@ -28,23 +28,25 @@
   background: rgba(71, 85, 105, 1);
 }
 
-/* Print specific styles for invoices */
+/* Print specific styles for invoices and reports */
 @media print {
   body * {
     visibility: hidden;
   }
-  #printable-invoice, #printable-invoice * {
+  #printable-invoice, #printable-invoice *,
+  #printable-report, #printable-report * {
     visibility: visible;
   }
-  #printable-invoice {
+  #printable-invoice,
+  #printable-report {
     position: absolute;
     left: 0;
     top: 0;
     width: 100%;
     margin: 0;
-    padding: 0;
+    padding: 1.25rem;
     background: white !important;
-    color: black !important;
+    color: #0f172a !important;
   }
   .no-print {
     display: none !important;

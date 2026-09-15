@@ -110,9 +110,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
     <aside className="hidden md:flex flex-col w-64 bg-slate-900 border-r border-slate-800 shrink-0 h-screen sticky top-0 select-none">
       {/* Brand Header */}
       <div className="p-4 border-b border-slate-800 flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center shadow-lg shadow-emerald-500/20 text-slate-950 font-black text-xl">
-          <Sparkles className="w-6 h-6 text-slate-950 fill-current" />
-        </div>
+        <img 
+          src="/assets/logo.png" 
+          alt="Perfect Shine Chemicals" 
+          className="w-10 h-10 object-contain shrink-0 drop-shadow" 
+        />
         <div>
           <h1 className="font-extrabold text-white text-base tracking-tight leading-none">
             PERFECT SHINE

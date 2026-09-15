@@ -24,7 +24,7 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDel
         {/* Controls Bar (Hidden during print) */}
         <div className="no-print flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900/80">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-bold text-white">Tax Invoice Preview</span>
+            <span className="text-sm font-bold text-white">Invoice Preview</span>
             <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 font-mono">
               {sale.invoice_number}
             </span>
@@ -60,29 +60,31 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDel
         <div className="overflow-y-auto p-6 sm:p-8 bg-white text-slate-900" id="printable-invoice">
           {/* Header */}
           <div className="flex flex-col sm:flex-row justify-between items-start border-b-2 border-slate-800 pb-6 gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center text-white font-black text-sm">
-                  PS
-                </div>
-                <h2 className="text-2xl font-black text-slate-900 tracking-tight">
+            <div className="flex items-start gap-3.5">
+              <img 
+                src="/assets/logo.png" 
+                alt="Perfect Shine Chemicals" 
+                className="w-16 h-16 sm:w-20 sm:h-20 object-contain shrink-0" 
+              />
+              <div>
+                <h2 className="text-2xl font-black text-slate-900 tracking-tight leading-snug">
                   PERFECT SHINE CHEMICALS
                 </h2>
+                <p className="text-xs text-slate-600 font-medium mt-0.5">
+                  Industrial & Commercial Cleaning Solutions Manufacturer
+                </p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Near Tariq Hameed Mosque R, A 2 Block China Scheme, Lahore, Pakistan
+                </p>
+                <p className="text-xs text-slate-700 font-medium mt-0.5">
+                  Contact: <span className="font-mono font-bold text-slate-900">0327-4549485</span>
+                </p>
               </div>
-              <p className="text-xs text-slate-600 font-medium mt-1">
-                Industrial & Commercial Cleaning Solutions Manufacturer
-              </p>
-              <p className="text-xs text-slate-500">
-                Sundar Industrial Area / Multan Road, Lahore, Pakistan
-              </p>
-              <p className="text-xs text-slate-500 font-mono">
-                Phone: +92 300 8400001 / +92 42 35889900 | NTN: 4892109-7
-              </p>
             </div>
 
-            <div className="text-left sm:text-right">
+            <div className="text-left sm:text-right shrink-0">
               <div className="inline-block px-3 py-1 rounded bg-slate-900 text-white text-xs font-bold uppercase tracking-wider mb-2">
-                Sales Tax Invoice
+                Commercial Invoice
               </div>
               <p className="text-sm font-bold font-mono text-slate-900">
                 Invoice #: {sale.invoice_number}
@@ -187,7 +189,7 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDel
               <p className="font-bold text-slate-700 uppercase">Payment & Terms:</p>
               <p>• Goods once sold are non-returnable without batch authorization.</p>
               <p>• Make all cheques / online transfers payable to "Perfect Shine Chemicals".</p>
-              <p>• For JazzCash / EasyPaisa verifications, WhatsApp receipt to 0300-8400001.</p>
+              <p>• For JazzCash / EasyPaisa verifications, WhatsApp receipt to 0327-4549485.</p>
             </div>
             <div className="text-right flex flex-col justify-end">
               <div className="border-t border-slate-400 w-40 ml-auto pt-1 text-center text-slate-700 font-semibold">

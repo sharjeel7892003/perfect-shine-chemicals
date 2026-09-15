@@ -30,9 +30,11 @@ export const Topbar: React.FC<TopbarProps> = ({ onNavigate }) => {
     <header className="h-16 border-b border-slate-800 bg-slate-900/80 backdrop-blur-md px-4 sm:px-6 flex items-center justify-between sticky top-0 z-30">
       {/* Mobile Brand / Title */}
       <div className="flex items-center gap-3">
-        <div className="md:hidden w-8 h-8 rounded-lg bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center shadow-md">
-          <Sparkles className="w-5 h-5 text-slate-950 fill-current" />
-        </div>
+        <img 
+          src="/assets/logo.png" 
+          alt="Perfect Shine Chemicals" 
+          className="md:hidden w-8 h-8 object-contain shrink-0 drop-shadow" 
+        />
         <div>
           <h2 className="text-base font-bold text-white flex items-center gap-2">
             <span>Perfect Shine Chemicals</span>

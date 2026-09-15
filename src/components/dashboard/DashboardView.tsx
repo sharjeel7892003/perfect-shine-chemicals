@@ -75,17 +75,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
       {/* Welcome Banner */}
       <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-emerald-950 via-slate-900 to-slate-900 border border-emerald-500/20 p-6 sm:p-8">
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold mb-3">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-              Factory Operations • Lahore Manufacturing Plant
+          <div className="flex items-start gap-4">
+            <img 
+              src="/assets/logo.png" 
+              alt="Perfect Shine Chemicals" 
+              className="w-14 h-14 sm:w-16 sm:h-16 object-contain shrink-0 drop-shadow-md" 
+            />
+            <div>
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold mb-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                Factory Operations • Lahore Manufacturing Plant
+              </div>
+              <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+                Welcome, {currentUser.name}
+              </h1>
+              <p className="text-slate-300 text-sm mt-1 max-w-xl">
+                Chemical formulations, single base-unit inventories, manufacturing batch runs & customer accounts are active.
+              </p>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-              Welcome, {currentUser.name}
-            </h1>
-            <p className="text-slate-300 text-sm mt-1 max-w-xl">
-              Chemical formulations, single base-unit inventories, manufacturing batch runs & customer accounts are active.
-            </p>
           </div>
 
           {/* Quick Action Shortcuts */}

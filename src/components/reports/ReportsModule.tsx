@@ -180,18 +180,37 @@ export const ReportsModule: React.FC = () => {
   const totalStockRetailValue = products.reduce((acc, p) => acc + (p.current_stock * p.selling_price), 0);
   const unrealizedStockProfit = totalStockRetailValue - totalStockCostValue;
 
+  const getReportTitle = (type: ReportType) => {
+    switch (type) {
+      case 'sales': return 'Sales & Revenue Report';
+      case 'purchases': return 'Purchases & Procurement Report';
+      case 'profit': return 'Profit & Loss (P&L) Statement';
+      case 'receivables': return 'Outstanding Receivables Report';
+      case 'payables': return 'Outstanding Payables Report';
+      case 'valuation': return 'Stock Asset Valuation Report';
+      default: return 'Financial & Analytical Report';
+    }
+  };
+
   return (
     <div className="space-y-6 pb-12">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
-        <div>
-          <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            <BarChart3 className="w-6 h-6 text-emerald-400" />
-            <span>Financial & Analytical Intelligence</span>
-          </h2>
-          <p className="text-xs text-slate-400 mt-0.5">
-            Detailed sales, purchases, profit estimations, outstanding receivables, and stock asset valuation
-          </p>
+      {/* Screen Header (Hidden during print) */}
+      <div className="no-print flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+        <div className="flex items-center gap-3.5">
+          <img 
+            src="/assets/logo.png" 
+            alt="Perfect Shine Chemicals" 
+            className="w-12 h-12 object-contain shrink-0 drop-shadow" 
+          />
+          <div>
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <BarChart3 className="w-5 h-5 text-emerald-400" />
+              <span>Financial & Analytical Intelligence</span>
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Near Tariq Hameed Mosque R, A 2 Block China Scheme, Lahore • Phone: <span className="font-mono text-slate-300">0327-4549485</span>
+            </p>
+          </div>
         </div>
 
         <button
@@ -203,8 +222,8 @@ export const ReportsModule: React.FC = () => {
         </button>
       </div>
 
-      {/* Navigation Tabs for All 6 Reports */}
-      <div className="flex flex-wrap items-center gap-2 p-1.5 rounded-2xl bg-slate-900 border border-slate-800">
+      {/* Navigation Tabs for All 6 Reports (Hidden during print) */}
+      <div className="no-print flex flex-wrap items-center gap-2 p-1.5 rounded-2xl bg-slate-900 border border-slate-800">
         <button
           onClick={() => setActiveReport('sales')}
           className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
@@ -268,7 +287,7 @@ export const ReportsModule: React.FC = () => {
 
       {/* Filter Toolbar (Active for Sales, Purchases, Profit) */}
       {(activeReport === 'sales' || activeReport === 'purchases' || activeReport === 'profit') && (
-        <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="no-print p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
               <span className="text-slate-400 font-semibold">From:</span>
@@ -320,7 +339,7 @@ export const ReportsModule: React.FC = () => {
                 <select
                   value={selectedCustomerFilter}
                   onChange={(e) => setSelectedCustomerFilter(e.target.value)}
-                  className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white max-w-44 truncate"
+                  className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white"
                 >
                   <option value="all">All Customers</option>
                   {customers.map(c => (
@@ -331,7 +350,7 @@ export const ReportsModule: React.FC = () => {
                 <select
                   value={selectedProductFilter}
                   onChange={(e) => setSelectedProductFilter(e.target.value)}
-                  className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white max-w-44 truncate"
+                  className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white"
                 >
                   <option value="all">All Products</option>
                   {products.map(p => (
@@ -356,6 +375,46 @@ export const ReportsModule: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Main Printable Report Area */}
+      <div id="printable-report" className="space-y-6">
+        {/* Printable Report Header (Visible when printed) */}
+        <div className="hidden print:flex flex-col sm:flex-row justify-between items-start border-b-2 border-slate-800 pb-4 mb-6 gap-4 text-slate-900">
+          <div className="flex items-start gap-3.5">
+            <img 
+              src="/assets/logo.png" 
+              alt="Perfect Shine Chemicals" 
+              className="w-14 h-14 object-contain shrink-0" 
+            />
+            <div>
+              <h1 className="text-xl font-black text-slate-900 tracking-tight leading-snug">
+                PERFECT SHINE CHEMICALS
+              </h1>
+              <p className="text-xs text-slate-600 font-medium">
+                Industrial & Commercial Cleaning Solutions Manufacturer
+              </p>
+              <p className="text-[11px] text-slate-500">
+                Near Tariq Hameed Mosque R, A 2 Block China Scheme, Lahore, Pakistan
+              </p>
+              <p className="text-xs text-slate-700 font-medium mt-0.5">
+                Contact: <span className="font-mono font-bold text-slate-900">0327-4549485</span>
+              </p>
+            </div>
+          </div>
+          <div className="text-left sm:text-right shrink-0">
+            <div className="inline-block px-3 py-1 rounded bg-slate-900 text-white text-xs font-bold uppercase tracking-wider mb-1.5">
+              {getReportTitle(activeReport)}
+            </div>
+            <p className="text-xs text-slate-600">
+              Generated: {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+            </p>
+            {(startDate || endDate) && (
+              <p className="text-xs text-slate-600 font-medium">
+                Filter: {startDate || 'Beginning'} &rarr; {endDate || 'Present'}
+              </p>
+            )}
+          </div>
+        </div>
 
       {/* ================= REPORT 1: SALES REPORT ================= */}
       {activeReport === 'sales' && (
@@ -901,6 +960,7 @@ export const ReportsModule: React.FC = () => {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 };
