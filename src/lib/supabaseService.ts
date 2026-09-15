@@ -88,10 +88,11 @@ export const supabaseService = {
         raw_materials_consumed: b.raw_materials_consumed || (b as any).consumed_materials || []
       }));
 
-      // 3. Normalized Sales (extract sale_items into .items)
+      // 3. Normalized Sales (extract sale_items into .items and enrich salesperson_name from profiles)
       const normalizedSales = (salesRes.data || []).map((s: any) => ({
         ...s,
-        items: s.sale_items || []
+        items: s.sale_items || [],
+        salesperson_name: s.salesperson_id ? (profMap.get(s.salesperson_id) || s.salesperson_name || 'Staff') : (s.salesperson_name || 'Staff')
       }));
 
       // 4. Normalized Purchases (extract purchase_items into .items)
@@ -455,7 +456,8 @@ export const supabaseService = {
       amount_paid: Number(sale.amount_paid || 0),
       payment_status: sale.payment_status || 'unpaid',
       payment_method: sale.payment_method || 'cash',
-      salesperson_id: isValidUUID(sale.salesperson_id) ? sale.salesperson_id : null,
+      salesperson_id: isValidUUID(sale.salesperson_id) ? sale.salesperson_id : (sale.salesperson_id || null),
+      salesperson_name: sale.salesperson_name || null,
       notes: sale.notes || ''
     };
 

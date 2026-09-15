@@ -29,7 +29,16 @@ import { InvoiceModal } from './InvoiceModal';
 
 export const SalesModule: React.FC = () => {
   const { products, customers, sales, createSale, deleteSaleInvoice } = useApp();
-  const { currentUser, isOwner, canCreateSale } = useAuth();
+  const { currentUser, allUsers, isOwner, canCreateSale } = useAuth();
+
+  // Dynamically resolve staff member name by looking up salesperson_id in profiles
+  const getSalespersonName = (sale: Sale) => {
+    if (sale.salesperson_id) {
+      const match = allUsers.find(u => u.id === sale.salesperson_id);
+      if (match) return match.name;
+    }
+    return sale.salesperson_name || 'Staff';
+  };
 
   const [activeSubTab, setActiveSubTab] = useState<'pos' | 'history'>('pos');
   const [selectedInvoice, setSelectedInvoice] = useState<Sale | null>(null);
@@ -239,6 +248,7 @@ export const SalesModule: React.FC = () => {
         amount_paid: finalAmountPaid,
         payment_status: paymentStatus,
         payment_method: paymentMethod,
+        salesperson_id: currentUser.id,
         salesperson_name: currentUser.name,
         notes: salesNotes,
       });
@@ -657,6 +667,7 @@ export const SalesModule: React.FC = () => {
                   <th className="py-3 px-3">Invoice #</th>
                   <th className="py-3 px-3">Date</th>
                   <th className="py-3 px-3">Customer</th>
+                  <th className="py-3 px-3">Sold By</th>
                   <th className="py-3 px-3">Items / Packaging</th>
                   <th className="py-3 px-3 text-right">Total (PKR)</th>
                   <th className="py-3 px-3 text-right">Paid</th>
@@ -667,7 +678,7 @@ export const SalesModule: React.FC = () => {
               <tbody className="divide-y divide-slate-800/60">
                 {filteredSales.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-slate-500">
+                    <td colSpan={9} className="py-8 text-center text-slate-500">
                       No matching sales records found
                     </td>
                   </tr>
@@ -677,6 +688,11 @@ export const SalesModule: React.FC = () => {
                       <td className="py-3 px-3 font-mono font-bold text-white">{sale.invoice_number}</td>
                       <td className="py-3 px-3 text-slate-400">{formatDate(sale.date)}</td>
                       <td className="py-3 px-3 font-medium text-slate-200">{sale.customer_name}</td>
+                      <td className="py-3 px-3">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800/90 text-slate-200 font-medium text-[11px] border border-slate-700/60 whitespace-nowrap">
+                          {getSalespersonName(sale)}
+                        </span>
+                      </td>
                       <td className="py-3 px-3 text-slate-300 max-w-xs truncate">
                         {sale.items.map(i => `${i.quantity}x ${i.pack_size_name || i.product_name}`).join(', ')}
                       </td>

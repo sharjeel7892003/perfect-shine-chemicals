@@ -19,12 +19,13 @@ import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { formatPKR, formatDate } from '../../utils/formatters';
 import { Badge } from '../common/Badge';
+import { Sale } from '../../types';
 
 export type ReportType = 'sales' | 'purchases' | 'profit' | 'receivables' | 'payables' | 'valuation';
 
 export const ReportsModule: React.FC = () => {
   const { sales, purchases, products, customers, suppliers, expenses } = useApp();
-  const { isOwner } = useAuth();
+  const { isOwner, allUsers } = useAuth();
 
   const [activeReport, setActiveReport] = useState<ReportType>('sales');
 
@@ -34,6 +35,15 @@ export const ReportsModule: React.FC = () => {
   const [selectedCustomerFilter, setSelectedCustomerFilter] = useState<string>('all');
   const [selectedProductFilter, setSelectedProductFilter] = useState<string>('all');
   const [selectedSupplierFilter, setSelectedSupplierFilter] = useState<string>('all');
+
+  // Dynamically resolve staff member name from profiles
+  const getStaffNameForSale = (s: Sale) => {
+    if (s.salesperson_id) {
+      const match = allUsers.find(u => u.id === s.salesperson_id);
+      if (match) return match.name;
+    }
+    return s.salesperson_name || 'Staff';
+  };
 
   // Date filtering helper
   const isDateInRange = (dateStr: string) => {
@@ -78,6 +88,7 @@ export const ReportsModule: React.FC = () => {
     invoiceNo: string;
     date: string;
     customer: string;
+    soldBy: string;
     productName: string;
     quantity: number;
     unitPrice: number;
@@ -92,6 +103,7 @@ export const ReportsModule: React.FC = () => {
           invoiceNo: s.invoice_number,
           date: s.date,
           customer: s.customer_name,
+          soldBy: getStaffNameForSale(s),
           productName: item.product_name,
           quantity: item.quantity,
           unitPrice: item.unit_price,
@@ -454,6 +466,7 @@ export const ReportsModule: React.FC = () => {
                     <th className="py-2.5 px-3">Date</th>
                     <th className="py-2.5 px-3">Invoice #</th>
                     <th className="py-2.5 px-3">Customer</th>
+                    <th className="py-2.5 px-3">Sold By</th>
                     <th className="py-2.5 px-3">Product Description</th>
                     <th className="py-2.5 px-3 text-center">Qty</th>
                     <th className="py-2.5 px-3 text-right">Unit Rate</th>
@@ -463,7 +476,7 @@ export const ReportsModule: React.FC = () => {
                 <tbody className="divide-y divide-slate-800/60">
                   {salesItemizedRows.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-8 text-center text-slate-500">No sales match the filter criteria</td>
+                      <td colSpan={8} className="py-8 text-center text-slate-500">No sales match the filter criteria</td>
                     </tr>
                   ) : (
                     salesItemizedRows.map((row, idx) => (
@@ -471,6 +484,11 @@ export const ReportsModule: React.FC = () => {
                         <td className="py-2.5 px-3 text-slate-400 font-mono">{formatDate(row.date)}</td>
                         <td className="py-2.5 px-3 font-mono font-bold text-white">{row.invoiceNo}</td>
                         <td className="py-2.5 px-3 text-slate-300">{row.customer}</td>
+                        <td className="py-2.5 px-3">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded bg-slate-800 text-slate-200 text-[11px] font-medium border border-slate-700/60 whitespace-nowrap">
+                            {row.soldBy}
+                          </span>
+                        </td>
                         <td className="py-2.5 px-3 font-medium text-white">{row.productName}</td>
                         <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-200">{row.quantity}</td>
                         <td className="py-2.5 px-3 text-right font-mono text-slate-400">{formatPKR(row.unitPrice)}</td>

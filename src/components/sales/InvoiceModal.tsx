@@ -2,6 +2,7 @@ import React from 'react';
 import { Sale } from '../../types';
 import { formatPKR, formatDate, formatDateTime } from '../../utils/formatters';
 import { Printer, Download, X, Sparkles, CheckCircle2, Trash2 } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 
 interface InvoiceModalProps {
   sale: Sale | null;
@@ -10,10 +11,20 @@ interface InvoiceModalProps {
 }
 
 export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDelete }) => {
+  const { allUsers } = useAuth();
   if (!sale) return null;
 
   const handlePrint = () => {
     window.print();
+  };
+
+  // Dynamically resolve current staff name from profiles table by salesperson_id
+  const getIssuedByName = () => {
+    if (sale.salesperson_id) {
+      const match = allUsers.find(u => u.id === sale.salesperson_id);
+      if (match) return match.name;
+    }
+    return sale.salesperson_name || 'Staff';
   };
 
   const remainingBalance = Math.max(0, sale.total_amount - sale.amount_paid);
@@ -92,8 +103,8 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDel
               <p className="text-xs text-slate-600 mt-0.5">
                 Date: {formatDate(sale.date)}
               </p>
-              <p className="text-xs text-slate-600">
-                Issued By: {sale.salesperson_name || 'Haji M. Sharjeel'}
+              <p className="text-xs text-slate-700 font-medium">
+                Issued By: <span className="font-semibold text-slate-900">{getIssuedByName()}</span>
               </p>
             </div>
           </div>

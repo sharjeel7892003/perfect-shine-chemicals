@@ -171,6 +171,9 @@ CREATE TABLE IF NOT EXISTS public.sales (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE public.sales ADD COLUMN IF NOT EXISTS salesperson_id TEXT;
+ALTER TABLE public.sales ADD COLUMN IF NOT EXISTS salesperson_name TEXT;
+
 -- 10. PURCHASES TABLE
 CREATE TABLE IF NOT EXISTS public.purchases (
     id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
