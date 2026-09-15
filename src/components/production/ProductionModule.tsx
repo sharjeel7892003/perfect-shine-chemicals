@@ -21,7 +21,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { ProductionBatch, ProductFormulation, ConsumedRawMaterial } from '../../types';
-import { formatPKR, formatDate, formatDateTime } from '../../utils/formatters';
+import { formatPKR, formatDate, formatDateTime, getTodayDateString, formatSelectedDateToIso } from '../../utils/formatters';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 
@@ -50,7 +50,7 @@ export const ProductionModule: React.FC = () => {
   const [selectedProductId, setSelectedProductId] = useState('');
   const [quantityProduced, setQuantityProduced] = useState<number>(100);
   const [batchNumber, setBatchNumber] = useState('');
-  const [productionDate, setProductionDate] = useState(new Date().toISOString().split('T')[0]);
+  const [productionDate, setProductionDate] = useState(getTodayDateString());
   const [notes, setNotes] = useState('');
 
   const openRecordModal = () => {
@@ -61,7 +61,7 @@ export const ProductionModule: React.FC = () => {
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const randomSeq = Math.floor(10 + Math.random() * 90);
     setBatchNumber(`BATCH-${dateStr}-${randomSeq}`);
-    setProductionDate(new Date().toISOString().split('T')[0]);
+    setProductionDate(getTodayDateString());
     setNotes('');
     setSubmitError(null);
     setIsRecordModalOpen(true);
@@ -119,7 +119,7 @@ export const ProductionModule: React.FC = () => {
         productId: selectedProductId,
         quantityProduced: Number(quantityProduced),
         batchNumber,
-        date: new Date(productionDate).toISOString(),
+        date: formatSelectedDateToIso(productionDate),
         supervisorName: currentUser.name,
         notes,
       });

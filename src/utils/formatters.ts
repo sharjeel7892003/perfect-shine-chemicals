@@ -55,3 +55,37 @@ export const generateInvoiceNumber = (prefix: 'INV' | 'PO' | 'PAY' | 'ADJ' = 'IN
   const rand = Math.floor(1000 + Math.random() * 9000);
   return `${prefix}-${dateStr}-${rand}`;
 };
+
+/**
+ * Returns today's date formatted as YYYY-MM-DD in local time
+ */
+export const getTodayDateString = (): string => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+/**
+ * Safely converts a YYYY-MM-DD date picker string to an ISO string.
+ * If the selected date is today, it preserves the current exact time.
+ * If backdated or future, it sets the time to noon local time so that
+ * date comparisons and UTC conversions do not shift into adjacent calendar days.
+ */
+export const formatSelectedDateToIso = (dateStr?: string): string => {
+  if (!dateStr) return new Date().toISOString();
+  const todayStr = getTodayDateString();
+  const now = new Date();
+  if (dateStr === todayStr) {
+    return now.toISOString();
+  }
+  const parts = dateStr.split('-').map(Number);
+  if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+    const [year, month, day] = parts;
+    const targetDate = new Date(year, month - 1, day, 12, 0, 0);
+    return targetDate.toISOString();
+  }
+  return new Date().toISOString();
+};
+

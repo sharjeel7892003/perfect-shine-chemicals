@@ -16,7 +16,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { Purchase, PurchaseItem, PaymentMethod } from '../../types';
-import { formatPKR, formatDate } from '../../utils/formatters';
+import { formatPKR, formatDate, getTodayDateString, formatSelectedDateToIso } from '../../utils/formatters';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 
@@ -39,6 +39,7 @@ export const PurchasesModule: React.FC = () => {
   const activeProducts = products.filter(p => !p.is_archived && p.is_active);
 
   // New Purchase Form State
+  const [purchaseDate, setPurchaseDate] = useState(getTodayDateString());
   const [supplierId, setSupplierId] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('bank');
   const [paymentStatus, setPaymentStatus] = useState<'paid' | 'partial' | 'unpaid'>('paid');
@@ -127,7 +128,7 @@ export const PurchasesModule: React.FC = () => {
       await createPurchase({
         supplier_id: supplierId,
         supplier_name: selectedSupplier ? selectedSupplier.name : 'Unknown Supplier',
-        date: new Date().toISOString(),
+        date: formatSelectedDateToIso(purchaseDate),
         items,
         total_amount: totalAmount,
         amount_paid: finalPaid,
@@ -139,6 +140,7 @@ export const PurchasesModule: React.FC = () => {
       setIsModalOpen(false);
       // Reset form
       setSupplierId('');
+      setPurchaseDate(getTodayDateString());
       setItems([{ item_type: 'raw_material', raw_material_id: '', product_or_material_name: '', quantity: 1, unit_cost: 0, subtotal: 0 }]);
       setAmountPaid(0);
       setNotes('');
@@ -191,7 +193,10 @@ export const PurchasesModule: React.FC = () => {
 
         {canManagePurchases && (
           <button
-            onClick={() => setIsModalOpen(true)}
+            onClick={() => {
+              setPurchaseDate(getTodayDateString());
+              setIsModalOpen(true);
+            }}
             className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20 transition-all"
           >
             <Plus className="w-4 h-4 stroke-[3px]" />
@@ -313,23 +318,39 @@ export const PurchasesModule: React.FC = () => {
         maxWidth="2xl"
       >
         <form onSubmit={handleCreatePurchase} className="space-y-4">
-          <div>
-            <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
-              Select Supplier / Vendor
-            </label>
-            <select
-              required
-              value={supplierId}
-              onChange={(e) => setSupplierId(e.target.value)}
-              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white"
-            >
-              <option value="">Choose Supplier...</option>
-              {activeSuppliers.map(s => (
-                <option key={s.id} value={s.id}>
-                  {s.name} ({s.raw_material_type}) • Balance: {formatPKR(s.current_balance)}
-                </option>
-              ))}
-            </select>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Select Supplier / Vendor *
+              </label>
+              <select
+                required
+                value={supplierId}
+                onChange={(e) => setSupplierId(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+              >
+                <option value="">Choose Supplier...</option>
+                {activeSuppliers.map(s => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.raw_material_type}) • Balance: {formatPKR(s.current_balance)}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1 flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Purchase / PO Date *</span>
+              </label>
+              <input
+                type="date"
+                required
+                value={purchaseDate}
+                onChange={(e) => setPurchaseDate(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+              />
+            </div>
           </div>
 
           {/* Itemized list */}

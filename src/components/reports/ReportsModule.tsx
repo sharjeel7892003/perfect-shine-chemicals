@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
-import { formatPKR, formatDate } from '../../utils/formatters';
+import { formatPKR, formatDate, getTodayDateString } from '../../utils/formatters';
 import { Badge } from '../common/Badge';
 import { Sale } from '../../types';
 
@@ -49,7 +49,7 @@ export const ReportsModule: React.FC = () => {
   const isDateInRange = (dateStr: string) => {
     if (!startDate && !endDate) return true;
     const d = new Date(dateStr);
-    if (startDate && d < new Date(startDate)) return false;
+    if (startDate && d < new Date(startDate + 'T00:00:00')) return false;
     if (endDate && d > new Date(endDate + 'T23:59:59')) return false;
     return true;
   };
@@ -58,7 +58,7 @@ export const ReportsModule: React.FC = () => {
   const handleSetQuickDate = (type: 'today' | 'this_month' | 'all') => {
     const today = new Date();
     if (type === 'today') {
-      const formatted = today.toISOString().split('T')[0];
+      const formatted = getTodayDateString();
       setStartDate(formatted);
       setEndDate(formatted);
     } else if (type === 'this_month') {

@@ -22,7 +22,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { Sale, SaleItem, PaymentMethod, PaymentStatus, Product, PackSize } from '../../types';
-import { formatPKR, formatDate } from '../../utils/formatters';
+import { formatPKR, formatDate, getTodayDateString, formatSelectedDateToIso } from '../../utils/formatters';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { InvoiceModal } from './InvoiceModal';
@@ -48,6 +48,7 @@ export const SalesModule: React.FC = () => {
   const [isDeleting, setIsDeleting] = useState(false);
 
   // POS State
+  const [saleDate, setSaleDate] = useState<string>(getTodayDateString());
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
   const [cartItems, setCartItems] = useState<SaleItem[]>([]);
   const [discountAmount, setDiscountAmount] = useState<number>(0);
@@ -220,6 +221,7 @@ export const SalesModule: React.FC = () => {
     setAmountPaid(0);
     setSelectedCustomerId('');
     setSalesNotes('');
+    setSaleDate(getTodayDateString());
   };
 
   const handleCheckout = async (e: React.FormEvent) => {
@@ -239,7 +241,7 @@ export const SalesModule: React.FC = () => {
       const newSale = await createSale({
         customer_id: selectedCustomerId || undefined,
         customer_name: customerName,
-        date: new Date().toISOString(),
+        date: formatSelectedDateToIso(saleDate),
         items: cartItems,
         subtotal,
         discount: discountAmount,
@@ -551,7 +553,21 @@ export const SalesModule: React.FC = () => {
                 </div>
               </div>
 
-              {/* Payment Details */}
+              {/* Sale Date & Payment Details */}
+              <div className="pt-2">
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1 flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Sale / Invoice Date</span>
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={saleDate}
+                  onChange={(e) => setSaleDate(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
               <div className="grid grid-cols-2 gap-3 pt-2">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">

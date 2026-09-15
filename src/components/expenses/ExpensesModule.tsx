@@ -26,7 +26,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { Expense, ExpenseCategory, PaymentMethod, RecurringExpense } from '../../types';
-import { formatPKR, formatDate } from '../../utils/formatters';
+import { formatPKR, formatDate, getTodayDateString, formatSelectedDateToIso } from '../../utils/formatters';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 
@@ -74,7 +74,7 @@ export const ExpensesModule: React.FC = () => {
   const [postingCustomMethod, setPostingCustomMethod] = useState<PaymentMethod>('bank');
 
   // Add Expense Form State
-  const [expenseDate, setExpenseDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [expenseDate, setExpenseDate] = useState<string>(getTodayDateString());
   const [expenseCategory, setExpenseCategory] = useState<string>('Rent');
   const [customCategoryInput, setCustomCategoryInput] = useState<string>('');
   const [expenseDescription, setExpenseDescription] = useState<string>('');
@@ -118,7 +118,7 @@ export const ExpensesModule: React.FC = () => {
   const isDateInRange = (dateStr: string) => {
     if (!startDate && !endDate) return true;
     const d = new Date(dateStr);
-    if (startDate && d < new Date(startDate)) return false;
+    if (startDate && d < new Date(startDate + 'T00:00:00')) return false;
     if (endDate && d > new Date(endDate + 'T23:59:59')) return false;
     return true;
   };
@@ -226,7 +226,7 @@ export const ExpensesModule: React.FC = () => {
     try {
       await addExpense(
         {
-          date: expenseDate ? new Date(expenseDate).toISOString() : new Date().toISOString(),
+          date: formatSelectedDateToIso(expenseDate),
           category: finalCategory,
           description: expenseDescription.trim(),
           amount: amt,
@@ -238,6 +238,7 @@ export const ExpensesModule: React.FC = () => {
 
       // Reset form
       setIsAddExpenseModalOpen(false);
+      setExpenseDate(getTodayDateString());
       setExpenseDescription('');
       setExpenseAmount('');
       setCustomCategoryInput('');
@@ -408,7 +409,10 @@ END $$;`;
                 </button>
 
                 <button
-                  onClick={() => setIsAddExpenseModalOpen(true)}
+                  onClick={() => {
+                    setExpenseDate(getTodayDateString());
+                    setIsAddExpenseModalOpen(true);
+                  }}
                   className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-bold text-sm shadow-lg shadow-emerald-500/20 flex items-center gap-2 transition-all active:scale-95"
                 >
                   <Plus className="w-4 h-4 stroke-[3px]" />

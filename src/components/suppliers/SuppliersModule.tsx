@@ -10,15 +10,16 @@ import {
   Trash2, 
   BookOpen,
   DollarSign,
-  Printer,
-  Archive,
-  RefreshCw,
-  Loader2
+  Printer, 
+  Archive, 
+  RefreshCw, 
+  Loader2,
+  Calendar
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { Supplier, PaymentMethod } from '../../types';
-import { formatPKR, formatDate } from '../../utils/formatters';
+import { formatPKR, formatDate, getTodayDateString, formatSelectedDateToIso } from '../../utils/formatters';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 
@@ -63,6 +64,7 @@ export const SuppliersModule: React.FC = () => {
   });
 
   // Outgoing payment state
+  const [paymentDate, setPaymentDate] = useState<string>(getTodayDateString());
   const [paymentAmount, setPaymentAmount] = useState<number>(0);
   const [linkedPurchaseId, setLinkedPurchaseId] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('bank');
@@ -107,6 +109,7 @@ export const SuppliersModule: React.FC = () => {
 
   const openPaymentModal = (s: Supplier) => {
     setSelectedSupplier(s);
+    setPaymentDate(getTodayDateString());
     setLinkedPurchaseId('');
     setPaymentAmount(s.current_balance > 0 ? s.current_balance : 0);
     setPaymentRef('');
@@ -153,10 +156,11 @@ export const SuppliersModule: React.FC = () => {
         payment_method: paymentMethod,
         transaction_ref: paymentRef,
         notes: paymentNotes || (linkedPurchaseId ? `Payment for PO ${po?.invoice_number}` : 'Supplier balance settlement payment'),
-        date: new Date().toISOString(),
+        date: formatSelectedDateToIso(paymentDate),
       });
 
       setIsPaymentModalOpen(false);
+      setPaymentDate(getTodayDateString());
     } catch (err: any) {
       setSubmitError(err?.message || 'Failed to record payment. Please check connection.');
     } finally {
@@ -621,6 +625,20 @@ export const SuppliersModule: React.FC = () => {
         subtitle={`Settling payable for ${selectedSupplier?.name}`}
       >
         <form onSubmit={handleRecordPayment} className="space-y-4">
+          <div>
+            <label className="block text-xs font-bold text-slate-400 uppercase mb-1 flex items-center gap-1.5">
+              <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Payment Date *</span>
+            </label>
+            <input
+              type="date"
+              required
+              value={paymentDate}
+              onChange={(e) => setPaymentDate(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+            />
+          </div>
+
           {supplierUnpaidPurchases.length > 0 && (
             <div>
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1">

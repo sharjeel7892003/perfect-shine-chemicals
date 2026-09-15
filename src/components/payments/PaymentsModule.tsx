@@ -18,7 +18,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { Payment, PaymentMethod } from '../../types';
-import { formatPKR, formatDate, formatDateTime } from '../../utils/formatters';
+import { formatPKR, formatDate, formatDateTime, getTodayDateString, formatSelectedDateToIso } from '../../utils/formatters';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 
@@ -36,6 +36,7 @@ export const PaymentsModule: React.FC = () => {
   const [isSupplierPayModalOpen, setIsSupplierPayModalOpen] = useState(false);
 
   // Customer Payment Form State
+  const [custPaymentDate, setCustPaymentDate] = useState<string>(getTodayDateString());
   const [selectedCustId, setSelectedCustId] = useState('');
   const [linkedSaleId, setLinkedSaleId] = useState('');
   const [custPayAmount, setCustPayAmount] = useState<number>(0);
@@ -44,6 +45,7 @@ export const PaymentsModule: React.FC = () => {
   const [custPayNotes, setCustPayNotes] = useState('');
 
   // Supplier Payment Form State
+  const [suppPaymentDate, setSuppPaymentDate] = useState<string>(getTodayDateString());
   const [selectedSuppId, setSelectedSuppId] = useState('');
   const [linkedPurchaseId, setLinkedPurchaseId] = useState('');
   const [suppPayAmount, setSuppPayAmount] = useState<number>(0);
@@ -155,7 +157,7 @@ export const PaymentsModule: React.FC = () => {
       payment_method: custPayMethod,
       transaction_ref: custPayRef,
       notes: custPayNotes || (linkedSaleId ? `Settlement for invoice ${sale?.invoice_number}` : 'General customer credit balance settlement'),
-      date: new Date().toISOString(),
+      date: formatSelectedDateToIso(custPaymentDate),
     });
 
     setIsCustomerPayModalOpen(false);
@@ -164,6 +166,7 @@ export const PaymentsModule: React.FC = () => {
     setCustPayAmount(0);
     setCustPayRef('');
     setCustPayNotes('');
+    setCustPaymentDate(getTodayDateString());
   };
 
   // Submit Supplier Payment
@@ -187,7 +190,7 @@ export const PaymentsModule: React.FC = () => {
       payment_method: suppPayMethod,
       transaction_ref: suppPayRef,
       notes: suppPayNotes || (linkedPurchaseId ? `Payment for PO ${po?.invoice_number}` : 'Supplier balance settlement'),
-      date: new Date().toISOString(),
+      date: formatSelectedDateToIso(suppPaymentDate),
     });
 
     setIsSupplierPayModalOpen(false);
@@ -196,6 +199,7 @@ export const PaymentsModule: React.FC = () => {
     setSuppPayAmount(0);
     setSuppPayRef('');
     setSuppPayNotes('');
+    setSuppPaymentDate(getTodayDateString());
   };
 
   // Filtered Vouchers List
@@ -376,7 +380,10 @@ export const PaymentsModule: React.FC = () => {
 
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setIsCustomerPayModalOpen(true)}
+            onClick={() => {
+              setCustPaymentDate(getTodayDateString());
+              setIsCustomerPayModalOpen(true);
+            }}
             className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20 transition-all active:scale-95"
           >
             <Plus className="w-4 h-4 stroke-[3px]" />
@@ -385,7 +392,10 @@ export const PaymentsModule: React.FC = () => {
 
           {canManagePurchases && (
             <button
-              onClick={() => setIsSupplierPayModalOpen(true)}
+              onClick={() => {
+                setSuppPaymentDate(getTodayDateString());
+                setIsSupplierPayModalOpen(true);
+              }}
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-rose-300 text-xs font-semibold border border-rose-500/30 transition-all active:scale-95"
             >
               <ArrowUpRight className="w-4 h-4 text-rose-400" />
@@ -819,23 +829,39 @@ export const PaymentsModule: React.FC = () => {
         subtitle="Collect cash, bank transfer, JazzCash or EasyPaisa against an invoice or account balance"
       >
         <form onSubmit={handleSubmitCustomerPayment} className="space-y-4">
-          <div>
-            <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
-              Select Customer / Client
-            </label>
-            <select
-              required
-              value={selectedCustId}
-              onChange={(e) => handleCustomerSelect(e.target.value)}
-              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 font-semibold"
-            >
-              <option value="">Select customer...</option>
-              {customers.map(c => (
-                <option key={c.id} value={c.id}>
-                  {c.name} ({c.customer_type}) • Total Due: {formatPKR(c.current_balance)}
-                </option>
-              ))}
-            </select>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1 flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Payment Date *</span>
+              </label>
+              <input
+                type="date"
+                required
+                value={custPaymentDate}
+                onChange={(e) => setCustPaymentDate(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Select Customer / Client *
+              </label>
+              <select
+                required
+                value={selectedCustId}
+                onChange={(e) => handleCustomerSelect(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 font-semibold"
+              >
+                <option value="">Select customer...</option>
+                {customers.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.customer_type}) • Total Due: {formatPKR(c.current_balance)}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {selectedCustId && (
@@ -949,23 +975,39 @@ export const PaymentsModule: React.FC = () => {
         subtitle="Disburse funds to chemical or packaging suppliers via Bank, Cash, or Digital wallet"
       >
         <form onSubmit={handleSubmitSupplierPayment} className="space-y-4">
-          <div>
-            <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
-              Select Supplier / Vendor
-            </label>
-            <select
-              required
-              value={selectedSuppId}
-              onChange={(e) => handleSupplierSelect(e.target.value)}
-              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 font-semibold"
-            >
-              <option value="">Select supplier...</option>
-              {suppliers.map(s => (
-                <option key={s.id} value={s.id}>
-                  {s.name} ({s.raw_material_type}) • Total Due: {formatPKR(s.current_balance)}
-                </option>
-              ))}
-            </select>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1 flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Payment Date *</span>
+              </label>
+              <input
+                type="date"
+                required
+                value={suppPaymentDate}
+                onChange={(e) => setSuppPaymentDate(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Select Supplier / Vendor *
+              </label>
+              <select
+                required
+                value={selectedSuppId}
+                onChange={(e) => handleSupplierSelect(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500 font-semibold"
+              >
+                <option value="">Select supplier...</option>
+                {suppliers.map(s => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.raw_material_type}) • Total Due: {formatPKR(s.current_balance)}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {selectedSuppId && (
