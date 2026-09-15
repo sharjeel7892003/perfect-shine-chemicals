@@ -15,6 +15,7 @@ import { PurchasesModule } from './components/purchases/PurchasesModule';
 import { CustomersModule } from './components/customers/CustomersModule';
 import { SuppliersModule } from './components/suppliers/SuppliersModule';
 import { PaymentsModule } from './components/payments/PaymentsModule';
+import { ExpensesModule } from './components/expenses/ExpensesModule';
 import { ReportsModule } from './components/reports/ReportsModule';
 import { UsersModule } from './components/users/UsersModule';
 import { WifiOff, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
@@ -45,6 +46,8 @@ const MainLayout: React.FC = () => {
         return <SuppliersModule />;
       case 'payments':
         return <PaymentsModule />;
+      case 'expenses':
+        return <ExpensesModule />;
       case 'reports':
         return <ReportsModule />;
       case 'users':

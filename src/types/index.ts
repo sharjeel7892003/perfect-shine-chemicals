@@ -241,9 +241,46 @@ export interface StockMovement {
   created_by_name?: string;
 }
 
+export type ExpenseCategory = 
+  | 'Rent' 
+  | 'Electricity' 
+  | 'Labor/Salaries' 
+  | 'Maintenance' 
+  | 'Transport' 
+  | 'Raw Material Handling' 
+  | 'Other'
+  | string;
+
+export interface Expense {
+  id: string;
+  date: string;
+  category: ExpenseCategory;
+  description?: string;
+  amount: number;
+  payment_method: PaymentMethod;
+  recorded_by?: string;
+  recorded_by_name?: string;
+  is_recurring?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface RecurringExpense {
+  id: string;
+  category: ExpenseCategory;
+  description: string;
+  amount: number;
+  payment_method: PaymentMethod;
+  is_active: boolean;
+  last_posted_month?: string; // Format: 'YYYY-MM' e.g. '2026-09'
+  created_by?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface Payment {
   id: string;
-  related_to: 'sale' | 'purchase' | 'customer_balance' | 'supplier_balance';
+  related_to: 'sale' | 'purchase' | 'customer_balance' | 'supplier_balance' | 'expense';
   reference_id?: string;
   reference_no?: string;
   customer_id?: string;
@@ -264,7 +301,7 @@ export interface Payment {
 // ==============================================================================
 export interface DeletionAuditLog {
   id: string;
-  entity_type: 'customer' | 'supplier' | 'product' | 'raw_material' | 'sale' | 'purchase' | 'formulation' | 'staff' | 'production_batch';
+  entity_type: 'customer' | 'supplier' | 'product' | 'raw_material' | 'sale' | 'purchase' | 'formulation' | 'staff' | 'production_batch' | 'expense';
   entity_id: string;
   entity_title: string;
   action_type: 'deleted' | 'archived' | 'reversed_and_deleted' | 'deactivated';
@@ -278,3 +315,4 @@ export interface DeletionAuditLog {
     payments_reversed_count?: number;
   };
 }
+

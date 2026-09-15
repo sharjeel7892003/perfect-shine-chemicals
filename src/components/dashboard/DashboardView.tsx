@@ -11,7 +11,9 @@ import {
   Package,
   Layers,
   FlaskConical,
-  Factory
+  Factory,
+  DollarSign,
+  Receipt
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -35,13 +37,32 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     lowStockRawMaterials,
     totalRawMaterialsValuation,
     totalProductsValuation,
-    productionBatches
+    productionBatches,
+    expenses,
+    thisMonthExpenses
   } = useApp();
   
   const { currentUser, isOwner, canCreateSale, canManagePurchases, canRecordProduction } = useAuth();
 
   // Metrics calculations
   const totalSalesRevenue = sales.reduce((acc, s) => acc + (s.total_amount || 0), 0);
+  const totalCOGS = sales.reduce((acc, s) => 
+    acc + (s.items || []).reduce((iAcc, item) => iAcc + ((item.unit_cost || 0) * (item.quantity || 0)), 0), 0
+  );
+  const grossProfit = totalSalesRevenue - totalCOGS;
+  const totalExpensesAmount = expenses.reduce((acc, e) => acc + Number(e.amount || 0), 0);
+  const netProfit = grossProfit - totalExpensesAmount;
+
+  // This month metrics
+  const currentMonthKey = new Date().toISOString().slice(0, 7);
+  const thisMonthSales = sales.filter(s => s.date && s.date.startsWith(currentMonthKey));
+  const thisMonthRevenue = thisMonthSales.reduce((acc, s) => acc + (s.total_amount || 0), 0);
+  const thisMonthCOGS = thisMonthSales.reduce((acc, s) => 
+    acc + (s.items || []).reduce((iAcc, item) => iAcc + ((item.unit_cost || 0) * (item.quantity || 0)), 0), 0
+  );
+  const thisMonthGrossProfit = thisMonthRevenue - thisMonthCOGS;
+  const thisMonthNetProfit = thisMonthGrossProfit - thisMonthExpenses;
+
   const totalReceivables = customers.reduce((acc, c) => acc + (c.current_balance || 0), 0);
   const totalPayables = suppliers.reduce((acc, s) => acc + (s.current_balance || 0), 0);
   const combinedFactoryValuation = totalProductsValuation + totalRawMaterialsValuation;
@@ -92,7 +113,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
       </div>
 
       {/* KPI Stat Cards Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {/* Sales Revenue */}
         <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 hover:border-slate-700 transition-all">
           <div className="flex items-center justify-between">
@@ -125,7 +146,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           </div>
         </div>
 
-        {/* Raw Materials Inventory Valuation (Phase 3) */}
+        {/* Raw Materials Inventory Valuation */}
         <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 hover:border-slate-700 transition-all">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Raw Material Inventory</span>
@@ -156,6 +177,98 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             <button onClick={() => onNavigate('customers')} className="text-amber-400 hover:underline flex items-center gap-0.5">
               Ledger <ArrowUpRight className="w-3 h-3" />
             </button>
+          </div>
+        </div>
+
+        {/* This Month's Expenses */}
+        <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 hover:border-slate-700 transition-all">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">This Month's Overheads</span>
+            <div className="w-9 h-9 rounded-xl bg-rose-500/10 text-rose-400 flex items-center justify-center">
+              <DollarSign className="w-5 h-5" />
+            </div>
+          </div>
+          <p className="text-2xl font-black text-rose-400 mt-3 font-mono">{formatPKR(thisMonthExpenses)}</p>
+          <div className="flex items-center justify-between text-xs text-slate-400 mt-2">
+            <span>Operating expenses</span>
+            <button onClick={() => onNavigate('expenses')} className="text-rose-400 hover:underline flex items-center gap-0.5 font-medium">
+              Expenses <ArrowUpRight className="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Financial Performance Strip: Gross Profit vs Net Profit (after expenses) */}
+      <div className="p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900 to-emerald-950/30 border border-slate-800 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3 mb-4">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+              Financial Performance • Gross Profit vs. Net Profit
+            </h3>
+          </div>
+          <button
+            onClick={() => onNavigate('reports')}
+            className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1 self-start sm:self-auto"
+          >
+            <span>View Full P&L Statement</span>
+            <ArrowUpRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+          {/* Gross Profit */}
+          <div className="p-3.5 rounded-xl bg-slate-800/60 border border-slate-700/60">
+            <div className="flex items-center justify-between text-slate-400 mb-1">
+              <span className="font-semibold uppercase text-[10px]">Gross Profit (All Time)</span>
+              <span className="text-[10px] text-slate-400">Revenue − COGS</span>
+            </div>
+            <p className="text-xl font-black text-white font-mono">{formatPKR(grossProfit)}</p>
+            <p className="text-[11px] text-slate-400 mt-1">Direct production margin</p>
+          </div>
+
+          {/* Operating Overheads */}
+          <div className="p-3.5 rounded-xl bg-slate-800/60 border border-slate-700/60">
+            <div className="flex items-center justify-between text-slate-400 mb-1">
+              <span className="font-semibold uppercase text-[10px]">Total Operating Expenses</span>
+              <span className="text-[10px] text-rose-400 font-mono">- Overheads</span>
+            </div>
+            <p className="text-xl font-black text-rose-400 font-mono">- {formatPKR(totalExpensesAmount)}</p>
+            <p className="text-[11px] text-slate-400 mt-1">Rent, labor, utilities, maintenance</p>
+          </div>
+
+          {/* Net Profit (All Time) */}
+          <div className={`p-3.5 rounded-xl border ${
+            netProfit >= 0 ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-rose-500/10 border-rose-500/30'
+          }`}>
+            <div className="flex items-center justify-between mb-1">
+              <span className={`font-bold uppercase text-[10px] ${netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                Net Profit (After Expenses)
+              </span>
+              <Badge variant={netProfit >= 0 ? 'emerald' : 'rose'} size="sm">
+                {netProfit >= 0 ? 'Profitable' : 'Deficit'}
+              </Badge>
+            </div>
+            <p className={`text-xl font-black font-mono ${netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {formatPKR(netProfit)}
+            </p>
+            <p className="text-[11px] text-slate-300 mt-1">Gross Profit − Operating Overheads</p>
+          </div>
+
+          {/* This Month's Net Profit */}
+          <div className={`p-3.5 rounded-xl border ${
+            thisMonthNetProfit >= 0 ? 'bg-slate-800/80 border-slate-700' : 'bg-rose-500/10 border-rose-500/20'
+          }`}>
+            <div className="flex items-center justify-between mb-1 text-slate-400">
+              <span className="font-semibold uppercase text-[10px]">This Month's Net Profit</span>
+              <span className="text-[10px] text-emerald-400 font-medium">Current Month</span>
+            </div>
+            <p className={`text-xl font-black font-mono ${thisMonthNetProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {formatPKR(thisMonthNetProfit)}
+            </p>
+            <p className="text-[11px] text-slate-400 mt-1">
+              Gross ({formatPKR(thisMonthGrossProfit)}) − Overheads ({formatPKR(thisMonthExpenses)})
+            </p>
           </div>
         </div>
       </div>

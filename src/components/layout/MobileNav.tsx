@@ -6,7 +6,8 @@ import {
   Truck, 
   FlaskConical,
   Factory,
-  BarChart3 
+  BarChart3,
+  DollarSign
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { ActiveTab } from './Sidebar';
@@ -17,7 +18,7 @@ interface MobileNavProps {
 }
 
 export const MobileNav: React.FC<MobileNavProps> = ({ activeTab, setActiveTab }) => {
-  const { canViewReports, canManagePurchases, canRecordProduction, canManageRawMaterials } = useAuth();
+  const { canViewReports, canManagePurchases, canRecordProduction, canManageRawMaterials, canManageExpenses } = useAuth();
 
   const items = [
     { id: 'dashboard' as ActiveTab, label: 'Home', icon: LayoutDashboard },
@@ -25,6 +26,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({ activeTab, setActiveTab })
     { id: 'inventory' as ActiveTab, label: 'Finished', icon: Package },
     { id: 'raw_materials' as ActiveTab, label: 'Raw Stock', icon: FlaskConical },
     { id: 'production' as ActiveTab, label: 'Production', icon: Factory },
+    ...(canManageExpenses ? [{ id: 'expenses' as ActiveTab, label: 'Expenses', icon: DollarSign }] : []),
     ...(canViewReports ? [{ id: 'reports' as ActiveTab, label: 'Reports', icon: BarChart3 }] : []),
   ];
 

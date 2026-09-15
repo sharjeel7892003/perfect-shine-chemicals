@@ -23,7 +23,7 @@ import { Badge } from '../common/Badge';
 export type ReportType = 'sales' | 'purchases' | 'profit' | 'receivables' | 'payables' | 'valuation';
 
 export const ReportsModule: React.FC = () => {
-  const { sales, purchases, products, customers, suppliers } = useApp();
+  const { sales, purchases, products, customers, suppliers, expenses } = useApp();
   const { isOwner } = useAuth();
 
   const [activeReport, setActiveReport] = useState<ReportType>('sales');
@@ -111,7 +111,7 @@ export const ReportsModule: React.FC = () => {
   const totalPurchaseSpend = filteredPurchases.reduce((acc, p) => acc + p.total_amount, 0);
   const totalPurchasePaid = filteredPurchases.reduce((acc, p) => acc + p.amount_paid, 0);
 
-  // ================= 3. PROFIT REPORT DATA =================
+  // ================= 3. PROFIT & LOSS REPORT DATA =================
   let profitRevenue = 0;
   let profitCOGS = 0;
   const productProfitMap: { [key: string]: { name: string; qtySold: number; revenue: number; cost: number; profit: number } } = {};
@@ -140,7 +140,28 @@ export const ReportsModule: React.FC = () => {
   });
 
   const estimatedGrossProfit = profitRevenue - profitCOGS;
-  const overallMarginPercent = profitRevenue > 0 ? ((estimatedGrossProfit / profitRevenue) * 100).toFixed(1) : '0';
+  const grossMarginPercent = profitRevenue > 0 ? ((estimatedGrossProfit / profitRevenue) * 100).toFixed(1) : '0';
+
+  // Filter Operating Expenses in selected timeframe
+  const filteredOperatingExpenses = expenses.filter(e => isDateInRange(e.date));
+  const totalOperatingExpenses = filteredOperatingExpenses.reduce((acc, e) => acc + Number(e.amount || 0), 0);
+
+  // Group Operating Expenses by Category
+  const expensesByCategoryMap: Record<string, { category: string; amount: number; count: number }> = {};
+  filteredOperatingExpenses.forEach(e => {
+    const cat = e.category || 'Other';
+    if (!expensesByCategoryMap[cat]) {
+      expensesByCategoryMap[cat] = { category: cat, amount: 0, count: 0 };
+    }
+    expensesByCategoryMap[cat].amount += Number(e.amount || 0);
+    expensesByCategoryMap[cat].count += 1;
+  });
+  const sortedExpenseCategories = Object.values(expensesByCategoryMap).sort((a, b) => b.amount - a.amount);
+
+  // NET PROFIT = Gross Profit - Operating Expenses
+  const netProfit = estimatedGrossProfit - totalOperatingExpenses;
+  const netMarginPercent = profitRevenue > 0 ? ((netProfit / profitRevenue) * 100).toFixed(1) : '0';
+
 
   // ================= 4. RECEIVABLES REPORT DATA =================
   const sortedDebtors = [...customers]
@@ -211,7 +232,7 @@ export const ReportsModule: React.FC = () => {
           }`}
         >
           <TrendingUp className="w-4 h-4" />
-          <span>Profit Report</span>
+          <span>Profit & Loss (P&L)</span>
         </button>
 
         <button
@@ -472,32 +493,194 @@ export const ReportsModule: React.FC = () => {
         </div>
       )}
 
-      {/* ================= REPORT 3: PROFIT ESTIMATOR REPORT ================= */}
+      {/* ================= REPORT 3: PROFIT & LOSS STATEMENT (P&L) ================= */}
       {activeReport === 'profit' && (
         <div className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
-              <span className="text-xs font-semibold text-slate-400 uppercase">Sales Revenue</span>
-              <p className="text-2xl font-black text-white mt-2 font-mono">{formatPKR(profitRevenue)}</p>
-              <p className="text-xs text-slate-500 mt-1">Filtered timeframe turnover</p>
+          {/* Executive P&L KPI Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
+            {/* 1. Revenue */}
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">1. Total Revenue</span>
+              <p className="text-xl font-black text-white mt-1.5 font-mono">{formatPKR(profitRevenue)}</p>
+              <p className="text-[11px] text-slate-500 mt-0.5">{filteredSales.length} Sales Invoices</p>
             </div>
 
-            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
-              <span className="text-xs font-semibold text-slate-400 uppercase">Cost of Goods Sold (COGS)</span>
-              <p className="text-2xl font-black text-slate-300 mt-2 font-mono">{formatPKR(profitCOGS)}</p>
-              <p className="text-xs text-slate-500 mt-1">Direct chemical/bottle production cost</p>
+            {/* 2. COGS */}
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">2. Less: COGS</span>
+              <p className="text-xl font-black text-slate-300 mt-1.5 font-mono">- {formatPKR(profitCOGS)}</p>
+              <p className="text-[11px] text-slate-500 mt-0.5">Raw chemicals & bottles</p>
             </div>
 
-            <div className="p-5 rounded-2xl bg-gradient-to-br from-emerald-950 to-slate-900 border border-emerald-500/30">
-              <span className="text-xs font-semibold text-emerald-400 uppercase">Estimated Gross Profit</span>
-              <p className="text-2xl font-black text-emerald-400 mt-2 font-mono">{formatPKR(estimatedGrossProfit)}</p>
-              <p className="text-xs text-emerald-300/80 mt-1">Overall Margin: <strong>{overallMarginPercent}%</strong></p>
+            {/* 3. Gross Profit */}
+            <div className="p-4 rounded-2xl bg-slate-900 border border-emerald-500/30">
+              <span className="text-[11px] font-semibold text-emerald-400 uppercase tracking-wider">3. Gross Profit</span>
+              <p className="text-xl font-black text-emerald-400 mt-1.5 font-mono">{formatPKR(estimatedGrossProfit)}</p>
+              <p className="text-[11px] text-emerald-300/80 mt-0.5">Margin: <strong>{grossMarginPercent}%</strong></p>
+            </div>
+
+            {/* 4. Operating Expenses */}
+            <div className="p-4 rounded-2xl bg-slate-900 border border-rose-500/30">
+              <span className="text-[11px] font-semibold text-rose-400 uppercase tracking-wider">4. Less: Overheads</span>
+              <p className="text-xl font-black text-rose-400 mt-1.5 font-mono">- {formatPKR(totalOperatingExpenses)}</p>
+              <p className="text-[11px] text-rose-300/80 mt-0.5">{filteredOperatingExpenses.length} Expense items</p>
+            </div>
+
+            {/* 5. Net Profit */}
+            <div className={`p-4 rounded-2xl border ${
+              netProfit >= 0 
+                ? 'bg-gradient-to-br from-emerald-950/80 to-slate-900 border-emerald-500/40' 
+                : 'bg-gradient-to-br from-rose-950/80 to-slate-900 border-rose-500/40'
+            }`}>
+              <span className={`text-[11px] font-bold uppercase tracking-wider ${
+                netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'
+              }`}>
+                5. Net Profit (Actual)
+              </span>
+              <p className={`text-xl font-black mt-1.5 font-mono ${
+                netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'
+              }`}>
+                {formatPKR(netProfit)}
+              </p>
+              <p className="text-[11px] text-slate-300 mt-0.5">
+                Net Margin: <strong>{netMarginPercent}%</strong>
+              </p>
             </div>
           </div>
 
+          {/* Formal Income Statement Table */}
+          <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-4">
+              <div>
+                <h3 className="text-base font-extrabold text-white tracking-tight">
+                  Statement of Profit and Loss (Income Statement)
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Accounting summary for Perfect Shine Chemicals manufacturing operations • Lahore
+                </p>
+              </div>
+              <div className="text-right">
+                <span className="text-[11px] text-slate-400 font-mono">
+                  {startDate && endDate 
+                    ? `Period: ${formatDate(startDate)} to ${formatDate(endDate)}`
+                    : 'Period: All Live Records'
+                  }
+                </span>
+              </div>
+            </div>
+
+            {/* Structured Financial Breakdown */}
+            <div className="space-y-4 text-xs">
+              {/* SECTION A: REVENUE */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between font-bold text-white uppercase tracking-wider text-[11px] bg-slate-800/60 p-2.5 rounded-xl">
+                  <span>A. Operating Revenue (Sales Turnover)</span>
+                  <span className="font-mono text-emerald-400 font-black">{formatPKR(profitRevenue)}</span>
+                </div>
+                <div className="px-4 py-1.5 flex items-center justify-between text-slate-400">
+                  <span className="pl-3">• Gross Invoiced Billed Sales ({filteredSales.length} invoices)</span>
+                  <span className="font-mono text-slate-300">{formatPKR(profitRevenue)}</span>
+                </div>
+              </div>
+
+              {/* SECTION B: COST OF GOODS SOLD */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between font-bold text-white uppercase tracking-wider text-[11px] bg-slate-800/60 p-2.5 rounded-xl">
+                  <span>B. Cost of Goods Sold (COGS)</span>
+                  <span className="font-mono text-rose-400 font-black">- {formatPKR(profitCOGS)}</span>
+                </div>
+                <div className="px-4 py-1.5 flex items-center justify-between text-slate-400">
+                  <span className="pl-3">• Direct Chemical Raw Materials & Packaging Consumed</span>
+                  <span className="font-mono text-slate-300">- {formatPKR(profitCOGS)}</span>
+                </div>
+              </div>
+
+              {/* GROSS PROFIT SUB-TOTAL */}
+              <div className="p-3 rounded-xl bg-slate-800/90 border border-slate-700/80 flex items-center justify-between font-bold">
+                <div className="flex items-center gap-2">
+                  <span className="text-white uppercase tracking-wider">Gross Operating Profit</span>
+                  <span className="text-[11px] px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    Gross Margin: {grossMarginPercent}%
+                  </span>
+                </div>
+                <span className="text-base font-black text-emerald-400 font-mono">
+                  {formatPKR(estimatedGrossProfit)}
+                </span>
+              </div>
+
+              {/* SECTION C: OPERATING OVERHEAD EXPENSES */}
+              <div className="space-y-1.5 pt-2">
+                <div className="flex items-center justify-between font-bold text-white uppercase tracking-wider text-[11px] bg-slate-800/60 p-2.5 rounded-xl">
+                  <span>C. Operating Overhead Expenses (Grouped by Category)</span>
+                  <span className="font-mono text-rose-400 font-black">- {formatPKR(totalOperatingExpenses)}</span>
+                </div>
+
+                {sortedExpenseCategories.length === 0 ? (
+                  <div className="px-4 py-3 text-slate-500 italic pl-6">
+                    No operating overhead expenses recorded for this timeframe.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-800/40 pl-3">
+                    {sortedExpenseCategories.map((item) => {
+                      const pctOfExpenses = totalOperatingExpenses > 0 
+                        ? ((item.amount / totalOperatingExpenses) * 100).toFixed(1) 
+                        : '0';
+                      return (
+                        <div key={item.category} className="px-4 py-2 flex items-center justify-between text-slate-300 hover:bg-slate-800/30 transition-colors">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-white">{item.category}</span>
+                            <span className="text-[10px] text-slate-400">({item.count} recorded)</span>
+                            <span className="text-[10px] text-slate-400">• {pctOfExpenses}% of overheads</span>
+                          </div>
+                          <span className="font-mono text-rose-400 font-semibold">
+                            - {formatPKR(item.amount)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* NET PROFIT FINAL TOTAL STATEMENT BANNER */}
+              <div className={`p-5 rounded-2xl border flex items-center justify-between mt-6 ${
+                netProfit >= 0 
+                  ? 'bg-gradient-to-r from-emerald-950 via-slate-900 to-slate-900 border-emerald-500/50 shadow-xl shadow-emerald-500/5' 
+                  : 'bg-gradient-to-r from-rose-950 via-slate-900 to-slate-900 border-rose-500/50 shadow-xl shadow-rose-500/5'
+              }`}>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-extrabold uppercase tracking-wider text-white">
+                      {netProfit >= 0 ? 'Net Operating Profit (After Expenses)' : 'Net Operating Loss'}
+                    </span>
+                    <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold ${
+                      netProfit >= 0 
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' 
+                        : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                    }`}>
+                      Net Margin: {netMarginPercent}%
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Calculated as: Total Revenue ({formatPKR(profitRevenue)}) − COGS ({formatPKR(profitCOGS)}) − Operating Overheads ({formatPKR(totalOperatingExpenses)})
+                  </p>
+                </div>
+
+                <div className="text-right">
+                  <span className={`text-2xl sm:text-3xl font-black font-mono tracking-tight ${
+                    netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                  }`}>
+                    {formatPKR(netProfit)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Detailed Product Margin Contribution Breakdown */}
           <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6">
-            <h3 className="text-base font-bold text-white mb-4">
-              Profit Analysis by Chemical Product <span className="text-xs font-normal text-slate-400">(Formula: [Selling Price − Cost Price] × Qty Sold)</span>
+            <h3 className="text-sm font-bold text-white mb-3">
+              Product-Level Gross Margin Contribution Breakdown <span className="text-xs font-normal text-slate-400">(Before Operating Overheads)</span>
             </h3>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
@@ -505,23 +688,23 @@ export const ReportsModule: React.FC = () => {
                   <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
                     <th className="py-3 px-3">Chemical Product</th>
                     <th className="py-3 px-3 text-center">Units Sold</th>
-                    <th className="py-3 px-3 text-right">Gross Invoiced</th>
-                    <th className="py-3 px-3 text-right">Production Cost</th>
-                    <th className="py-3 px-3 text-right">Estimated Profit</th>
-                    <th className="py-3 px-3 text-right">Margin %</th>
+                    <th className="py-3 px-3 text-right">Invoiced Revenue</th>
+                    <th className="py-3 px-3 text-right">Production Cost (COGS)</th>
+                    <th className="py-3 px-3 text-right">Gross Profit</th>
+                    <th className="py-3 px-3 text-right">Gross Margin %</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60">
                   {Object.values(productProfitMap).length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-slate-500">No product sales in the selected period</td>
+                      <td colSpan={6} className="py-8 text-center text-slate-500">No chemical product sales in the selected period</td>
                     </tr>
                   ) : (
                     Object.values(productProfitMap).map((item, idx) => {
                       const margin = item.revenue > 0 ? ((item.profit / item.revenue) * 100).toFixed(1) : '0';
                       return (
                         <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
-                          <td className="py-3 px-3 font-bold text-white text-sm">{item.name}</td>
+                          <td className="py-3 px-3 font-bold text-white">{item.name}</td>
                           <td className="py-3 px-3 text-center font-mono font-bold text-slate-300">{item.qtySold}</td>
                           <td className="py-3 px-3 text-right font-mono text-white">{formatPKR(item.revenue)}</td>
                           <td className="py-3 px-3 text-right font-mono text-slate-400">{formatPKR(item.cost)}</td>

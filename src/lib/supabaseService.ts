@@ -12,9 +12,12 @@ import {
   StockMovement, 
   RawMaterialMovement, 
   DeletionAuditLog, 
-  Profile 
+  Profile,
+  Expense,
+  RecurringExpense
 } from '../types';
 import { ensureUUID, isValidUUID } from '../utils/uuid';
+
 
 function assertOnline() {
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -44,7 +47,9 @@ export const supabaseService = {
         smRes,
         rmmRes,
         logsRes,
-        profRes
+        profRes,
+        expRes,
+        recExpRes
       ] = await Promise.all([
         supabase.from('products').select('*').order('created_at', { ascending: false }),
         supabase.from('customers').select('*').order('created_at', { ascending: false }),
@@ -58,8 +63,11 @@ export const supabaseService = {
         supabase.from('stock_movements').select('*').order('date', { ascending: false }),
         supabase.from('raw_material_movements').select('*').order('date', { ascending: false }),
         supabase.from('deletion_audit_logs').select('*').order('date', { ascending: false }),
-        supabase.from('profiles').select('*').order('created_at', { ascending: false })
+        supabase.from('profiles').select('*').order('created_at', { ascending: false }),
+        Promise.resolve(supabase.from('expenses').select('*').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
+        Promise.resolve(supabase.from('recurring_expenses').select('*').order('created_at', { ascending: false })).catch(() => ({ data: [], error: null } as any))
       ]);
+
 
       // Maps for enriching relational names in memory for UI presentation
       const prodMap = new Map((prodRes.data || []).map((p: any) => [p.id, p.name]));
@@ -127,6 +135,8 @@ export const supabaseService = {
         rawMaterialMovements: (normalizedRawMovements as RawMaterialMovement[]) || [],
         deletionLogs: (logsRes.data as DeletionAuditLog[]) || [],
         profiles: (profRes.data as Profile[]) || [],
+        expenses: (expRes?.data as Expense[]) || [],
+        recurringExpenses: (recExpRes?.data as RecurringExpense[]) || [],
       };
     } catch (err: any) {
       console.error('Failed to fetch from Supabase:', err);
@@ -603,6 +613,17 @@ export const supabaseService = {
     return (data as Payment) || payment;
   },
 
+  async deletePayment(id: string): Promise<void> {
+    if (!isSupabaseConfigured || !supabase || !isValidUUID(id)) return;
+    assertOnline();
+
+    const { error } = await supabase.from('payments').delete().eq('id', id);
+    if (error) {
+      console.error('Supabase deletePayment error:', error);
+      throw new Error(`Payment deletion failed: ${error.message}`);
+    }
+  },
+
   // ============================================================================
   // STOCK MOVEMENTS
   // ============================================================================
@@ -744,6 +765,89 @@ export const supabaseService = {
   },
 
   // ============================================================================
+  // EXPENSES (OVERHEAD COSTS)
+  // ============================================================================
+  async upsertExpense(expense: Expense): Promise<Expense> {
+    if (!isSupabaseConfigured || !supabase) return expense;
+    assertOnline();
+
+    const validId = ensureUUID(expense.id);
+    expense.id = validId;
+
+    const payload = {
+      id: validId,
+      date: expense.date || new Date().toISOString(),
+      category: expense.category,
+      description: expense.description || '',
+      amount: Number(expense.amount || 0),
+      payment_method: expense.payment_method || 'cash',
+      recorded_by: expense.recorded_by || null,
+      recorded_by_name: expense.recorded_by_name || '',
+      is_recurring: Boolean(expense.is_recurring),
+      updated_at: new Date().toISOString()
+    };
+
+    const { data, error } = await supabase.from('expenses').upsert(payload).select().single();
+    if (error) {
+      console.error('Supabase upsertExpense error:', error);
+      throw new Error(`Expense database write failed: ${error.message} (${error.code || 'PGRST'})`);
+    }
+    return (data as Expense) || expense;
+  },
+
+  async deleteExpense(id: string): Promise<void> {
+    if (!isSupabaseConfigured || !supabase || !isValidUUID(id)) return;
+    assertOnline();
+
+    const { error } = await supabase.from('expenses').delete().eq('id', id);
+    if (error) {
+      console.error('Supabase deleteExpense error:', error);
+      throw new Error(`Expense deletion failed: ${error.message}`);
+    }
+  },
+
+  // ============================================================================
+  // RECURRING EXPENSES TEMPLATES
+  // ============================================================================
+  async upsertRecurringExpense(item: RecurringExpense): Promise<RecurringExpense> {
+    if (!isSupabaseConfigured || !supabase) return item;
+    assertOnline();
+
+    const validId = ensureUUID(item.id);
+    item.id = validId;
+
+    const payload = {
+      id: validId,
+      category: item.category,
+      description: item.description,
+      amount: Number(item.amount || 0),
+      payment_method: item.payment_method || 'cash',
+      is_active: item.is_active !== false,
+      last_posted_month: item.last_posted_month || null,
+      created_by: item.created_by || null,
+      updated_at: new Date().toISOString()
+    };
+
+    const { data, error } = await supabase.from('recurring_expenses').upsert(payload).select().single();
+    if (error) {
+      console.error('Supabase upsertRecurringExpense error:', error);
+      throw new Error(`Recurring expense database write failed: ${error.message} (${error.code || 'PGRST'})`);
+    }
+    return (data as RecurringExpense) || item;
+  },
+
+  async deleteRecurringExpense(id: string): Promise<void> {
+    if (!isSupabaseConfigured || !supabase || !isValidUUID(id)) return;
+    assertOnline();
+
+    const { error } = await supabase.from('recurring_expenses').delete().eq('id', id);
+    if (error) {
+      console.error('Supabase deleteRecurringExpense error:', error);
+      throw new Error(`Recurring expense deletion failed: ${error.message}`);
+    }
+  },
+
+  // ============================================================================
   // RESET ALL DATABASE DATA (CLEAN SLATE IN REVERSE FOREIGN KEY ORDER)
   // ============================================================================
   async resetAllDatabaseData(): Promise<void> {
@@ -755,6 +859,8 @@ export const supabaseService = {
     const tablesToWipe = [
       'deletion_audit_logs',
       'payments',
+      'expenses',
+      'recurring_expenses',
       'stock_movements',
       'raw_material_movements',
       'sale_items',

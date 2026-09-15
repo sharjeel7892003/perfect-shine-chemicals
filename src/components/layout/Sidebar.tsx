@@ -14,7 +14,8 @@ import {
   RotateCcw,
   FlaskConical,
   Layers,
-  Factory
+  Factory,
+  DollarSign
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useApp } from '../../context/AppContext';
@@ -31,6 +32,7 @@ export type ActiveTab =
   | 'customers' 
   | 'suppliers' 
   | 'payments' 
+  | 'expenses'
   | 'reports' 
   | 'users';
 
@@ -48,7 +50,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
     canManageUsers,
     canManageFormulations,
     canRecordProduction,
-    canManageRawMaterials
+    canManageRawMaterials,
+    canManageExpenses
   } = useAuth();
   
   const { lowStockProducts, lowStockRawMaterials, resetToDefaultData } = useApp();
@@ -80,6 +83,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
     { id: 'customers' as ActiveTab, label: 'Customers & Ledgers', icon: Users, visible: true },
     { id: 'suppliers' as ActiveTab, label: 'Suppliers & Vendors', icon: Building2, visible: canManagePurchases },
     { id: 'payments' as ActiveTab, label: 'Payments & Cashbook', icon: CreditCard, visible: canManagePurchases },
+    { id: 'expenses' as ActiveTab, label: 'Expenses & Overheads', icon: DollarSign, visible: canManageExpenses || canViewReports },
     { id: 'reports' as ActiveTab, label: 'Financial & Reports', icon: BarChart3, visible: canViewReports },
     { id: 'users' as ActiveTab, label: 'Staff & Roles', icon: ShieldCheck, visible: canManageUsers },
   ];

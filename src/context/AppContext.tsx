@@ -15,9 +15,12 @@ import {
   RawMaterialMovementType,
   PackSize,
   DeletionAuditLog,
-  Profile
+  Profile,
+  Expense,
+  RecurringExpense,
+  PaymentMethod
 } from '../types';
-import { generateInvoiceNumber } from '../utils/formatters';
+import { generateInvoiceNumber, formatPKR } from '../utils/formatters';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { supabaseService } from '../lib/supabaseService';
 import { generateId } from '../utils/uuid';
@@ -35,6 +38,8 @@ interface AppContextType {
   purchases: Purchase[];
   stockMovements: StockMovement[];
   payments: Payment[];
+  expenses: Expense[];
+  recurringExpenses: RecurringExpense[];
   deletionLogs: DeletionAuditLog[];
   
   // Cloud & Connectivity Status
@@ -48,6 +53,8 @@ interface AppContextType {
   lowStockRawMaterials: RawMaterial[];
   totalRawMaterialsValuation: number;
   totalProductsValuation: number;
+  thisMonthExpenses: number;
+  totalExpenses: number;
 
   // Raw Materials Actions
   addRawMaterial: (material: Omit<RawMaterial, 'id' | 'created_at'>) => Promise<RawMaterial>;
@@ -126,6 +133,15 @@ interface AppContextType {
   }>;
   
   recordPayment: (paymentData: Omit<Payment, 'id' | 'created_at'>) => Promise<Payment>;
+  deletePayment: (paymentId: string) => Promise<void>;
+
+  // Expense Actions
+  addExpense: (expenseData: Omit<Expense, 'id' | 'created_at'>, user: Profile) => Promise<Expense>;
+  deleteExpense: (id: string, user: Profile) => Promise<{ success: boolean; message: string }>;
+  addRecurringExpense: (data: Omit<RecurringExpense, 'id' | 'created_at'>) => Promise<RecurringExpense>;
+  updateRecurringExpense: (id: string, updates: Partial<RecurringExpense>) => Promise<RecurringExpense>;
+  deleteRecurringExpense: (id: string) => Promise<void>;
+  confirmAndPostRecurringExpense: (recurringId: string, customAmount?: number, customPaymentMethod?: PaymentMethod, user?: Profile) => Promise<Expense>;
 
   // Helper
   resetToDefaultData: () => Promise<void>;
@@ -160,6 +176,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [recurringExpenses, setRecurringExpenses] = useState<RecurringExpense[]>([]);
   const [deletionLogs, setDeletionLogs] = useState<DeletionAuditLog[]>([]);
 
   // Cloud status states
@@ -201,6 +219,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setPurchases(cloudData.purchases || []);
         setStockMovements(cloudData.stockMovements || []);
         setPayments(cloudData.payments || []);
+        setExpenses(cloudData.expenses || []);
+        setRecurringExpenses(cloudData.recurringExpenses || []);
         setDeletionLogs(cloudData.deletionLogs || []);
       }
     } catch (err: any) {
@@ -268,6 +288,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const totalProductsValuation = products
     .filter(p => p.is_active && !p.is_archived)
     .reduce((acc, p) => acc + (Number(p.current_stock || 0) * Number(p.cost_price || 0)), 0);
+
+  // Derived expenses metrics
+  const currentMonthPrefix = new Date().toISOString().slice(0, 7); // 'YYYY-MM'
+  const thisMonthExpenses = expenses
+    .filter(e => e.date && e.date.startsWith(currentMonthPrefix))
+    .reduce((acc, e) => acc + Number(e.amount || 0), 0);
+
+  const totalExpenses = expenses.reduce((acc, e) => acc + Number(e.amount || 0), 0);
 
   // ==============================================================================
   // RAW MATERIALS ACTIONS (SUPABASE-FIRST)
@@ -1440,6 +1468,191 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return savedPayment;
   };
 
+  const deletePayment = async (paymentId: string): Promise<void> => {
+    await supabaseService.deletePayment(paymentId);
+    setPayments(prev => prev.filter(p => p.id !== paymentId));
+  };
+
+  // ==============================================================================
+  // EXPENSES ACTIONS (SUPABASE-FIRST + AUTOMATIC CASHBOOK OUTFLOW TRACKING)
+  // ==============================================================================
+  const addExpense = async (
+    expenseData: Omit<Expense, 'id' | 'created_at'>, 
+    user: Profile
+  ): Promise<Expense> => {
+    const newExpenseId = generateId();
+    const newExpense: Expense = {
+      ...expenseData,
+      id: newExpenseId,
+      amount: Number(expenseData.amount || 0),
+      recorded_by: user.id,
+      recorded_by_name: user.name,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    const savedExpense = await supabaseService.upsertExpense(newExpense);
+    setExpenses(prev => [savedExpense, ...prev.filter(e => e.id !== savedExpense.id)]);
+
+    // Automatically log outgoing payment in Cash Book (payments table) so all factory money out is tracked together
+    const paymentDesc = savedExpense.description 
+      ? `${savedExpense.category}: ${savedExpense.description}` 
+      : `Operating Expense (${savedExpense.category})`;
+
+    const expensePayment: Payment = {
+      id: generateId(),
+      related_to: 'expense',
+      reference_id: savedExpense.id,
+      reference_no: savedExpense.category,
+      amount: Number(savedExpense.amount),
+      payment_method: savedExpense.payment_method,
+      notes: paymentDesc,
+      date: savedExpense.date || new Date().toISOString(),
+      created_by: user.name,
+      created_at: new Date().toISOString(),
+    };
+    const savedPayment = await supabaseService.upsertPayment(expensePayment);
+    setPayments(prev => [savedPayment, ...prev.filter(p => p.id !== savedPayment.id)]);
+
+    // If marked as recurring, ensure a template is saved or updated in recurring_expenses
+    if (savedExpense.is_recurring) {
+      const monthKey = savedExpense.date ? savedExpense.date.slice(0, 7) : new Date().toISOString().slice(0, 7);
+      const existing = recurringExpenses.find(
+        r => r.category.toLowerCase() === savedExpense.category.toLowerCase() && 
+             r.description.toLowerCase() === (savedExpense.description || '').toLowerCase()
+      );
+      if (!existing) {
+        const rec: RecurringExpense = {
+          id: generateId(),
+          category: savedExpense.category,
+          description: savedExpense.description || `${savedExpense.category} Monthly Overhead`,
+          amount: savedExpense.amount,
+          payment_method: savedExpense.payment_method,
+          is_active: true,
+          last_posted_month: monthKey,
+          created_by: user.name,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        const savedRec = await supabaseService.upsertRecurringExpense(rec);
+        setRecurringExpenses(prev => [savedRec, ...prev]);
+      } else {
+        const updatedRec: RecurringExpense = { 
+          ...existing, 
+          last_posted_month: monthKey, 
+          amount: savedExpense.amount,
+          updated_at: new Date().toISOString() 
+        };
+        await supabaseService.upsertRecurringExpense(updatedRec);
+        setRecurringExpenses(prev => prev.map(r => r.id === existing.id ? updatedRec : r));
+      }
+    }
+
+    return savedExpense;
+  };
+
+  const deleteExpense = async (id: string, user: Profile): Promise<{ success: boolean; message: string }> => {
+    const target = expenses.find(e => e.id === id);
+    if (!target) return { success: false, message: 'Expense not found.' };
+
+    await supabaseService.deleteExpense(id);
+    setExpenses(prev => prev.filter(e => e.id !== id));
+
+    // Also reverse and remove the associated cash outflow voucher in payments table
+    const associatedPayment = payments.find(p => p.related_to === 'expense' && p.reference_id === id);
+    if (associatedPayment) {
+      await supabaseService.deletePayment(associatedPayment.id);
+      setPayments(prev => prev.filter(p => p.id !== associatedPayment.id));
+    }
+
+    await addDeletionLogEntry({
+      entity_type: 'expense',
+      entity_id: id,
+      entity_title: `${target.category} - ${formatPKR(target.amount)}`,
+      action_type: 'deleted',
+      impact_summary: `Deleted operating expense "${target.category}" (PKR ${target.amount}). Outgoing cash voucher reversed.`,
+      performed_by: user.name,
+      performed_by_role: user.role,
+    });
+
+    return {
+      success: true,
+      message: `Expense "${target.category}" (${formatPKR(target.amount)}) removed and cash voucher reversed.`
+    };
+  };
+
+  const addRecurringExpense = async (data: Omit<RecurringExpense, 'id' | 'created_at'>): Promise<RecurringExpense> => {
+    const newRec: RecurringExpense = {
+      ...data,
+      id: generateId(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    const saved = await supabaseService.upsertRecurringExpense(newRec);
+    setRecurringExpenses(prev => [saved, ...prev.filter(r => r.id !== saved.id)]);
+    return saved;
+  };
+
+  const updateRecurringExpense = async (id: string, updates: Partial<RecurringExpense>): Promise<RecurringExpense> => {
+    const target = recurringExpenses.find(r => r.id === id);
+    if (!target) throw new Error('Recurring expense template not found');
+    const updated = { ...target, ...updates, updated_at: new Date().toISOString() };
+    const saved = await supabaseService.upsertRecurringExpense(updated);
+    setRecurringExpenses(prev => prev.map(r => r.id === id ? saved : r));
+    return saved;
+  };
+
+  const deleteRecurringExpense = async (id: string): Promise<void> => {
+    await supabaseService.deleteRecurringExpense(id);
+    setRecurringExpenses(prev => prev.filter(r => r.id !== id));
+  };
+
+  const confirmAndPostRecurringExpense = async (
+    recurringId: string, 
+    customAmount?: number, 
+    customPaymentMethod?: PaymentMethod,
+    user?: Profile
+  ): Promise<Expense> => {
+    const rec = recurringExpenses.find(r => r.id === recurringId);
+    if (!rec) throw new Error('Recurring expense template not found');
+
+    const currentUserProfile = user || {
+      id: 'system',
+      name: 'Accounts Staff',
+      email: '',
+      role: 'accounts_staff',
+      is_active: true,
+      created_at: new Date().toISOString()
+    };
+
+    const now = new Date();
+    const currentMonthKey = now.toISOString().slice(0, 7); // 'YYYY-MM'
+
+    const expensePayload: Omit<Expense, 'id' | 'created_at'> = {
+      date: now.toISOString(),
+      category: rec.category,
+      description: `${rec.description} (${now.toLocaleString('default', { month: 'long', year: 'numeric' })})`,
+      amount: customAmount !== undefined ? customAmount : rec.amount,
+      payment_method: customPaymentMethod || rec.payment_method || 'bank',
+      is_recurring: true,
+      recorded_by: currentUserProfile.id,
+      recorded_by_name: currentUserProfile.name,
+    };
+
+    const savedExpense = await addExpense(expensePayload, currentUserProfile);
+
+    // Update last_posted_month so reminder doesn't prompt again for this calendar month
+    const updatedRec: RecurringExpense = {
+      ...rec,
+      last_posted_month: currentMonthKey,
+      updated_at: now.toISOString()
+    };
+    await supabaseService.upsertRecurringExpense(updatedRec);
+    setRecurringExpenses(prev => prev.map(r => r.id === rec.id ? updatedRec : r));
+
+    return savedExpense;
+  };
+
   // Helper: Reset / Clean Slate
   const resetToDefaultData = async () => {
     try {
@@ -1451,7 +1664,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const keys = [
         'psc_products', 'psc_raw_materials', 'psc_formulations', 'psc_production_batches',
         'psc_raw_movements', 'psc_customers', 'psc_suppliers', 'psc_sales', 'psc_purchases',
-        'psc_stock_movements', 'psc_payments', 'psc_deletion_logs', 'psc_users'
+        'psc_stock_movements', 'psc_payments', 'psc_expenses', 'psc_recurring_expenses', 'psc_deletion_logs', 'psc_users'
       ];
       keys.forEach(k => localStorage.removeItem(k));
     }
@@ -1472,6 +1685,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         purchases,
         stockMovements,
         payments,
+        expenses,
+        recurringExpenses,
         deletionLogs,
         isLoadingCloudData,
         cloudSyncError,
@@ -1481,6 +1696,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         lowStockRawMaterials,
         totalRawMaterialsValuation,
         totalProductsValuation,
+        thisMonthExpenses,
+        totalExpenses,
         addRawMaterial,
         updateRawMaterial,
         deleteOrArchiveRawMaterial,
@@ -1518,6 +1735,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createPurchase,
         deletePurchaseInvoice,
         recordPayment,
+        deletePayment,
+        addExpense,
+        deleteExpense,
+        addRecurringExpense,
+        updateRecurringExpense,
+        deleteRecurringExpense,
+        confirmAndPostRecurringExpense,
         resetToDefaultData,
       }}
     >

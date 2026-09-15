@@ -237,6 +237,35 @@ CREATE TABLE IF NOT EXISTS public.deletion_audit_logs (
 
 ALTER TABLE public.deletion_audit_logs ADD COLUMN IF NOT EXISTS reversal_details JSONB DEFAULT '{}'::jsonb;
 
+-- 14. EXPENSES TABLE
+CREATE TABLE IF NOT EXISTS public.expenses (
+    id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    category TEXT NOT NULL,
+    description TEXT,
+    amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    payment_method TEXT NOT NULL DEFAULT 'cash',
+    recorded_by TEXT,
+    recorded_by_name TEXT,
+    is_recurring BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 15. RECURRING EXPENSES TEMPLATES
+CREATE TABLE IF NOT EXISTS public.recurring_expenses (
+    id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    category TEXT NOT NULL,
+    description TEXT NOT NULL,
+    amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    payment_method TEXT NOT NULL DEFAULT 'cash',
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    last_posted_month TEXT,
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ==============================================================================
 -- PERMISSIONS & ROW LEVEL SECURITY (RLS) POLICIES
 -- ==============================================================================
@@ -246,15 +275,36 @@ ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.raw_materials ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.product_formulations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.formulation_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.production_batches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.raw_material_movements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.suppliers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sales ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.sale_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.purchases ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.purchase_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.stock_movements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.deletion_audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.recurring_expenses ENABLE ROW LEVEL SECURITY;
+
+-- Dynamic safety: Automatically enable RLS on every table in the public schema
+DO $$ 
+DECLARE
+  tbl text;
+BEGIN
+  FOR tbl IN 
+    SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+  LOOP
+    BEGIN
+      EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', tbl);
+    EXCEPTION WHEN OTHERS THEN
+      NULL;
+    END;
+  END LOOP;
+END $$;
 
 -- 2. Helper function to extract current user role from request headers or auth session
 CREATE OR REPLACE FUNCTION public.current_user_role()
@@ -388,6 +438,18 @@ CREATE POLICY "Payments write" ON public.payments FOR ALL
   USING (public.current_user_role() IN ('owner', 'admin', 'accountant', 'sales_staff'))
   WITH CHECK (public.current_user_role() IN ('owner', 'admin', 'accountant', 'sales_staff'));
 
+-- EXPENSES (OVERHEAD COSTS)
+CREATE POLICY "Expenses read" ON public.expenses FOR SELECT USING (true);
+CREATE POLICY "Expenses manage" ON public.expenses FOR ALL 
+  USING (public.current_user_role() IN ('owner', 'admin', 'accountant', 'accounts_staff'))
+  WITH CHECK (public.current_user_role() IN ('owner', 'admin', 'accountant', 'accounts_staff'));
+
+-- RECURRING EXPENSES TEMPLATES
+CREATE POLICY "Recurring expenses read" ON public.recurring_expenses FOR SELECT USING (true);
+CREATE POLICY "Recurring expenses manage" ON public.recurring_expenses FOR ALL 
+  USING (public.current_user_role() IN ('owner', 'admin', 'accountant', 'accounts_staff'))
+  WITH CHECK (public.current_user_role() IN ('owner', 'admin', 'accountant', 'accounts_staff'));
+
 -- DELETION AUDIT LOGS
 CREATE POLICY "Audit logs read" ON public.deletion_audit_logs FOR SELECT 
   USING (public.current_user_role() IN ('owner', 'admin'));
@@ -427,9 +489,12 @@ BEGIN
       public.stock_movements,
       public.payments,
       public.deletion_audit_logs,
-      public.profiles;
+      public.profiles,
+      public.expenses,
+      public.recurring_expenses;
   EXCEPTION WHEN OTHERS THEN
     NULL;
   END;
 END $$;
+
 

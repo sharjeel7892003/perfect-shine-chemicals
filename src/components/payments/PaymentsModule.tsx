@@ -63,7 +63,7 @@ export const PaymentsModule: React.FC = () => {
     .reduce((acc, p) => acc + p.amount, 0);
 
   const totalOutflow = payments
-    .filter(p => p.related_to === 'purchase' || p.related_to === 'supplier_balance')
+    .filter(p => p.related_to === 'purchase' || p.related_to === 'supplier_balance' || p.related_to === 'expense')
     .reduce((acc, p) => acc + p.amount, 0);
 
   const netCashflow = totalInflow - totalOutflow;
@@ -211,7 +211,8 @@ export const PaymentsModule: React.FC = () => {
     const matchesType = 
       typeFilter === 'all' || 
       (typeFilter === 'inflow' && (p.related_to === 'sale' || p.related_to === 'customer_balance')) ||
-      (typeFilter === 'outflow' && (p.related_to === 'purchase' || p.related_to === 'supplier_balance'));
+      (typeFilter === 'outflow' && (p.related_to === 'purchase' || p.related_to === 'supplier_balance' || p.related_to === 'expense')) ||
+      (typeFilter === 'expense' && p.related_to === 'expense');
 
     return matchesSearch && matchesChannel && matchesType;
   });
@@ -496,7 +497,8 @@ export const PaymentsModule: React.FC = () => {
                 >
                   <option value="all">All Inflow & Outflow</option>
                   <option value="inflow">Inflow (Customer Receipts)</option>
-                  <option value="outflow">Outflow (Supplier Payments)</option>
+                  <option value="outflow">All Outflow (Suppliers & Overheads)</option>
+                  <option value="expense">Operating Overheads Only</option>
                 </select>
 
                 <select
@@ -520,7 +522,7 @@ export const PaymentsModule: React.FC = () => {
                 <thead>
                   <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
                     <th className="py-3 px-3">Date & Time</th>
-                    <th className="py-3 px-3">Party (Customer / Supplier)</th>
+                    <th className="py-3 px-3">Party / Account</th>
                     <th className="py-3 px-3">Transaction Type</th>
                     <th className="py-3 px-3">Channel / Method</th>
                     <th className="py-3 px-3">Reference / Notes</th>
@@ -537,14 +539,21 @@ export const PaymentsModule: React.FC = () => {
                   ) : (
                     filteredPayments.map((p) => {
                       const isInflow = p.related_to === 'sale' || p.related_to === 'customer_balance';
-                      const partyName = p.customer_name || p.supplier_name || 'Walk-in Retail';
+                      const isExpense = p.related_to === 'expense';
+                      const partyName = isExpense 
+                        ? `Overhead: ${p.reference_no || 'Expense'}` 
+                        : (p.customer_name || p.supplier_name || 'Walk-in Retail');
                       return (
                         <tr key={p.id} className="hover:bg-slate-800/40 transition-colors">
                           <td className="py-3 px-3 text-slate-400 font-mono">{formatDateTime(p.date)}</td>
-                          <td className="py-3 px-3 font-bold text-white">{partyName}</td>
+                          <td className="py-3 px-3 font-bold text-white">
+                            <span className={isExpense ? 'text-amber-300' : 'text-white'}>
+                              {partyName}
+                            </span>
+                          </td>
                           <td className="py-3 px-3 capitalize">
-                            <Badge variant={isInflow ? 'emerald' : 'rose'}>
-                              {isInflow ? 'Receipt (+)' : 'Disbursement (-)'}
+                            <Badge variant={isExpense ? 'amber' : (isInflow ? 'emerald' : 'rose')}>
+                              {isExpense ? 'Expense (-)' : (isInflow ? 'Receipt (+)' : 'Disbursement (-)')}
                             </Badge>
                           </td>
                           <td className="py-3 px-3 capitalize text-slate-300 font-medium">

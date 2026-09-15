@@ -32,6 +32,7 @@ interface AuthContextType {
   canManageFormulations: boolean;
   canRecordProduction: boolean;
   canManageRawMaterials: boolean;
+  canManageExpenses: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -197,6 +198,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const canManageFormulations = role === 'owner';
   const canRecordProduction = role === 'owner' || role === 'general_staff' || role === 'accounts_staff';
   const canManageRawMaterials = role === 'owner' || role === 'accounts_staff' || role === 'general_staff';
+  const canManageExpenses = role === 'owner' || role === 'accounts_staff';
 
   return (
     <AuthContext.Provider
@@ -220,6 +222,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         canManageFormulations,
         canRecordProduction,
         canManageRawMaterials,
+        canManageExpenses,
       }}
     >
       {children}
