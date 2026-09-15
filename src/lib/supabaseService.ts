@@ -92,7 +92,7 @@ export const supabaseService = {
       const normalizedSales = (salesRes.data || []).map((s: any) => ({
         ...s,
         items: s.sale_items || [],
-        salesperson_name: s.salesperson_id ? (profMap.get(s.salesperson_id) || s.salesperson_name || 'Staff') : (s.salesperson_name || 'Staff')
+        salesperson_name: s.salesperson_id ? (profMap.get(s.salesperson_id) || 'Staff') : 'Staff'
       }));
 
       // 4. Normalized Purchases (extract purchase_items into .items)
@@ -456,8 +456,7 @@ export const supabaseService = {
       amount_paid: Number(sale.amount_paid || 0),
       payment_status: sale.payment_status || 'unpaid',
       payment_method: sale.payment_method || 'cash',
-      salesperson_id: isValidUUID(sale.salesperson_id) ? sale.salesperson_id : (sale.salesperson_id || null),
-      salesperson_name: sale.salesperson_name || null,
+      salesperson_id: isValidUUID(sale.salesperson_id) ? sale.salesperson_id : null,
       notes: sale.notes || ''
     };
 

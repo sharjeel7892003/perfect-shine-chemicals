@@ -249,7 +249,6 @@ export const SalesModule: React.FC = () => {
         payment_status: paymentStatus,
         payment_method: paymentMethod,
         salesperson_id: currentUser.id,
-        salesperson_name: currentUser.name,
         notes: salesNotes,
       });
 

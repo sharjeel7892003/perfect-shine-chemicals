@@ -166,13 +166,11 @@ CREATE TABLE IF NOT EXISTS public.sales (
     payment_status TEXT NOT NULL DEFAULT 'unpaid',
     payment_method TEXT DEFAULT 'cash',
     salesperson_id TEXT,
-    salesperson_name TEXT,
     notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 ALTER TABLE public.sales ADD COLUMN IF NOT EXISTS salesperson_id TEXT;
-ALTER TABLE public.sales ADD COLUMN IF NOT EXISTS salesperson_name TEXT;
 
 -- 10. PURCHASES TABLE
 CREATE TABLE IF NOT EXISTS public.purchases (

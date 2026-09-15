@@ -47,12 +47,12 @@ export const UsersModule: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const checkUserHasHistory = (userName: string): boolean => {
-    const hasSales = sales.some(s => s.salesperson_name === userName);
-    const hasBatches = productionBatches.some(b => b.supervisor_name === userName);
-    const hasAudit = deletionLogs.some(d => d.performed_by === userName);
-    const hasStock = stockMovements.some(sm => sm.created_by_name === userName);
-    const hasRawStock = rawMaterialMovements.some(rmm => rmm.created_by_name === userName);
+  const checkUserHasHistory = (user: Profile): boolean => {
+    const hasSales = sales.some(s => (s.salesperson_id && s.salesperson_id === user.id) || s.salesperson_name === user.name);
+    const hasBatches = productionBatches.some(b => b.supervisor_name === user.name);
+    const hasAudit = deletionLogs.some(d => d.performed_by === user.name);
+    const hasStock = stockMovements.some(sm => sm.created_by_name === user.name);
+    const hasRawStock = rawMaterialMovements.some(rmm => rmm.created_by_name === user.name);
     return hasSales || hasBatches || hasAudit || hasStock || hasRawStock;
   };
 
@@ -307,7 +307,7 @@ export const UsersModule: React.FC = () => {
                                 </button>
                                 {user.id !== currentUser.id && (
                                   !isDeactivated ? (
-                                    checkUserHasHistory(user.name) ? (
+                                    checkUserHasHistory(user) ? (
                                       <button
                                         onClick={() => setDeleteConfirmUser(user)}
                                         className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 text-xs font-semibold transition-colors"
@@ -672,7 +672,7 @@ export const UsersModule: React.FC = () => {
 
       {/* Delete / Deactivate Staff User Confirmation Modal */}
       {deleteConfirmUser && (() => {
-        const hasHistory = checkUserHasHistory(deleteConfirmUser.name);
+        const hasHistory = checkUserHasHistory(deleteConfirmUser);
         return (
           <Modal
             isOpen={!!deleteConfirmUser}
