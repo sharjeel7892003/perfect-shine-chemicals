@@ -1,100 +1,80 @@
 import { ProductionBatch, Product } from '../types';
 
 /**
- * Generates a clean, concise, uppercase product short code for batch numbering.
- * Example:
- * - "Dishwashing Liquid - Economical High-Visc (1)" -> "DWL1"
- * - "Dishwashing Liquid - Economical High-Visc (2)" -> "DWL2"
- * - "Hand Wash" -> "HW"
- * - "Bleach Concentrated" -> "BC"
+ * Generates a clean, uppercase product code or prefix for batch numbering using the product's SKU or name.
+ * Examples:
+ * - Product with SKU "PSC-DW-D1" -> "DW-D1"
+ * - Product with SKU "PSC-DWL-D2" -> "DWL-D2"
+ * - Product "Dishwashing Liquid - Economical High-Visc (1)" -> "DW-1"
+ * - Product "Bleach Concentrated" -> "BC"
  */
 export const generateProductShortCode = (product?: { name: string; sku?: string }): string => {
-  if (!product || !product.name) return 'PROD';
+  if (!product || !product.name) return 'BATCH';
 
-  const name = product.name.trim();
-
-  // 1. Check if SKU contains a clean short code (e.g. PSC-DW-D1 -> DW1 or PSC-DWL-D2 -> DWL2)
-  if (product.sku) {
-    const cleanSku = product.sku.trim().toUpperCase().replace(/^PSC-/, '');
-    // If SKU is like DW-D1 or DWL-D2, extract letters and last digit
-    const skuMatch = cleanSku.match(/^([A-Z]+)[-_]?[A-Z]*(\d+)?$/);
-    if (skuMatch) {
-      const letters = skuMatch[1];
-      const num = skuMatch[2] || '';
-      if (letters.length >= 2 && letters.length <= 6) {
-        return `${letters}${num}`;
-      }
+  // 1. If SKU is provided, strip common prefix like 'PSC-'
+  if (product.sku && product.sku.trim()) {
+    const cleanSku = product.sku.trim().replace(/^PSC[-_]?/i, '');
+    if (cleanSku) {
+      return cleanSku.toUpperCase();
     }
   }
 
-  // 2. Derive intelligently from product name
-  // Extract any trailing/parenthesized number, e.g. (1), (2), Type 1, Type 2
+  const name = product.name.trim();
+
+  // 2. Extract any trailing/parenthesized number, e.g. (1), (2), Type 1
   let suffixNumber = '';
-  const numMatch = name.match(/(?:type\s*|#|\(|\b)(\d+)(?:\)|\b)?$/i) || name.match(/\((\d+)\)/);
+  const numMatch = name.match(/\((\d+)\)/) || name.match(/(\d+)$/);
   if (numMatch) {
     suffixNumber = numMatch[1];
   }
 
-  // Clean words (exclude numbers and special characters)
+  // 3. Extract initials from primary words
   const words = name
-    .replace(/\(.*?\)/g, '') // remove parenthetical content
+    .replace(/\(.*?\)/g, '')
     .replace(/[^a-zA-Z\s]/g, ' ')
     .trim()
     .split(/\s+/)
     .filter(Boolean);
 
-  if (words.length === 0) return `PRD${suffixNumber}`;
-
-  // Recognize key chemical factory terminology
   const codeParts: string[] = [];
   for (const word of words) {
     const lower = word.toLowerCase();
+    if (['and', 'for', 'the', 'with', 'type', 'high', 'visc', 'economical'].includes(lower)) {
+      continue;
+    }
     if (lower === 'dishwashing' || lower === 'dishwash') {
       codeParts.push('DW');
     } else if (lower === 'liquid') {
       codeParts.push('L');
-    } else if (lower === 'cleaner') {
-      codeParts.push('C');
-    } else if (lower === 'economical' || lower === 'type' || lower === 'high' || lower === 'visc') {
-      // Secondary descriptor words can be skipped unless no prefix yet
-      continue;
     } else {
-      // Take first character of the word
       codeParts.push(word.charAt(0).toUpperCase());
     }
   }
 
-  let baseCode = codeParts.join('');
-  if (!baseCode) {
-    baseCode = words.map(w => w.charAt(0).toUpperCase()).join('').slice(0, 4);
-  }
-
-  // Limit length of base code
-  baseCode = baseCode.slice(0, 5);
-
-  return `${baseCode}${suffixNumber}`;
+  const baseCode = (codeParts.length > 0 ? codeParts.join('') : words.map(w => w.charAt(0).toUpperCase()).join('')).slice(0, 5);
+  return `${baseCode || 'PROD'}${suffixNumber ? `-${suffixNumber}` : ''}`;
 };
 
 /**
  * Calculates the next sequential batch number for a specific product.
- * Format: [Product Short Code]-Batch[Number]
- * Isolation: Numbering is strictly PER PRODUCT.
- * Existing batches are analyzed, taking the maximum of:
- * 1) The highest number parsed from any existing [Prefix]-Batch[N] batch for this product
- * 2) Total existing batch count for this product
- * Thus, if 1 batch exists, next is Batch 2.
+ * Format: [Product SKU / Short Code]-Batch[Number] (e.g. DW-D1-Batch1, DW-D1-Batch2)
+ *
+ * Sequence is strictly PER PRODUCT:
+ * - Counts existing production batches for that specific product
+ * - Finds the highest sequential number in any existing batch for this product
+ * - Sets the next batch number to (max(count, highest) + 1)
  */
 export const getNextBatchNumberForProduct = (
   productId: string,
   batches: ProductionBatch[],
   product?: Product | { name: string; sku?: string }
 ): string => {
-  const shortCode = generateProductShortCode(product);
+  const prefix = generateProductShortCode(product);
 
   // Filter batches for this specific product
-  const productBatches = batches.filter(b => {
+  const productBatches = (batches || []).filter(b => {
     if (b.product_id && productId && b.product_id === productId) return true;
-    if (product?.name && b.product_name && b.product_name.toLowerCase() === product.name.toLowerCase()) return true;
+    if (product?.name && b.product_name && b.product_name.trim().toLowerCase() === product.name.trim().toLowerCase()) return true;
     return false;
   });
 
@@ -103,9 +83,8 @@ export const getNextBatchNumberForProduct = (
   // Inspect existing batch numbers for this product
   for (const batch of productBatches) {
     const bNum = batch.batch_number || '';
-
-    // Match e.g. "DWL1-Batch3", "Batch-3", "Batch3", "BATCH_4"
-    const match = bNum.match(/Batch[-_]?(\d+)/i) || bNum.match(/-(\d+)$/);
+    // Match e.g. "DW-D1-Batch3", "Batch-3", "Batch3", "BATCH_4", or trailing "-4"
+    const match = bNum.match(/Batch[-_\s]?(\d+)/i) || bNum.match(/[-_](\d+)$/);
     if (match) {
       const parsedNum = parseInt(match[1], 10);
       if (!isNaN(parsedNum) && parsedNum > maxBatchIndex) {
@@ -114,11 +93,10 @@ export const getNextBatchNumberForProduct = (
     }
   }
 
-  // Ensure sequence advances past both highest parsed index and total count of batches for this product
-  const count = productBatches.length;
-  const nextNum = Math.max(count, maxBatchIndex) + 1;
+  // Next sequence number is strictly sequential per product
+  const nextNum = Math.max(productBatches.length, maxBatchIndex) + 1;
 
-  return `${shortCode}-Batch${nextNum}`;
+  return `${prefix}-Batch${nextNum}`;
 };
 
 /**

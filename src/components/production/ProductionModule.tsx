@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Factory, 
   Plus, 
@@ -17,7 +17,8 @@ import {
   ChevronRight,
   Trash2,
   Loader2,
-  BarChart3
+  BarChart3,
+  RefreshCw
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -26,6 +27,7 @@ import { formatPKR, formatDate, formatDateTime, getTodayDateString, formatSelect
 import { getNextBatchNumberForProduct } from '../../utils/batchNumber';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { ProductionReportView } from '../reports/ProductionReportView';
 
 interface ProductionModuleProps {
   onNavigateToReports?: () => void;
@@ -43,6 +45,7 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
   
   const { currentUser, isOwner, canRecordProduction } = useAuth();
 
+  const [activeView, setActiveView] = useState<'batches' | 'report'>('batches');
   const [searchTerm, setSearchTerm] = useState('');
   const [isRecordModalOpen, setIsRecordModalOpen] = useState(false);
   const [selectedBatchDetails, setSelectedBatchDetails] = useState<ProductionBatch | null>(null);
@@ -59,14 +62,23 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
   const [productionDate, setProductionDate] = useState(getTodayDateString());
   const [notes, setNotes] = useState('');
 
+  // Auto-sync initial product and batch number
+  useEffect(() => {
+    if (!selectedProductId && products.length > 0) {
+      setSelectedProductId(products[0].id);
+      const nextBatch = getNextBatchNumberForProduct(products[0].id, productionBatches, products[0]);
+      setBatchNumber(nextBatch);
+    }
+  }, [products, selectedProductId, productionBatches]);
+
   const openRecordModal = () => {
-    const defaultProd = products[0];
-    const defaultId = defaultProd ? defaultProd.id : '';
-    setSelectedProductId(defaultId);
+    const prodId = selectedProductId || (products[0] ? products[0].id : '');
+    const prod = products.find(p => p.id === prodId) || products[0];
+    setSelectedProductId(prodId);
     setQuantityProduced(100);
-    const initialBatchNum = defaultProd
-      ? getNextBatchNumberForProduct(defaultId, productionBatches, defaultProd)
-      : 'DWL1-Batch1';
+    const initialBatchNum = prod
+      ? getNextBatchNumberForProduct(prod.id, productionBatches, prod)
+      : 'DW-D1-Batch1';
     setBatchNumber(initialBatchNum);
     setProductionDate(getTodayDateString());
     setNotes('');
@@ -176,16 +188,25 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
         </div>
 
         <div className="flex items-center gap-2">
-          {onNavigateToReports && (
-            <button
-              onClick={onNavigateToReports}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
-              title="Open Production Batches Report in Reports Module"
-            >
-              <BarChart3 className="w-4 h-4 text-emerald-400" />
-              <span>Production Reports</span>
-            </button>
-          )}
+          <button
+            onClick={() => {
+              if (onNavigateToReports) {
+                onNavigateToReports();
+              } else {
+                setActiveView(activeView === 'batches' ? 'report' : 'batches');
+              }
+            }}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold border transition-colors ${
+              activeView === 'report'
+                ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-md'
+                : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+            }`}
+            title="Toggle Production Batches Report"
+          >
+            <BarChart3 className="w-4 h-4" />
+            <span>{activeView === 'report' ? 'View Batch Records' : 'Dedicated Production Report'}</span>
+          </button>
+
           {canRecordProduction && (
             <button
               onClick={openRecordModal}
@@ -198,8 +219,38 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
         </div>
       </div>
 
-      {/* Production History Table Card */}
-      <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4">
+      {/* Top View Selector Tabs */}
+      <div className="no-print flex items-center gap-2 p-1.5 rounded-2xl bg-slate-900 border border-slate-800">
+        <button
+          onClick={() => setActiveView('batches')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+            activeView === 'batches'
+              ? 'bg-emerald-500 text-slate-950 shadow-md'
+              : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Factory className="w-4 h-4" />
+          <span>Production Runs & Batch Records</span>
+        </button>
+
+        <button
+          onClick={() => setActiveView('report')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+            activeView === 'report'
+              ? 'bg-emerald-500 text-slate-950 shadow-md'
+              : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <BarChart3 className="w-4 h-4" />
+          <span>Dedicated Production Batches Report</span>
+        </button>
+      </div>
+
+      {activeView === 'report' ? (
+        <ProductionReportView embedded={true} />
+      ) : (
+        /* Production History Table Card */
+        <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4">
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="relative w-full sm:w-80">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -293,6 +344,7 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
           </table>
         </div>
       </div>
+      )}
 
       {/* Record Production Batch Modal */}
       <Modal
@@ -340,32 +392,55 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-xs font-bold text-slate-400 uppercase">
-                  Batch Identification Code
+                  Batch Identification Code *
                 </label>
-                <span className="text-[10px] text-emerald-400 font-medium">Auto-generated (Editable)</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const prod = products.find(p => p.id === selectedProductId) || products[0];
+                    if (prod) {
+                      setBatchNumber(getNextBatchNumberForProduct(prod.id, productionBatches, prod));
+                    }
+                  }}
+                  className="text-[10px] text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1 transition-colors"
+                  title="Auto-calculate next sequential number for this product"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  <span>Re-Generate Next</span>
+                </button>
               </div>
               <input
                 type="text"
                 required
                 value={batchNumber}
                 onChange={(e) => setBatchNumber(e.target.value)}
-                placeholder="e.g. DWL1-Batch1"
+                placeholder="e.g. DW-D1-Batch1"
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-emerald-500"
               />
-              <p className="text-[10px] text-slate-500 mt-1">Per-product sequential batch number (Format: [Product]-Batch[N])</p>
+              <p className="text-[10px] text-slate-500 mt-1">
+                Sequential for this product: count of existing batches + 1 (Format: [SKU]-Batch[N])
+              </p>
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
-                Production Date
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-bold text-slate-400 uppercase">
+                  Production Date *
+                </label>
+                <span className="text-[11px] font-mono text-emerald-400 font-semibold">
+                  Selected: {formatDate(productionDate)}
+                </span>
+              </div>
               <input
                 type="date"
                 required
                 value={productionDate}
                 onChange={(e) => setProductionDate(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
               />
+              <p className="text-[10px] text-slate-500 mt-1">
+                Select any date (past, today, or future); exact date will be saved to Supabase.
+              </p>
             </div>
 
             <div>
