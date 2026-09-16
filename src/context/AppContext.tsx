@@ -21,6 +21,7 @@ import {
   PaymentMethod
 } from '../types';
 import { generateInvoiceNumber, formatPKR } from '../utils/formatters';
+import { getNextBatchNumberForProduct } from '../utils/batchNumber';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { supabaseService } from '../lib/supabaseService';
 import { generateId } from '../utils/uuid';
@@ -524,7 +525,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
+    // Ensure unique batch number and prevent race conditions
+    let finalBatchNumber = (params.batchNumber || '').trim();
+    if (!finalBatchNumber) {
+      finalBatchNumber = getNextBatchNumberForProduct(targetProduct.id, productionBatches, targetProduct);
+    } else {
+      let candidate = finalBatchNumber;
+      let counter = 1;
+      const isTaken = (bNum: string) => productionBatches.some(b => b.batch_number.toLowerCase() === bNum.toLowerCase());
+      while (isTaken(candidate)) {
+        const batchMatch = candidate.match(/^(.*-Batch)(\d+)$/i);
+        if (batchMatch) {
+          const nextIndex = parseInt(batchMatch[2], 10) + counter;
+          candidate = `${batchMatch[1]}${nextIndex}`;
+        } else {
+          candidate = `${finalBatchNumber}-${counter}`;
+        }
+        counter++;
+      }
+      finalBatchNumber = candidate;
+    }
+
     const now = new Date().toISOString();
+    const effectiveDate = params.date || now;
     let totalBatchCost = 0;
     const consumedList: any[] = [];
     const newRawMovements: RawMaterialMovement[] = [];
@@ -561,9 +584,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           quantity: -rmReq.totalNeeded,
           previous_stock: prevStk,
           new_stock: nextStk,
-          reference_id: params.batchNumber,
-          notes: `Consumed in Batch ${params.batchNumber} (${targetProduct.name} - ${params.quantityProduced} ${targetProduct.base_unit || targetProduct.unit})`,
-          date: now,
+          reference_id: finalBatchNumber,
+          notes: `Consumed in Batch ${finalBatchNumber} (${targetProduct.name} - ${params.quantityProduced} ${targetProduct.base_unit || targetProduct.unit})`,
+          date: effectiveDate,
           created_by_name: params.supervisorName,
         };
         newRawMovements.push(rmMovement);
@@ -597,9 +620,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       quantity: Number(params.quantityProduced),
       previous_stock: prevProdStock,
       new_stock: nextProdStock,
-      reference_id: params.batchNumber,
-      notes: `Manufactured in Batch ${params.batchNumber}`,
-      date: now,
+      reference_id: finalBatchNumber,
+      notes: `Manufactured in Batch ${finalBatchNumber}`,
+      date: effectiveDate,
       created_by_name: params.supervisorName,
     };
     await supabaseService.upsertStockMovement(prodStockMovement);
@@ -608,12 +631,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Create production batch entry
     const newBatch: ProductionBatch = {
       id: generateId(),
-      batch_number: params.batchNumber,
+      batch_number: finalBatchNumber,
       product_id: targetProduct.id,
       product_name: targetProduct.name,
       quantity_produced: Number(params.quantityProduced),
       base_unit: (targetProduct.base_unit || 'liter') as any,
-      date: now,
+      date: effectiveDate,
       supervisor_name: params.supervisorName,
       raw_materials_consumed: consumedList,
       total_batch_cost: Number(totalBatchCost.toFixed(2)),
@@ -626,7 +649,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: true,
-      message: `Production Batch ${params.batchNumber} recorded successfully. Produced ${params.quantityProduced} ${targetProduct.base_unit || targetProduct.unit} of ${targetProduct.name}.`,
+      message: `Production Batch ${finalBatchNumber} recorded successfully. Produced ${params.quantityProduced} ${targetProduct.base_unit || targetProduct.unit} of ${targetProduct.name}.`,
       batch: savedBatch,
     };
   };

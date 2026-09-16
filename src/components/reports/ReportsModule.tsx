@@ -13,21 +13,43 @@ import {
   ShoppingCart,
   Filter,
   Printer,
-  Download
+  Download,
+  Factory,
+  ChevronDown,
+  ChevronUp,
+  Search,
+  FileSpreadsheet,
+  AlertTriangle,
+  CheckCircle2,
+  Clock
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { formatPKR, formatDate, getTodayDateString } from '../../utils/formatters';
+import { exportToCSV } from '../../utils/batchNumber';
 import { Badge } from '../common/Badge';
-import { Sale } from '../../types';
+import { Sale, ProductionBatch, ConsumedRawMaterial } from '../../types';
 
-export type ReportType = 'sales' | 'purchases' | 'profit' | 'receivables' | 'payables' | 'valuation';
+export type ReportType = 'sales' | 'purchases' | 'profit' | 'production' | 'receivables' | 'payables' | 'valuation';
 
-export const ReportsModule: React.FC = () => {
-  const { sales, purchases, products, customers, suppliers, expenses } = useApp();
+interface ReportsModuleProps {
+  initialReport?: ReportType;
+}
+
+export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 'sales' }) => {
+  const { 
+    sales, 
+    purchases, 
+    products, 
+    customers, 
+    suppliers, 
+    expenses,
+    productionBatches,
+    rawMaterials
+  } = useApp();
   const { isOwner, allUsers } = useAuth();
 
-  const [activeReport, setActiveReport] = useState<ReportType>('sales');
+  const [activeReport, setActiveReport] = useState<ReportType>(initialReport);
 
   // Filter States
   const [startDate, setStartDate] = useState<string>('');
@@ -35,6 +57,21 @@ export const ReportsModule: React.FC = () => {
   const [selectedCustomerFilter, setSelectedCustomerFilter] = useState<string>('all');
   const [selectedProductFilter, setSelectedProductFilter] = useState<string>('all');
   const [selectedSupplierFilter, setSelectedSupplierFilter] = useState<string>('all');
+
+  // Production Report Sub-View States
+  const [productionSubView, setProductionSubView] = useState<'batch' | 'period' | 'raw_materials'>('batch');
+  const [periodGrouping, setPeriodGrouping] = useState<'day' | 'week' | 'month'>('day');
+  const [batchSearchTerm, setBatchSearchTerm] = useState<string>('');
+  const [expandedBatchIds, setExpandedBatchIds] = useState<Set<string>>(new Set());
+
+  const toggleBatchExpanded = (id: string) => {
+    setExpandedBatchIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   // Dynamically resolve staff member name from profiles
   const getStaffNameForSale = (s: Sale) => {
@@ -192,11 +229,244 @@ export const ReportsModule: React.FC = () => {
   const totalStockRetailValue = products.reduce((acc, p) => acc + (p.current_stock * p.selling_price), 0);
   const unrealizedStockProfit = totalStockRetailValue - totalStockCostValue;
 
+  // ================= 6. PRODUCTION BATCHES REPORT DATA =================
+  const filteredProductionBatches = productionBatches.filter(b => {
+    const dateMatch = isDateInRange(b.date);
+    const productMatch = selectedProductFilter === 'all' || b.product_id === selectedProductFilter;
+    const searchMatch = !batchSearchTerm.trim() || 
+      b.batch_number.toLowerCase().includes(batchSearchTerm.toLowerCase().trim()) ||
+      b.product_name.toLowerCase().includes(batchSearchTerm.toLowerCase().trim()) ||
+      (b.supervisor_name && b.supervisor_name.toLowerCase().includes(batchSearchTerm.toLowerCase().trim()));
+    return dateMatch && productMatch && searchMatch;
+  });
+
+  const totalBatchesRun = filteredProductionBatches.length;
+  const totalQuantityProduced = filteredProductionBatches.reduce((acc, b) => acc + Number(b.quantity_produced || 0), 0);
+  const totalProductionCost = filteredProductionBatches.reduce((acc, b) => acc + Number(b.total_batch_cost || 0), 0);
+  const averageCostPerUnit = totalQuantityProduced > 0 ? (totalProductionCost / totalQuantityProduced) : 0;
+
+  // Period Summary Aggregation (Day / Week / Month)
+  const periodSummaryMap: Record<string, {
+    periodKey: string;
+    periodLabel: string;
+    productId: string;
+    productName: string;
+    baseUnit: string;
+    batchCount: number;
+    totalQuantity: number;
+    totalCost: number;
+    batches: ProductionBatch[];
+  }> = {};
+
+  filteredProductionBatches.forEach(batch => {
+    const d = new Date(batch.date);
+    let pKey = '';
+    let pLabel = '';
+
+    if (periodGrouping === 'day') {
+      pKey = batch.date.slice(0, 10);
+      pLabel = formatDate(batch.date);
+    } else if (periodGrouping === 'week') {
+      const year = d.getFullYear();
+      const firstDayOfYear = new Date(year, 0, 1);
+      const pastDays = (d.getTime() - firstDayOfYear.getTime()) / 86400000;
+      const weekNo = Math.ceil((pastDays + firstDayOfYear.getDay() + 1) / 7);
+      pKey = `${year}-W${String(weekNo).padStart(2, '0')}`;
+      pLabel = `Week ${weekNo}, ${year}`;
+    } else {
+      pKey = batch.date.slice(0, 7);
+      pLabel = d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+    }
+
+    const prodId = batch.product_id || batch.product_name;
+    const compoundKey = `${pKey}___${prodId}`;
+
+    if (!periodSummaryMap[compoundKey]) {
+      periodSummaryMap[compoundKey] = {
+        periodKey: pKey,
+        periodLabel: pLabel,
+        productId: prodId,
+        productName: batch.product_name,
+        baseUnit: batch.base_unit || 'liter',
+        batchCount: 0,
+        totalQuantity: 0,
+        totalCost: 0,
+        batches: []
+      };
+    }
+
+    periodSummaryMap[compoundKey].batchCount += 1;
+    periodSummaryMap[compoundKey].totalQuantity += Number(batch.quantity_produced || 0);
+    periodSummaryMap[compoundKey].totalCost += Number(batch.total_batch_cost || 0);
+    periodSummaryMap[compoundKey].batches.push(batch);
+  });
+
+  const periodSummaryRows = Object.values(periodSummaryMap).sort((a, b) => b.periodKey.localeCompare(a.periodKey));
+
+  // Visual Trend Data (Grouped chronologically ascending by period)
+  const trendMap: Record<string, { periodKey: string; periodLabel: string; totalQuantity: number; totalCost: number; batchCount: number }> = {};
+  periodSummaryRows.forEach(row => {
+    if (!trendMap[row.periodKey]) {
+      trendMap[row.periodKey] = {
+        periodKey: row.periodKey,
+        periodLabel: row.periodLabel,
+        totalQuantity: 0,
+        totalCost: 0,
+        batchCount: 0
+      };
+    }
+    trendMap[row.periodKey].totalQuantity += row.totalQuantity;
+    trendMap[row.periodKey].totalCost += row.totalCost;
+    trendMap[row.periodKey].batchCount += row.batchCount;
+  });
+  const trendList = Object.values(trendMap).sort((a, b) => a.periodKey.localeCompare(b.periodKey));
+  const maxTrendVolume = Math.max(1, ...trendList.map(t => t.totalQuantity));
+
+  // Raw Material Consumption Aggregation across filtered batches
+  const rmConsumptionMap: Record<string, {
+    id: string;
+    name: string;
+    category: string;
+    unit: string;
+    totalQuantity: number;
+    totalCost: number;
+    batchCount: number;
+    currentStock: number;
+    reorderLevel: number;
+    isLowStock: boolean;
+  }> = {};
+
+  filteredProductionBatches.forEach(batch => {
+    const consumed = batch.raw_materials_consumed || [];
+    consumed.forEach(item => {
+      const rmId = item.raw_material_id || item.raw_material_name;
+      if (!rmConsumptionMap[rmId]) {
+        const masterRm = rawMaterials.find(m => m.id === item.raw_material_id || m.name.toLowerCase() === item.raw_material_name.toLowerCase());
+        const currentStock = masterRm ? Number(masterRm.current_stock) : 0;
+        const reorderLevel = masterRm ? Number(masterRm.reorder_level) : 0;
+        rmConsumptionMap[rmId] = {
+          id: rmId,
+          name: item.raw_material_name,
+          category: masterRm?.category || 'Chemical Material',
+          unit: item.unit || masterRm?.unit || 'kg',
+          totalQuantity: 0,
+          totalCost: 0,
+          batchCount: 0,
+          currentStock,
+          reorderLevel,
+          isLowStock: currentStock <= reorderLevel
+        };
+      }
+      rmConsumptionMap[rmId].totalQuantity += Number(item.quantity_consumed || 0);
+      rmConsumptionMap[rmId].totalCost += Number(item.total_cost || 0);
+      rmConsumptionMap[rmId].batchCount += 1;
+    });
+  });
+
+  const sortedRawMaterialConsumptions = Object.values(rmConsumptionMap).sort((a, b) => b.totalCost - a.totalCost);
+
+  // CSV Export Handler
+  const handleExportCSV = () => {
+    const dateRangeLabel = `${startDate || 'all'}_to_${endDate || 'today'}`;
+
+    if (activeReport === 'production') {
+      if (productionSubView === 'batch') {
+        const headers = [
+          'Batch Number',
+          'Date',
+          'Chemical Product',
+          'Quantity Produced',
+          'Base Unit',
+          'Total Batch Cost (PKR)',
+          'Cost Per Unit (PKR)',
+          'Plant Supervisor',
+          'Raw Materials Consumed Breakdown',
+          'Notes'
+        ];
+        const rows = filteredProductionBatches.map(b => [
+          b.batch_number,
+          b.date.slice(0, 10),
+          b.product_name,
+          b.quantity_produced,
+          b.base_unit,
+          b.total_batch_cost,
+          b.cost_per_base_unit,
+          b.supervisor_name || '',
+          (b.raw_materials_consumed || []).map(m => `${m.raw_material_name}: ${m.quantity_consumed} ${m.unit} @ PKR ${m.unit_cost}`).join('; '),
+          b.notes || ''
+        ]);
+        exportToCSV(`PSC_Production_Batches_${dateRangeLabel}`, headers, rows);
+      } else if (productionSubView === 'period') {
+        const headers = [
+          'Period Interval',
+          'Chemical Product',
+          'Batches Run',
+          'Total Output Produced',
+          'Base Unit',
+          'Total Raw Material Cost (PKR)',
+          'Average Cost Per Unit (PKR)'
+        ];
+        const rows = periodSummaryRows.map(p => [
+          p.periodLabel,
+          p.productName,
+          p.batchCount,
+          p.totalQuantity,
+          p.baseUnit,
+          p.totalCost,
+          p.totalQuantity > 0 ? Number((p.totalCost / p.totalQuantity).toFixed(2)) : 0
+        ]);
+        exportToCSV(`PSC_Production_Period_Summary_${periodGrouping}_${dateRangeLabel}`, headers, rows);
+      } else if (productionSubView === 'raw_materials') {
+        const headers = [
+          'Raw Material Name',
+          'Category',
+          'Total Consumed',
+          'Unit',
+          'Total Cost (PKR)',
+          'Avg Cost/Unit (PKR)',
+          'Batches Used Count',
+          'Warehouse Stock',
+          'Reorder Threshold',
+          'Inventory Status'
+        ];
+        const rows = sortedRawMaterialConsumptions.map(rm => [
+          rm.name,
+          rm.category,
+          rm.totalQuantity,
+          rm.unit,
+          rm.totalCost,
+          rm.totalQuantity > 0 ? Number((rm.totalCost / rm.totalQuantity).toFixed(2)) : 0,
+          rm.batchCount,
+          rm.currentStock,
+          rm.reorderLevel,
+          rm.isLowStock ? 'LOW STOCK - REORDER' : 'SUFFICIENT'
+        ]);
+        exportToCSV(`PSC_Raw_Material_Consumption_${dateRangeLabel}`, headers, rows);
+      }
+    } else if (activeReport === 'sales') {
+      const headers = ['Invoice No', 'Date', 'Customer', 'Sold By', 'Product', 'Quantity', 'Unit Price (PKR)', 'Subtotal (PKR)'];
+      const rows = salesItemizedRows.map(r => [r.invoiceNo, r.date.slice(0, 10), r.customer, r.soldBy, r.productName, r.quantity, r.unitPrice, r.subtotal]);
+      exportToCSV(`PSC_Sales_Report_${dateRangeLabel}`, headers, rows);
+    } else if (activeReport === 'purchases') {
+      const headers = ['PO / Invoice No', 'Date', 'Supplier', 'Payment Status', 'Payment Method', 'Total Amount (PKR)', 'Amount Paid (PKR)'];
+      const rows = filteredPurchases.map(p => [p.invoice_number, p.date.slice(0, 10), p.supplier_name, p.payment_status, p.payment_method, p.total_amount, p.amount_paid]);
+      exportToCSV(`PSC_Purchases_Report_${dateRangeLabel}`, headers, rows);
+    } else if (activeReport === 'valuation') {
+      const headers = ['Product', 'Unit', 'Current Stock', 'Cost Price (PKR)', 'Selling Price (PKR)', 'Cost Value (PKR)', 'Retail Value (PKR)'];
+      const rows = products.map(p => [p.name, p.unit, p.current_stock, p.cost_price, p.selling_price, p.current_stock * p.cost_price, p.current_stock * p.selling_price]);
+      exportToCSV(`PSC_Stock_Valuation_${dateRangeLabel}`, headers, rows);
+    }
+  };
+
   const getReportTitle = (type: ReportType) => {
     switch (type) {
       case 'sales': return 'Sales & Revenue Report';
       case 'purchases': return 'Purchases & Procurement Report';
       case 'profit': return 'Profit & Loss (P&L) Statement';
+      case 'production':
+        if (productionSubView === 'period') return `Production Period Summary (${periodGrouping.toUpperCase()})`;
+        if (productionSubView === 'raw_materials') return 'Raw Material Consumption Audit Report';
+        return 'Chemical Production Batches Report';
       case 'receivables': return 'Outstanding Receivables Report';
       case 'payables': return 'Outstanding Payables Report';
       case 'valuation': return 'Stock Asset Valuation Report';
@@ -225,13 +495,24 @@ export const ReportsModule: React.FC = () => {
           </div>
         </div>
 
-        <button
-          onClick={() => window.print()}
-          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors w-fit"
-        >
-          <Printer className="w-4 h-4 text-emerald-400" />
-          <span>Print Report</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleExportCSV}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors w-fit"
+            title="Download report data as CSV file"
+          >
+            <Download className="w-4 h-4 text-emerald-400" />
+            <span>Export CSV</span>
+          </button>
+
+          <button
+            onClick={() => window.print()}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors w-fit"
+          >
+            <Printer className="w-4 h-4 text-emerald-400" />
+            <span>Print Report</span>
+          </button>
+        </div>
       </div>
 
       {/* Navigation Tabs for All 6 Reports (Hidden during print) */}
@@ -267,6 +548,16 @@ export const ReportsModule: React.FC = () => {
         </button>
 
         <button
+          onClick={() => setActiveReport('production')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            activeReport === 'production' ? 'bg-emerald-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Factory className="w-4 h-4" />
+          <span>Production Batches</span>
+        </button>
+
+        <button
           onClick={() => setActiveReport('receivables')}
           className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
             activeReport === 'receivables' ? 'bg-emerald-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
@@ -297,8 +588,8 @@ export const ReportsModule: React.FC = () => {
         </button>
       </div>
 
-      {/* Filter Toolbar (Active for Sales, Purchases, Profit) */}
-      {(activeReport === 'sales' || activeReport === 'purchases' || activeReport === 'profit') && (
+      {/* Filter Toolbar (Active for Sales, Purchases, Profit, Production) */}
+      {(activeReport === 'sales' || activeReport === 'purchases' || activeReport === 'profit' || activeReport === 'production') && (
         <div className="no-print p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
@@ -345,7 +636,7 @@ export const ReportsModule: React.FC = () => {
           </div>
 
           {/* Module-specific entity filters */}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {activeReport === 'sales' && (
               <>
                 <select
@@ -383,6 +674,60 @@ export const ReportsModule: React.FC = () => {
                   <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
               </select>
+            )}
+
+            {activeReport === 'production' && (
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={selectedProductFilter}
+                  onChange={(e) => setSelectedProductFilter(e.target.value)}
+                  className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white"
+                >
+                  <option value="all">All Chemical Products</option>
+                  {products.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    placeholder="Search batch # or supervisor..."
+                    value={batchSearchTerm}
+                    onChange={(e) => setBatchSearchTerm(e.target.value)}
+                    className="bg-slate-800 border border-slate-700 rounded-lg pl-8 pr-3 py-1.5 text-white placeholder-slate-500 text-xs w-52 focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+
+                {/* Sub-view switcher buttons */}
+                <div className="flex items-center gap-1 bg-slate-800 p-1 rounded-xl border border-slate-700">
+                  <button
+                    onClick={() => setProductionSubView('batch')}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                      productionSubView === 'batch' ? 'bg-emerald-500 text-slate-950 shadow' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Batch-Wise
+                  </button>
+                  <button
+                    onClick={() => setProductionSubView('period')}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                      productionSubView === 'period' ? 'bg-emerald-500 text-slate-950 shadow' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Period Summary
+                  </button>
+                  <button
+                    onClick={() => setProductionSubView('raw_materials')}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                      productionSubView === 'raw_materials' ? 'bg-emerald-500 text-slate-950 shadow' : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    RM Consumed
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </div>
@@ -795,6 +1140,419 @@ export const ReportsModule: React.FC = () => {
               </table>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ================= REPORT: PRODUCTION BATCHES REPORT ================= */}
+      {activeReport === 'production' && (
+        <div className="space-y-6">
+          {/* Top KPI Metric Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Batches Completed</span>
+              <p className="text-2xl font-black text-white mt-1 font-mono">{totalBatchesRun}</p>
+              <p className="text-[11px] text-slate-500 mt-0.5">Manufacturing runs in period</p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Output Produced</span>
+              <p className="text-2xl font-black text-emerald-400 mt-1 font-mono">
+                {totalQuantityProduced.toLocaleString('en-PK')} <span className="text-xs font-normal text-slate-400">Kg/L</span>
+              </p>
+              <p className="text-[11px] text-slate-500 mt-0.5">Finished chemical volume</p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Raw Material Cost</span>
+              <p className="text-2xl font-black text-amber-400 mt-1 font-mono">{formatPKR(totalProductionCost)}</p>
+              <p className="text-[11px] text-slate-500 mt-0.5">BOM ingredients consumed</p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Avg Cost / Base Unit</span>
+              <p className="text-2xl font-black text-blue-400 mt-1 font-mono">
+                {formatPKR(averageCostPerUnit)} <span className="text-xs font-normal text-slate-400">/ Unit</span>
+              </p>
+              <p className="text-[11px] text-slate-500 mt-0.5">Weighted avg per kg/liter</p>
+            </div>
+          </div>
+
+          {/* Sub-view: 1. Batch-Wise View */}
+          {productionSubView === 'batch' && (
+            <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <Factory className="w-4 h-4 text-emerald-400" />
+                    <span>Batch-Wise Production Logs & Raw Material Breakdown</span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Itemized list of individual chemical manufacturing batches with BOM ingredient consumption and cost per unit
+                  </p>
+                </div>
+                <div className="text-xs text-slate-400">
+                  Showing <span className="text-white font-bold">{filteredProductionBatches.length}</span> batches
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+                      <th className="py-3 px-3">Batch Number</th>
+                      <th className="py-3 px-3">Date</th>
+                      <th className="py-3 px-3">Product Name</th>
+                      <th className="py-3 px-3 text-right">Quantity Produced</th>
+                      <th className="py-3 px-3">Raw Materials Consumed</th>
+                      <th className="py-3 px-3 text-right">Batch Total Cost</th>
+                      <th className="py-3 px-3 text-right">Cost / Unit</th>
+                      <th className="py-3 px-3">Supervisor</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60">
+                    {filteredProductionBatches.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="py-10 text-center text-slate-500">
+                          No production batch records match the selected filters.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredProductionBatches.map(batch => {
+                        const isExpanded = expandedBatchIds.has(batch.id);
+                        const consumed = batch.raw_materials_consumed || [];
+                        return (
+                          <React.Fragment key={batch.id}>
+                            <tr className="hover:bg-slate-800/40 transition-colors">
+                              <td className="py-3 px-3 font-mono font-bold text-emerald-400">{batch.batch_number}</td>
+                              <td className="py-3 px-3 text-slate-400 whitespace-nowrap">{formatDate(batch.date)}</td>
+                              <td className="py-3 px-3 font-bold text-white">{batch.product_name}</td>
+                              <td className="py-3 px-3 text-right font-mono font-bold text-white whitespace-nowrap">
+                                {batch.quantity_produced} <span className="text-[11px] font-normal text-slate-400">{batch.base_unit}</span>
+                              </td>
+                              <td className="py-3 px-3">
+                                <button
+                                  onClick={() => toggleBatchExpanded(batch.id)}
+                                  className="no-print flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium transition-colors"
+                                >
+                                  <span>{consumed.length} materials</span>
+                                  {isExpanded ? <ChevronUp className="w-3.5 h-3.5 text-emerald-400" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-400" />}
+                                </button>
+                                {/* Static print representation */}
+                                <div className="hidden print:block text-[10px] text-slate-700">
+                                  {consumed.map(c => `${c.raw_material_name} (${c.quantity_consumed} ${c.unit})`).join(', ')}
+                                </div>
+                              </td>
+                              <td className="py-3 px-3 text-right font-mono font-semibold text-slate-200 whitespace-nowrap">
+                                {formatPKR(batch.total_batch_cost)}
+                              </td>
+                              <td className="py-3 px-3 text-right font-mono font-bold text-emerald-400 whitespace-nowrap">
+                                {formatPKR(batch.cost_per_base_unit)}/{batch.base_unit}
+                              </td>
+                              <td className="py-3 px-3 text-slate-300 whitespace-nowrap">{batch.supervisor_name || 'Staff'}</td>
+                            </tr>
+
+                            {/* Expanded BOM detail sub-row */}
+                            {isExpanded && (
+                              <tr className="bg-slate-950/60 no-print">
+                                <td colSpan={8} className="py-3 px-6">
+                                  <div className="p-3.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
+                                    <div className="flex items-center justify-between text-[11px]">
+                                      <span className="font-bold text-slate-300">
+                                        Raw Material Consumption Snapshot for {batch.batch_number} ({batch.quantity_produced} {batch.base_unit} output)
+                                      </span>
+                                      {batch.notes && (
+                                        <span className="text-slate-400 italic">Notes: {batch.notes}</span>
+                                      )}
+                                    </div>
+                                    <div className="overflow-x-auto">
+                                      <table className="w-full text-left text-[11px]">
+                                        <thead>
+                                          <tr className="border-b border-slate-800 text-slate-400 uppercase text-[9px]">
+                                            <th className="py-1.5 px-2">Raw Material</th>
+                                            <th className="py-1.5 px-2 text-right">Quantity Consumed</th>
+                                            <th className="py-1.5 px-2 text-right">Unit Cost</th>
+                                            <th className="py-1.5 px-2 text-right">Subtotal Cost</th>
+                                            <th className="py-1.5 px-2 text-right">% of Batch</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-800/40">
+                                          {consumed.map((item, idx) => {
+                                            const pct = batch.total_batch_cost > 0 
+                                              ? ((item.total_cost / batch.total_batch_cost) * 100).toFixed(1) 
+                                              : '0';
+                                            return (
+                                              <tr key={idx} className="hover:bg-slate-800/30">
+                                                <td className="py-1.5 px-2 text-white font-medium">{item.raw_material_name}</td>
+                                                <td className="py-1.5 px-2 text-right font-mono text-slate-300">
+                                                  {item.quantity_consumed} {item.unit}
+                                                </td>
+                                                <td className="py-1.5 px-2 text-right font-mono text-slate-400">
+                                                  {formatPKR(item.unit_cost)}/{item.unit}
+                                                </td>
+                                                <td className="py-1.5 px-2 text-right font-mono text-emerald-400 font-semibold">
+                                                  {formatPKR(item.total_cost)}
+                                                </td>
+                                                <td className="py-1.5 px-2 text-right font-mono text-slate-400">
+                                                  {pct}%
+                                                </td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Sub-view: 2. Date-Wise / Period Summary View */}
+          {productionSubView === 'period' && (
+            <div className="space-y-6">
+              {/* Visual Trend Chart */}
+              {trendList.length > 0 && (
+                <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-bold text-white">Production Output Trend ({periodGrouping.toUpperCase()})</h3>
+                      <p className="text-xs text-slate-400">Volume manufactured and raw material expenditure over time</p>
+                    </div>
+                    <div className="no-print flex items-center gap-1 bg-slate-800 p-1 rounded-xl border border-slate-700">
+                      <button
+                        onClick={() => setPeriodGrouping('day')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                          periodGrouping === 'day' ? 'bg-emerald-500 text-slate-950 shadow' : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        Daily
+                      </button>
+                      <button
+                        onClick={() => setPeriodGrouping('week')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                          periodGrouping === 'week' ? 'bg-emerald-500 text-slate-950 shadow' : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        Weekly
+                      </button>
+                      <button
+                        onClick={() => setPeriodGrouping('month')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                          periodGrouping === 'month' ? 'bg-emerald-500 text-slate-950 shadow' : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        Monthly
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Sleek Visual Bars */}
+                  <div className="pt-6 pb-2 overflow-x-auto">
+                    <div className="flex items-end gap-4 min-w-[500px] h-48 px-2 border-b border-slate-800">
+                      {trendList.map((t, idx) => {
+                        const barHeight = Math.max(16, Math.round((t.totalQuantity / maxTrendVolume) * 130));
+                        return (
+                          <div key={idx} className="flex-1 flex flex-col items-center gap-2 group relative">
+                            {/* Hover tooltip */}
+                            <div className="absolute -top-14 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 bg-slate-950 border border-slate-700 px-2.5 py-1.5 rounded-lg shadow-xl text-center whitespace-nowrap">
+                              <p className="text-[10px] text-slate-400">{t.periodLabel}</p>
+                              <p className="text-xs font-bold text-emerald-400 font-mono">{t.totalQuantity} L/kg</p>
+                              <p className="text-[10px] text-slate-300 font-mono">{formatPKR(t.totalCost)}</p>
+                            </div>
+
+                            <span className="text-[10px] font-mono font-bold text-emerald-400">
+                              {t.totalQuantity}
+                            </span>
+                            <div 
+                              style={{ height: `${barHeight}px` }} 
+                              className="w-full max-w-[48px] rounded-t-lg bg-gradient-to-t from-emerald-600 to-emerald-400 group-hover:from-emerald-500 group-hover:to-emerald-300 transition-all shadow-lg shadow-emerald-500/10"
+                            />
+                            <span className="text-[10px] text-slate-400 font-medium truncate max-w-[64px] text-center">
+                              {t.periodLabel}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Period Table */}
+              <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-base font-bold text-white">
+                    Period Manufacturing Summary Breakdown
+                  </h3>
+                  <span className="text-xs text-slate-400 font-mono">
+                    {periodSummaryRows.length} Product-Period Groups
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+                        <th className="py-3 px-3">Period</th>
+                        <th className="py-3 px-3">Chemical Product</th>
+                        <th className="py-3 px-3 text-center">Batches Run</th>
+                        <th className="py-3 px-3 text-right">Total Output Qty</th>
+                        <th className="py-3 px-3 text-right">Total Raw Material Cost</th>
+                        <th className="py-3 px-3 text-right">Average Cost / Unit</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {periodSummaryRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="py-10 text-center text-slate-500">
+                            No production batches found for the selected period.
+                          </td>
+                        </tr>
+                      ) : (
+                        periodSummaryRows.map((row, idx) => {
+                          const avgCost = row.totalQuantity > 0 ? (row.totalCost / row.totalQuantity) : 0;
+                          return (
+                            <tr key={idx} className="hover:bg-slate-800/40">
+                              <td className="py-3 px-3 font-medium text-white">{row.periodLabel}</td>
+                              <td className="py-3 px-3 font-bold text-slate-200">{row.productName}</td>
+                              <td className="py-3 px-3 text-center font-mono font-bold text-white">{row.batchCount}</td>
+                              <td className="py-3 px-3 text-right font-mono font-bold text-white">
+                                {row.totalQuantity} <span className="text-[11px] font-normal text-slate-400">{row.baseUnit}</span>
+                              </td>
+                              <td className="py-3 px-3 text-right font-mono font-semibold text-slate-200">
+                                {formatPKR(row.totalCost)}
+                              </td>
+                              <td className="py-3 px-3 text-right font-mono font-bold text-emerald-400">
+                                {formatPKR(avgCost)}/{row.baseUnit}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                    {periodSummaryRows.length > 0 && (
+                      <tfoot>
+                        <tr className="border-t-2 border-slate-700 font-bold bg-slate-950/40 text-xs">
+                          <td colSpan={2} className="py-3 px-3 text-white uppercase text-[11px]">Period Total</td>
+                          <td className="py-3 px-3 text-center font-mono text-white">{totalBatchesRun}</td>
+                          <td className="py-3 px-3 text-right font-mono text-emerald-400">
+                            {totalQuantityProduced} <span className="text-[10px] text-slate-400 font-normal">Kg/L</span>
+                          </td>
+                          <td className="py-3 px-3 text-right font-mono text-amber-400">
+                            {formatPKR(totalProductionCost)}
+                          </td>
+                          <td className="py-3 px-3 text-right font-mono text-blue-400">
+                            {formatPKR(averageCostPerUnit)}/Unit
+                          </td>
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Sub-view: 3. Raw Material Consumption Summary */}
+          {productionSubView === 'raw_materials' && (
+            <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                <div>
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-emerald-400" />
+                    <span>Raw Material Consumption & Inventory Reorder Intelligence</span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Aggregated consumption across batches in selected date range. Helps identify fastest-moving chemicals and reorder priorities.
+                  </p>
+                </div>
+                <div className="text-xs text-slate-400">
+                  <span className="text-white font-bold">{sortedRawMaterialConsumptions.length}</span> Raw Materials Used
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+                      <th className="py-3 px-3">Raw Material</th>
+                      <th className="py-3 px-3">Category</th>
+                      <th className="py-3 px-3 text-right">Total Consumed</th>
+                      <th className="py-3 px-3 text-right">Total Cost</th>
+                      <th className="py-3 px-3 text-right">Avg Unit Cost</th>
+                      <th className="py-3 px-3 text-center">Batches Used</th>
+                      <th className="py-3 px-3 text-right">Current Stock</th>
+                      <th className="py-3 px-3 text-right">Reorder Threshold</th>
+                      <th className="py-3 px-3 text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60">
+                    {sortedRawMaterialConsumptions.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="py-10 text-center text-slate-500">
+                          No raw material consumption recorded for the selected filter range.
+                        </td>
+                      </tr>
+                    ) : (
+                      sortedRawMaterialConsumptions.map(rm => {
+                        const avgCost = rm.totalQuantity > 0 ? (rm.totalCost / rm.totalQuantity) : 0;
+                        return (
+                          <tr key={rm.id} className="hover:bg-slate-800/40">
+                            <td className="py-3 px-3 font-bold text-white text-sm">{rm.name}</td>
+                            <td className="py-3 px-3 text-slate-400">{rm.category}</td>
+                            <td className="py-3 px-3 text-right font-mono font-bold text-white">
+                              {rm.totalQuantity} <span className="text-[11px] font-normal text-slate-400">{rm.unit}</span>
+                            </td>
+                            <td className="py-3 px-3 text-right font-mono font-semibold text-slate-200">
+                              {formatPKR(rm.totalCost)}
+                            </td>
+                            <td className="py-3 px-3 text-right font-mono text-slate-400">
+                              {formatPKR(avgCost)}/{rm.unit}
+                            </td>
+                            <td className="py-3 px-3 text-center font-mono text-slate-300">
+                              {rm.batchCount}
+                            </td>
+                            <td className="py-3 px-3 text-right font-mono font-bold text-white">
+                              {rm.currentStock} <span className="text-[10px] text-slate-400">{rm.unit}</span>
+                            </td>
+                            <td className="py-3 px-3 text-right font-mono text-slate-400">
+                              {rm.reorderLevel} <span className="text-[10px] text-slate-500">{rm.unit}</span>
+                            </td>
+                            <td className="py-3 px-3 text-center">
+                              {rm.isLowStock ? (
+                                <Badge variant="rose">Reorder Alert</Badge>
+                              ) : (
+                                <Badge variant="emerald">In Stock</Badge>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                  {sortedRawMaterialConsumptions.length > 0 && (
+                    <tfoot>
+                      <tr className="border-t-2 border-slate-700 font-bold bg-slate-950/40 text-xs">
+                        <td colSpan={3} className="py-3 px-3 text-white uppercase text-[11px]">Total Raw Material Spend</td>
+                        <td className="py-3 px-3 text-right font-mono text-amber-400">
+                          {formatPKR(totalProductionCost)}
+                        </td>
+                        <td colSpan={5}></td>
+                      </tr>
+                    </tfoot>
+                  )}
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

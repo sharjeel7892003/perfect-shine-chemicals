@@ -16,12 +16,13 @@ import { CustomersModule } from './components/customers/CustomersModule';
 import { SuppliersModule } from './components/suppliers/SuppliersModule';
 import { PaymentsModule } from './components/payments/PaymentsModule';
 import { ExpensesModule } from './components/expenses/ExpensesModule';
-import { ReportsModule } from './components/reports/ReportsModule';
+import { ReportsModule, ReportType } from './components/reports/ReportsModule';
 import { UsersModule } from './components/users/UsersModule';
 import { WifiOff, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
 
 const MainLayout: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  const [reportsInitialTab, setReportsInitialTab] = useState<ReportType>('sales');
   const { isLoadingCloudData, cloudSyncError, isOnline, refreshCloudData } = useApp();
 
   const renderActiveModule = () => {
@@ -37,7 +38,14 @@ const MainLayout: React.FC = () => {
       case 'formulations':
         return <FormulationsModule />;
       case 'production':
-        return <ProductionModule />;
+        return (
+          <ProductionModule 
+            onNavigateToReports={() => {
+              setReportsInitialTab('production');
+              setActiveTab('reports');
+            }} 
+          />
+        );
       case 'purchases':
         return <PurchasesModule />;
       case 'customers':
@@ -49,7 +57,7 @@ const MainLayout: React.FC = () => {
       case 'expenses':
         return <ExpensesModule />;
       case 'reports':
-        return <ReportsModule />;
+        return <ReportsModule initialReport={reportsInitialTab} />;
       case 'users':
         return <UsersModule />;
       default:

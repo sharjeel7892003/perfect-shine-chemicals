@@ -16,16 +16,22 @@ import {
   Info,
   ChevronRight,
   Trash2,
-  Loader2
+  Loader2,
+  BarChart3
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { ProductionBatch, ProductFormulation, ConsumedRawMaterial } from '../../types';
 import { formatPKR, formatDate, formatDateTime, getTodayDateString, formatSelectedDateToIso } from '../../utils/formatters';
+import { getNextBatchNumberForProduct } from '../../utils/batchNumber';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 
-export const ProductionModule: React.FC = () => {
+interface ProductionModuleProps {
+  onNavigateToReports?: () => void;
+}
+
+export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateToReports }) => {
   const { 
     products, 
     rawMaterials, 
@@ -58,13 +64,23 @@ export const ProductionModule: React.FC = () => {
     const defaultId = defaultProd ? defaultProd.id : '';
     setSelectedProductId(defaultId);
     setQuantityProduced(100);
-    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const randomSeq = Math.floor(10 + Math.random() * 90);
-    setBatchNumber(`BATCH-${dateStr}-${randomSeq}`);
+    const initialBatchNum = defaultProd
+      ? getNextBatchNumberForProduct(defaultId, productionBatches, defaultProd)
+      : 'DWL1-Batch1';
+    setBatchNumber(initialBatchNum);
     setProductionDate(getTodayDateString());
     setNotes('');
     setSubmitError(null);
     setIsRecordModalOpen(true);
+  };
+
+  const handleProductChange = (newProductId: string) => {
+    setSelectedProductId(newProductId);
+    const targetProd = products.find(p => p.id === newProductId);
+    if (targetProd) {
+      const nextBatchNum = getNextBatchNumberForProduct(newProductId, productionBatches, targetProd);
+      setBatchNumber(nextBatchNum);
+    }
   };
 
   const selectedProduct = products.find(p => p.id === selectedProductId);
@@ -160,6 +176,16 @@ export const ProductionModule: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          {onNavigateToReports && (
+            <button
+              onClick={onNavigateToReports}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
+              title="Open Production Batches Report in Reports Module"
+            >
+              <BarChart3 className="w-4 h-4 text-emerald-400" />
+              <span>Production Reports</span>
+            </button>
+          )}
           {canRecordProduction && (
             <button
               onClick={openRecordModal}
@@ -285,7 +311,7 @@ export const ProductionModule: React.FC = () => {
               <select
                 required
                 value={selectedProductId}
-                onChange={(e) => setSelectedProductId(e.target.value)}
+                onChange={(e) => handleProductChange(e.target.value)}
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
               >
                 {products.map(p => (
@@ -312,17 +338,21 @@ export const ProductionModule: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
-                Batch Identification Code
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-bold text-slate-400 uppercase">
+                  Batch Identification Code
+                </label>
+                <span className="text-[10px] text-emerald-400 font-medium">Auto-generated (Editable)</span>
+              </div>
               <input
                 type="text"
                 required
                 value={batchNumber}
                 onChange={(e) => setBatchNumber(e.target.value)}
-                placeholder="BATCH-202609-01"
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono"
+                placeholder="e.g. DWL1-Batch1"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-emerald-500"
               />
+              <p className="text-[10px] text-slate-500 mt-1">Per-product sequential batch number (Format: [Product]-Batch[N])</p>
             </div>
 
             <div>
