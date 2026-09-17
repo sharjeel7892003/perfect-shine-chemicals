@@ -23,6 +23,7 @@ import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { Sale, SaleItem, PaymentMethod, PaymentStatus, Product, PackSize } from '../../types';
 import { formatPKR, formatDate, getTodayDateString, formatSelectedDateToIso } from '../../utils/formatters';
+import { getRateDifferenceInfo, saleHasCustomRates } from '../../utils/pricing';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { InvoiceModal } from './InvoiceModal';
@@ -173,10 +174,27 @@ export const SalesModule: React.FC = () => {
         quantity: 1,
         unit_cost: product.cost_price * packInfo.multiplier,
         unit_price: packInfo.price,
+        default_unit_price: packInfo.price,
         subtotal: packInfo.price,
       };
 
       return [...prev, newItem];
+    });
+  };
+
+  const updateUnitPrice = (index: number, newPrice: number) => {
+    setCartItems(prev => {
+      const item = prev[index];
+      if (!item) return prev;
+
+      const validPrice = Math.max(0, isNaN(newPrice) ? 0 : newPrice);
+      const updated = [...prev];
+      updated[index] = {
+        ...item,
+        unit_price: validPrice,
+        subtotal: item.quantity * validPrice,
+      };
+      return updated;
     });
   };
 
@@ -484,47 +502,114 @@ export const SalesModule: React.FC = () => {
                     <p className="text-[11px]">Select items & pack sizes from left grid</p>
                   </div>
                 ) : (
-                  cartItems.map((item, idx) => (
-                    <div
-                      key={idx}
-                      className="p-2.5 rounded-lg bg-slate-850 border border-slate-800 flex items-center justify-between gap-2"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <p className="text-xs font-bold text-white truncate">{item.product_name}</p>
-                        <p className="text-[10px] text-emerald-400 font-medium">
-                          Packaging: {item.pack_size_name}
-                        </p>
-                        <div className="flex items-center gap-2 mt-1">
-                          <input
-                            type="number"
-                            min="1"
-                            value={item.quantity}
-                            onChange={(e) => updateQuantity(idx, parseInt(e.target.value) || 1)}
-                            className="w-14 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-center text-white font-mono"
-                          />
-                          <span className="text-[10px] text-slate-400">
-                            × {formatPKR(item.unit_price)}
-                          </span>
+                  cartItems.map((item, idx) => {
+                    const rateInfo = getRateDifferenceInfo(item, products);
+                    return (
+                      <div
+                        key={idx}
+                        className={`p-2.5 rounded-xl border transition-all ${
+                          rateInfo.isCustom
+                            ? rateInfo.isDiscount
+                              ? 'bg-amber-950/20 border-amber-500/30'
+                              : 'bg-indigo-950/20 border-indigo-500/30'
+                            : 'bg-slate-850 border-slate-800'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <p className="text-xs font-bold text-white truncate">{item.product_name}</p>
+                              {rateInfo.isCustom && (
+                                <span
+                                  className={`inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider ${
+                                    rateInfo.isDiscount
+                                      ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                                      : 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/30'
+                                  }`}
+                                  title={`Catalog default rate: ${formatPKR(rateInfo.standardPrice)}`}
+                                >
+                                  <span className={`w-1.5 h-1.5 rounded-full ${rateInfo.isDiscount ? 'bg-amber-400' : 'bg-indigo-400'}`}></span>
+                                  {rateInfo.isDiscount ? 'Discount Rate' : 'Premium Rate'}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[10px] text-emerald-400 font-medium">
+                              Packaging: {item.pack_size_name}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-xs font-bold font-mono text-emerald-400">
+                              {formatPKR(item.subtotal)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => removeFromCart(idx)}
+                              className="p-1 text-slate-500 hover:text-rose-400 rounded transition-colors"
+                              title="Remove item"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Quantity & Editable Unit Price Row */}
+                        <div className="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-slate-800/60 flex-wrap">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <div className="flex items-center gap-1">
+                              <span className="text-[10px] text-slate-400">Qty:</span>
+                              <input
+                                type="number"
+                                min="1"
+                                value={item.quantity}
+                                onChange={(e) => updateQuantity(idx, parseInt(e.target.value) || 1)}
+                                className="w-12 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-center text-white font-mono focus:border-emerald-500 focus:outline-none"
+                              />
+                            </div>
+
+                            <span className="text-slate-500 text-xs font-mono">×</span>
+
+                            <div className="flex items-center gap-1">
+                              <span className="text-[10px] text-slate-400">Rate:</span>
+                              <div className="relative">
+                                <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-500 font-mono">Rs</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="any"
+                                  value={item.unit_price === 0 ? '' : item.unit_price}
+                                  onChange={(e) => updateUnitPrice(idx, e.target.value === '' ? 0 : parseFloat(e.target.value))}
+                                  placeholder="0"
+                                  className={`w-20 bg-slate-900 border rounded pl-6 pr-1.5 py-0.5 text-xs text-right font-mono focus:outline-none transition-colors ${
+                                    rateInfo.isCustom
+                                      ? rateInfo.isDiscount
+                                        ? 'border-amber-500/60 text-amber-300 focus:border-amber-400'
+                                        : 'border-indigo-500/60 text-indigo-300 focus:border-indigo-400'
+                                      : 'border-slate-700 text-white focus:border-emerald-500'
+                                  }`}
+                                  title={`Default: ${formatPKR(rateInfo.standardPrice)}. Edit rate for this sale.`}
+                                />
+                              </div>
+                              {rateInfo.isCustom && rateInfo.standardPrice !== undefined && (
+                                <button
+                                  type="button"
+                                  onClick={() => updateUnitPrice(idx, rateInfo.standardPrice!)}
+                                  className="text-[9px] px-1.5 py-0.5 rounded text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-colors"
+                                  title={`Reset to default catalog rate (${formatPKR(rateInfo.standardPrice)})`}
+                                >
+                                  Reset
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
                           <span className="text-[10px] text-slate-500 font-mono">
                             ({item.base_quantity} {item.unit} total)
                           </span>
                         </div>
                       </div>
-
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold font-mono text-emerald-400">
-                          {formatPKR(item.subtotal)}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => removeFromCart(idx)}
-                          className="p-1 text-slate-500 hover:text-rose-400 rounded transition-colors"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
 
@@ -708,8 +793,21 @@ export const SalesModule: React.FC = () => {
                           {getSalespersonName(sale)}
                         </span>
                       </td>
-                      <td className="py-3 px-3 text-slate-300 max-w-xs truncate">
-                        {sale.items.map(i => `${i.quantity}x ${i.pack_size_name || i.product_name}`).join(', ')}
+                      <td className="py-3 px-3 text-slate-300 max-w-xs">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="truncate">
+                            {sale.items.map(i => `${i.quantity}x ${i.pack_size_name || i.product_name}`).join(', ')}
+                          </span>
+                          {saleHasCustomRates(sale, products) && (
+                            <span 
+                              className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 whitespace-nowrap"
+                              title="This invoice contains custom negotiated rates"
+                            >
+                              <span className="w-1 h-1 rounded-full bg-amber-400"></span>
+                              Custom Rate
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3 px-3 text-right font-mono font-bold text-emerald-400">
                         {formatPKR(sale.total_amount)}

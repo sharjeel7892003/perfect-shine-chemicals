@@ -174,7 +174,8 @@ export interface SaleItem {
   base_quantity: number; // Total quantity in product base unit deducted from stock (e.g. 100 Liters)
   quantity: number; // Display count (e.g. 20 cans or 100 liters)
   unit_cost: number;
-  unit_price: number; // Price per pack or price per base unit
+  unit_price: number; // Actual selling rate used for this sale line item
+  default_unit_price?: number; // Standard / catalog selling rate (for reference & comparison)
   subtotal: number;
 }
 

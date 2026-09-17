@@ -26,6 +26,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { formatPKR, formatDate, getTodayDateString } from '../../utils/formatters';
+import { getRateDifferenceInfo, RateDifferenceInfo } from '../../utils/pricing';
 import { exportToCSV } from '../../utils/batchNumber';
 import { Badge } from '../common/Badge';
 import { Sale, ProductionBatch, ConsumedRawMaterial } from '../../types';
@@ -131,12 +132,14 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
     quantity: number;
     unitPrice: number;
     subtotal: number;
+    rateInfo: RateDifferenceInfo;
   }[] = [];
 
   filteredSales.forEach(s => {
     s.items.forEach(item => {
       if (selectedProductFilter === 'all' || item.product_id === selectedProductFilter) {
         totalSalesUnits += item.quantity;
+        const rateInfo = getRateDifferenceInfo(item, products);
         salesItemizedRows.push({
           invoiceNo: s.invoice_number,
           date: s.date,
@@ -146,6 +149,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
           quantity: item.quantity,
           unitPrice: item.unit_price,
           subtotal: item.subtotal,
+          rateInfo,
         });
       }
     });
@@ -169,7 +173,11 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
   filteredSales.forEach(sale => {
     profitRevenue += sale.total_amount;
     sale.items.forEach(item => {
-      const itemCost = (item.unit_cost || 0) * item.quantity;
+      const prod = products.find(p => p.id === item.product_id);
+      const unitCost = Number(item.unit_cost) > 0 
+        ? Number(item.unit_cost) 
+        : (prod ? Number(prod.cost_price || 0) * (item.size_in_base_unit || 1) : 0);
+      const itemCost = unitCost * item.quantity;
       profitCOGS += itemCost;
 
       if (!productProfitMap[item.product_name]) {
@@ -837,7 +845,19 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
                         </td>
                         <td className="py-2.5 px-3 font-medium text-white">{row.productName}</td>
                         <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-200">{row.quantity}</td>
-                        <td className="py-2.5 px-3 text-right font-mono text-slate-400">{formatPKR(row.unitPrice)}</td>
+                        <td className="py-2.5 px-3 text-right font-mono text-slate-300">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {row.rateInfo.isCustom && (
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                  row.rateInfo.isDiscount ? 'bg-amber-400' : 'bg-indigo-400'
+                                }`}
+                                title={`${row.rateInfo.isDiscount ? 'Discounted Rate' : 'Premium Rate'} (Standard: ${formatPKR(row.rateInfo.standardPrice)})`}
+                              />
+                            )}
+                            <span>{formatPKR(row.unitPrice)}</span>
+                          </div>
+                        </td>
                         <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-400">{formatPKR(row.subtotal)}</td>
                       </tr>
                     ))

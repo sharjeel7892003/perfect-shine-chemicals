@@ -1,8 +1,10 @@
 import React from 'react';
 import { Sale } from '../../types';
 import { formatPKR, formatDate, formatDateTime } from '../../utils/formatters';
+import { getRateDifferenceInfo } from '../../utils/pricing';
 import { Printer, Download, X, Sparkles, CheckCircle2, Trash2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { useApp } from '../../context/AppContext';
 
 interface InvoiceModalProps {
   sale: Sale | null;
@@ -12,6 +14,7 @@ interface InvoiceModalProps {
 
 export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDelete }) => {
   const { allUsers } = useAuth();
+  const { products } = useApp();
   if (!sale) return null;
 
   const handlePrint = () => {
@@ -140,27 +143,56 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDel
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {sale.items.map((item, idx) => (
-                <tr key={idx} className="py-2">
-                  <td className="py-2.5 text-slate-400 font-mono">{idx + 1}</td>
-                  <td className="py-2.5 font-medium text-slate-900">
-                    <div>
-                      <span>{item.product_name}</span>
-                      {item.pack_size_name && (
-                        <span className="block text-[11px] text-emerald-700 font-normal">
-                          Packaging: {item.pack_size_name}
+              {sale.items.map((item, idx) => {
+                const rateInfo = getRateDifferenceInfo(item, products);
+                return (
+                  <tr key={idx} className="py-2">
+                    <td className="py-2.5 text-slate-400 font-mono">{idx + 1}</td>
+                    <td className="py-2.5 font-medium text-slate-900">
+                      <div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span>{item.product_name}</span>
+                          {rateInfo.isCustom && (
+                            <span
+                              className={`no-print inline-flex items-center gap-1 text-[9px] px-1.5 py-0.2 rounded font-bold uppercase tracking-wider ${
+                                rateInfo.isDiscount
+                                  ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                                  : 'bg-indigo-100 text-indigo-800 border border-indigo-300'
+                              }`}
+                              title={`Catalog standard rate: ${formatPKR(rateInfo.standardPrice)}`}
+                            >
+                              <span className={`w-1 h-1 rounded-full ${rateInfo.isDiscount ? 'bg-amber-600' : 'bg-indigo-600'}`}></span>
+                              {rateInfo.isDiscount ? 'Discounted Rate' : 'Custom Rate'}
+                            </span>
+                          )}
+                        </div>
+                        {item.pack_size_name && (
+                          <span className="block text-[11px] text-emerald-700 font-normal">
+                            Packaging: {item.pack_size_name}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="py-2.5 text-center font-mono font-bold">{item.quantity}</td>
+                    <td className="py-2.5 text-center font-mono text-slate-600">
+                      {item.base_quantity || item.quantity} {item.unit || 'L'}
+                    </td>
+                    <td className="py-2.5 text-right font-mono">
+                      <div>
+                        <span className={rateInfo.isCustom ? (rateInfo.isDiscount ? 'text-amber-800 font-bold' : 'text-indigo-800 font-bold') : ''}>
+                          {formatPKR(item.unit_price)}
                         </span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="py-2.5 text-center font-mono font-bold">{item.quantity}</td>
-                  <td className="py-2.5 text-center font-mono text-slate-600">
-                    {item.base_quantity || item.quantity} {item.unit || 'L'}
-                  </td>
-                  <td className="py-2.5 text-right font-mono">{formatPKR(item.unit_price)}</td>
-                  <td className="py-2.5 text-right font-mono font-bold">{formatPKR(item.subtotal)}</td>
-                </tr>
-              ))}
+                        {rateInfo.isCustom && rateInfo.standardPrice !== undefined && (
+                          <span className="no-print block text-[9px] text-slate-400 line-through">
+                            std: {formatPKR(rateInfo.standardPrice)}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="py-2.5 text-right font-mono font-bold">{formatPKR(item.subtotal)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
 
