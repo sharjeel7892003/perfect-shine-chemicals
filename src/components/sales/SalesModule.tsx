@@ -166,7 +166,7 @@ export const SalesModule: React.FC = () => {
         product_id: product.id,
         product_name: product.name,
         unit: product.base_unit || product.unit,
-        pack_size_id: packInfo.packId,
+        pack_size_id: packInfo.packId === 'bulk' ? undefined : packInfo.packId,
         pack_size_name: packInfo.packName,
         pack_quantity: 1,
         size_in_base_unit: packInfo.multiplier,

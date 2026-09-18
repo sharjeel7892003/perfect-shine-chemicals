@@ -178,6 +178,21 @@ export const supabaseService = {
       console.error('Supabase upsertProduct error:', error);
       throw new Error(`Product database write failed: ${error.message}`);
     }
+
+    // Sync pack sizes to relational pack_sizes table to satisfy foreign key constraints
+    if (product.pack_sizes && product.pack_sizes.length > 0) {
+      const packRows = product.pack_sizes.map(ps => ({
+        id: ensureUUID(ps.id),
+        product_id: validId,
+        name: ps.name || 'Pack Size',
+        size_in_base_unit: Number(ps.size_in_base_unit || 1),
+        unit_label: ps.unit_label || 'pack',
+        selling_price: Number(ps.selling_price || 0),
+        is_default: Boolean(ps.is_default)
+      }));
+      await supabase.from('pack_sizes').upsert(packRows);
+    }
+
     return (data as Product) || product;
   },
 
@@ -185,6 +200,7 @@ export const supabaseService = {
     if (!isSupabaseConfigured || !supabase || !isValidUUID(id)) return;
     assertOnline();
 
+    await supabase.from('pack_sizes').delete().eq('product_id', id);
     const { error } = await supabase.from('products').delete().eq('id', id);
     if (error) {
       console.error('Supabase deleteProduct error:', error);
@@ -472,21 +488,42 @@ export const supabaseService = {
     await supabase.from('sale_items').delete().eq('sale_id', validId);
 
     if (sale.items && sale.items.length > 0) {
-      const itemsToInsert = sale.items.map(item => ({
-        id: ensureUUID(item.id),
-        sale_id: validId,
-        product_id: isValidUUID(item.product_id) ? item.product_id : null,
-        product_name: item.product_name || '',
-        pack_size_id: isValidUUID(item.pack_size_id) ? item.pack_size_id : null,
-        pack_size_name: item.pack_size_name || null,
-        pack_quantity: item.pack_quantity ? Number(item.pack_quantity) : null,
-        size_in_base_unit: item.size_in_base_unit ? Number(item.size_in_base_unit) : null,
-        base_quantity: item.base_quantity ? Number(item.base_quantity) : Number(item.quantity || 0),
-        quantity: Number(item.quantity || 0),
-        unit_cost: Number(item.unit_cost || 0),
-        unit_price: Number(item.unit_price || 0),
-        subtotal: Number(item.subtotal || 0)
-      }));
+      // Ensure any selected pack size exists in pack_sizes table to prevent FK constraint violations
+      for (const item of sale.items) {
+        if (item.pack_size_id && item.pack_size_id !== 'bulk' && isValidUUID(item.pack_size_id)) {
+          const prodId = isValidUUID(item.product_id) ? item.product_id : null;
+          if (prodId) {
+            await supabase.from('pack_sizes').upsert({
+              id: item.pack_size_id,
+              product_id: prodId,
+              name: item.pack_size_name || 'Standard Pack',
+              size_in_base_unit: Number(item.size_in_base_unit || 1),
+              unit_label: item.unit || 'pack',
+              selling_price: Number(item.unit_price || 0)
+            });
+          }
+        }
+      }
+
+      const itemsToInsert = sale.items.map(item => {
+        // Only pass pack_size_id if it's a real pack size UUID (bulk/loose must be NULL)
+        const isPack = Boolean(item.pack_size_id && item.pack_size_id !== 'bulk' && isValidUUID(item.pack_size_id));
+        return {
+          id: ensureUUID(item.id),
+          sale_id: validId,
+          product_id: isValidUUID(item.product_id) ? item.product_id : null,
+          product_name: item.product_name || '',
+          pack_size_id: isPack ? item.pack_size_id : null,
+          pack_size_name: item.pack_size_name || null,
+          pack_quantity: item.pack_quantity ? Number(item.pack_quantity) : null,
+          size_in_base_unit: item.size_in_base_unit ? Number(item.size_in_base_unit) : null,
+          base_quantity: item.base_quantity ? Number(item.base_quantity) : Number(item.quantity || 0),
+          quantity: Number(item.quantity || 0),
+          unit_cost: Number(item.unit_cost || 0),
+          unit_price: Number(item.unit_price || 0),
+          subtotal: Number(item.subtotal || 0)
+        };
+      });
 
       const { error: itemsError } = await supabase.from('sale_items').insert(itemsToInsert);
       if (itemsError) {
