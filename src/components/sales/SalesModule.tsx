@@ -271,20 +271,22 @@ export const SalesModule: React.FC = () => {
       }
 
       const multiplier = item.size_in_base_unit || 1.0;
-      const totalBaseNeeded = newQty * multiplier;
+      const isDecimalAllowed = item.item_type === 'raw_material' || !item.pack_size_id || item.pack_size_id === 'bulk';
+      const totalBaseNeeded = Number((newQty * multiplier).toFixed(4));
 
       if (totalBaseNeeded > baseStock) {
         alert(`Only ${baseStock} ${unitLabel} available in warehouse.`);
-        newQty = Math.floor(baseStock / multiplier) || 1;
+        newQty = isDecimalAllowed ? baseStock : (Math.floor(baseStock / multiplier) || 1);
       }
 
+      const validQty = isDecimalAllowed ? Number(newQty.toFixed(4)) : Math.round(newQty);
       const updated = [...prev];
       updated[index] = {
         ...item,
-        quantity: newQty,
-        pack_quantity: item.raw_material_id ? undefined : newQty,
-        base_quantity: newQty * multiplier,
-        subtotal: newQty * item.unit_price,
+        quantity: validQty,
+        pack_quantity: item.raw_material_id ? undefined : validQty,
+        base_quantity: Number((validQty * multiplier).toFixed(4)),
+        subtotal: Number((validQty * item.unit_price).toFixed(2)),
       };
       return updated;
     });
@@ -774,13 +776,27 @@ export const SalesModule: React.FC = () => {
                           <div className="flex items-center gap-2 flex-wrap">
                             <div className="flex items-center gap-1">
                               <span className="text-[10px] text-slate-400">Qty:</span>
-                              <input
-                                type="number"
-                                min="1"
-                                value={item.quantity}
-                                onChange={(e) => updateQuantity(idx, parseInt(e.target.value) || 1)}
-                                className="w-12 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-center text-white font-mono focus:border-emerald-500 focus:outline-none"
-                              />
+                              {(() => {
+                                const isDecimalAllowed = item.item_type === 'raw_material' || !item.pack_size_id || item.pack_size_id === 'bulk';
+                                return (
+                                  <input
+                                    type="number"
+                                    min={isDecimalAllowed ? "0.0001" : "1"}
+                                    step={isDecimalAllowed ? "any" : "1"}
+                                    value={item.quantity === 0 ? '' : item.quantity}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      if (val === '') {
+                                        updateQuantity(idx, 0);
+                                        return;
+                                      }
+                                      const num = isDecimalAllowed ? parseFloat(val) : parseInt(val, 10);
+                                      updateQuantity(idx, isNaN(num) ? 0 : num);
+                                    }}
+                                    className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-center text-white font-mono focus:border-emerald-500 focus:outline-none"
+                                  />
+                                );
+                              })()}
                             </div>
 
                             <span className="text-slate-500 text-xs font-mono">×</span>

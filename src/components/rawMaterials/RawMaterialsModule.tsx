@@ -508,10 +508,12 @@ export const RawMaterialsModule: React.FC = () => {
                               ? 'emerald'
                               : rmm.movement_type === 'production_out'
                               ? 'blue'
+                              : rmm.movement_type === 'sale_out' || rmm.movement_type === 'resale_out'
+                              ? 'purple'
                               : 'amber'
                           }
                         >
-                          {rmm.movement_type.replace('_', ' ')}
+                          {rmm.movement_type === 'sale_out' || rmm.movement_type === 'resale_out' ? 'Direct Resale' : rmm.movement_type.replace('_', ' ')}
                         </Badge>
                       </td>
                       <td className="py-3 px-3 text-right font-mono font-bold">

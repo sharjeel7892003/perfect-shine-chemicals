@@ -1088,9 +1088,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const rmIdx = updatedRawMaterials.findIndex(m => m.id === rmId);
         if (rmIdx !== -1) {
           const rm = updatedRawMaterials[rmIdx];
-          const deductQty = item.quantity;
+          const deductQty = Number(item.quantity);
           const prevStk = Number(rm.current_stock);
-          const nextStk = Math.max(0, prevStk - deductQty);
+          const nextStk = Math.max(0, Number((prevStk - deductQty).toFixed(4)));
           const updatedRm = { ...rm, current_stock: nextStk, updated_at: new Date().toISOString() };
           updatedRawMaterials[rmIdx] = updatedRm;
           await supabaseService.upsertRawMaterial(updatedRm);
@@ -1190,9 +1190,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (item.raw_material_id || item.item_type === 'raw_material') {
         const rm = rawMaterials.find(m => m.id === item.raw_material_id);
         if (rm) {
-          const addBackQty = item.quantity;
+          const addBackQty = Number(item.quantity);
           const prevStk = Number(rm.current_stock);
-          const nextStk = prevStk + addBackQty;
+          const nextStk = Number((prevStk + addBackQty).toFixed(4));
           const updatedRm = { ...rm, current_stock: nextStk, updated_at: now };
           await supabaseService.upsertRawMaterial(updatedRm);
 
@@ -1200,7 +1200,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             id: generateId(),
             raw_material_id: rm.id,
             raw_material_name: rm.name,
-            movement_type: 'purchase_in',
+            movement_type: 'return',
             quantity: addBackQty,
             previous_stock: prevStk,
             new_stock: nextStk,

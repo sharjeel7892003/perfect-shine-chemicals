@@ -114,7 +114,7 @@ export interface ProductionBatch {
 }
 
 // RAW MATERIAL MOVEMENTS
-export type RawMaterialMovementType = 'purchase_in' | 'production_out' | 'sale_out' | 'adjustment' | 'wastage' | 'return';
+export type RawMaterialMovementType = 'purchase_in' | 'production_out' | 'sale_out' | 'resale_out' | 'adjustment' | 'wastage' | 'return';
 
 export interface RawMaterialMovement {
   id: string;

@@ -11,3 +11,11 @@ ALTER TABLE public.sale_items ADD COLUMN IF NOT EXISTS raw_material_id TEXT;
 
 -- 3. Ensure product_id can be NULL when raw_material_id is provided
 ALTER TABLE public.sale_items ALTER COLUMN product_id DROP NOT NULL;
+
+-- 4. Update check constraint on raw_material_movements to allow direct customer resale ('sale_out' and 'resale_out')
+ALTER TABLE public.raw_material_movements 
+DROP CONSTRAINT IF EXISTS raw_material_movements_movement_type_check;
+
+ALTER TABLE public.raw_material_movements 
+ADD CONSTRAINT raw_material_movements_movement_type_check 
+CHECK (movement_type IN ('purchase_in', 'production_out', 'adjustment', 'return', 'sale_out', 'resale_out'));

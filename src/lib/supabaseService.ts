@@ -169,11 +169,18 @@ export const supabaseService = {
       }));
 
       // 7. Normalized Raw Material Movements
-      const normalizedRawMovements = (rmmRes.data || []).map((rmm: any) => ({
-        ...rmm,
-        raw_material_name: rmm.raw_material_id ? rmMap.get(rmm.raw_material_id) || rmm.raw_material_name : (rmm.raw_material_name || 'Raw Material'),
-        created_by_name: rmm.created_by ? profMap.get(rmm.created_by) || 'Staff' : (rmm.created_by_name || 'Staff')
-      }));
+      const normalizedRawMovements = (rmmRes.data || []).map((rmm: any) => {
+        let movement_type = rmm.movement_type;
+        if (movement_type === 'adjustment' && rmm.notes?.includes('[Direct Sale]')) {
+          movement_type = 'sale_out';
+        }
+        return {
+          ...rmm,
+          movement_type,
+          raw_material_name: rmm.raw_material_id ? rmMap.get(rmm.raw_material_id) || rmm.raw_material_name : (rmm.raw_material_name || 'Raw Material'),
+          created_by_name: rmm.created_by ? profMap.get(rmm.created_by) || 'Staff' : (rmm.created_by_name || 'Staff')
+        };
+      });
 
       return {
         products: (prodRes.data as Product[]) || [],
@@ -838,8 +845,21 @@ export const supabaseService = {
       created_by: isValidUUID((movement as any).created_by) ? (movement as any).created_by : null
     };
 
-    const { error } = await supabase.from('raw_material_movements').upsert(payload);
-    if (error) {
+    let { error } = await supabase.from('raw_material_movements').upsert(payload);
+    if (error && error.message?.includes('raw_material_movements_movement_type_check')) {
+      // The live database check constraint has not yet been migrated to include 'sale_out' / 'resale_out'.
+      // Fallback to 'adjustment' so sales never fail, and tag notes with [Direct Sale]
+      const fallbackPayload = {
+        ...payload,
+        movement_type: 'adjustment',
+        notes: `[Direct Sale] ${notes}`.trim()
+      };
+      const retry = await supabase.from('raw_material_movements').upsert(fallbackPayload);
+      if (retry.error) {
+        console.error('Supabase upsertRawMaterialMovement fallback error:', retry.error);
+        throw new Error(`Raw material movement database write failed: ${retry.error.message}`);
+      }
+    } else if (error) {
       console.error('Supabase upsertRawMaterialMovement error:', error);
       throw new Error(`Raw material movement database write failed: ${error.message}`);
     }
