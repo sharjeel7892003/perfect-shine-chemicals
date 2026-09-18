@@ -59,6 +59,8 @@ export interface RawMaterial {
   description?: string;
   is_active: boolean;
   is_archived?: boolean;
+  is_sellable?: boolean; // Whether this raw material can be sold directly to customers
+  selling_price?: number; // Resale rate per unit (PKR)
   created_at?: string;
   updated_at?: string;
 }
@@ -112,7 +114,7 @@ export interface ProductionBatch {
 }
 
 // RAW MATERIAL MOVEMENTS
-export type RawMaterialMovementType = 'purchase_in' | 'production_out' | 'adjustment' | 'wastage' | 'return';
+export type RawMaterialMovementType = 'purchase_in' | 'production_out' | 'sale_out' | 'adjustment' | 'wastage' | 'return';
 
 export interface RawMaterialMovement {
   id: string;
@@ -164,7 +166,9 @@ export type PaymentMethod = 'cash' | 'bank' | 'jazzcash' | 'easypaisa' | 'cheque
 
 export interface SaleItem {
   id?: string;
-  product_id: string;
+  item_type?: 'finished_product' | 'raw_material';
+  product_id?: string;
+  raw_material_id?: string;
   product_name: string;
   unit?: string;
   // Packaging / Pack Size Details

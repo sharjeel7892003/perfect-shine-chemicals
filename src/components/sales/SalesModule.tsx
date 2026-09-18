@@ -29,7 +29,7 @@ import { Modal } from '../common/Modal';
 import { InvoiceModal } from './InvoiceModal';
 
 export const SalesModule: React.FC = () => {
-  const { products, customers, sales, createSale, deleteSaleInvoice } = useApp();
+  const { products, rawMaterials, customers, sales, createSale, deleteSaleInvoice } = useApp();
   const { currentUser, allUsers, isOwner, canCreateSale } = useAuth();
 
   // Dynamically resolve staff member name by looking up salesperson_id in profiles
@@ -60,6 +60,7 @@ export const SalesModule: React.FC = () => {
   const [productSearch, setProductSearch] = useState<string>('');
   const [historySearch, setHistorySearch] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [posCatalogFilter, setPosCatalogFilter] = useState<'all' | 'products' | 'raw_materials'>('all');
 
   // Selected pack size per product card in POS terminal
   const [selectedPackByProduct, setSelectedPackByProduct] = useState<Record<string, string>>({});
@@ -182,6 +183,56 @@ export const SalesModule: React.FC = () => {
     });
   };
 
+  const addRawMaterialToCart = (rawMaterialId: string) => {
+    const rm = rawMaterials.find(r => r.id === rawMaterialId);
+    if (!rm) return;
+
+    const currentStock = Number(rm.current_stock || 0);
+    if (currentStock <= 0) {
+      alert(`Cannot add ${rm.name}: Out of stock in warehouse!`);
+      return;
+    }
+
+    setCartItems(prev => {
+      const existingIdx = prev.findIndex(item => item.raw_material_id === rawMaterialId);
+      const sellingPrice = Number(rm.selling_price || 0) > 0 ? Number(rm.selling_price) : Number(rm.cost_per_unit || 0);
+
+      if (existingIdx !== -1) {
+        const currentItem = prev[existingIdx];
+        const nextQty = currentItem.quantity + 1;
+
+        if (nextQty > currentStock) {
+          alert(`Maximum available stock reached! Only ${currentStock} ${rm.unit} in storage.`);
+          return prev;
+        }
+
+        const updated = [...prev];
+        updated[existingIdx] = {
+          ...currentItem,
+          quantity: nextQty,
+          base_quantity: nextQty,
+          subtotal: nextQty * currentItem.unit_price,
+        };
+        return updated;
+      }
+
+      const newItem: SaleItem = {
+        item_type: 'raw_material',
+        raw_material_id: rm.id,
+        product_name: rm.name,
+        unit: rm.unit,
+        base_quantity: 1,
+        quantity: 1,
+        unit_cost: Number(rm.cost_per_unit || 0),
+        unit_price: sellingPrice,
+        default_unit_price: sellingPrice,
+        subtotal: sellingPrice,
+      };
+
+      return [...prev, newItem];
+    });
+  };
+
   const updateUnitPrice = (index: number, newPrice: number) => {
     setCartItems(prev => {
       const item = prev[index];
@@ -207,13 +258,23 @@ export const SalesModule: React.FC = () => {
         return prev.filter((_, idx) => idx !== index);
       }
 
-      const product = products.find(p => p.id === item.product_id);
-      const baseStock = product ? Number(product.current_stock) : 99999;
+      let baseStock = 99999;
+      let unitLabel = item.unit || 'unit';
+      if (item.raw_material_id) {
+        const rm = rawMaterials.find(r => r.id === item.raw_material_id);
+        baseStock = rm ? Number(rm.current_stock) : 99999;
+        unitLabel = rm?.unit || unitLabel;
+      } else {
+        const product = products.find(p => p.id === item.product_id);
+        baseStock = product ? Number(product.current_stock) : 99999;
+        unitLabel = product?.base_unit || product?.unit || unitLabel;
+      }
+
       const multiplier = item.size_in_base_unit || 1.0;
       const totalBaseNeeded = newQty * multiplier;
 
       if (totalBaseNeeded > baseStock) {
-        alert(`Only ${baseStock} ${item.unit} available in warehouse.`);
+        alert(`Only ${baseStock} ${unitLabel} available in warehouse.`);
         newQty = Math.floor(baseStock / multiplier) || 1;
       }
 
@@ -221,7 +282,7 @@ export const SalesModule: React.FC = () => {
       updated[index] = {
         ...item,
         quantity: newQty,
-        pack_quantity: newQty,
+        pack_quantity: item.raw_material_id ? undefined : newQty,
         base_quantity: newQty * multiplier,
         subtotal: newQty * item.unit_price,
       };
@@ -354,114 +415,264 @@ export const SalesModule: React.FC = () => {
       {activeSubTab === 'pos' ? (
         /* =================== POS TERMINAL VIEW =================== */
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left 7 Columns: Product Selection Grid with Pack Size Dropdown */}
-          <div className="lg:col-span-7 space-y-4">
+          {/* Left 7 Columns: Product & Sellable Raw Materials Selection Grid */}
+          <div className="lg:col-span-7 space-y-3">
             <div className="relative">
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input
                 type="text"
-                placeholder="Search chemical product name or SKU..."
+                placeholder="Search chemical products, SKUs, or resale raw materials..."
                 value={productSearch}
                 onChange={(e) => setProductSearch(e.target.value)}
                 className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-colors"
               />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[620px] overflow-y-auto pr-1">
-              {filteredProducts.map((product) => {
-                const baseUnit = product.base_unit || product.unit || 'liter';
-                const isOutOfStock = product.current_stock <= 0;
-                const isLow = product.current_stock <= product.reorder_level;
-                const packInfo = getSelectedPackForProduct(product);
-                const packSizes = product.pack_sizes || [];
-
-                const defaultPack = packSizes.find(p => p.is_default) || packSizes[0];
-                const estPacksAvailable = defaultPack && defaultPack.size_in_base_unit > 0
-                  ? Math.floor(product.current_stock / defaultPack.size_in_base_unit)
-                  : 0;
-
-                return (
-                  <div
-                    key={product.id}
-                    className={`p-4 rounded-2xl border transition-all flex flex-col justify-between ${
-                      isOutOfStock
-                        ? 'bg-slate-900/40 border-slate-800/60 opacity-60'
-                        : 'bg-slate-900 border-slate-800 hover:border-emerald-500/50 shadow-sm'
+            {/* Filter Tabs between Finished Goods and Sellable Raw Materials */}
+            {(() => {
+              const sellableRMs = rawMaterials.filter(rm =>
+                Boolean(rm.is_sellable) &&
+                !rm.is_archived &&
+                rm.is_active !== false &&
+                (!productSearch.trim() ||
+                  rm.name.toLowerCase().includes(productSearch.toLowerCase().trim()) ||
+                  (rm.category && rm.category.toLowerCase().includes(productSearch.toLowerCase().trim())))
+              );
+              return (
+                <div className="flex items-center gap-1.5 p-1 bg-slate-900/80 rounded-xl border border-slate-800 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setPosCatalogFilter('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      posCatalogFilter === 'all'
+                        ? 'bg-emerald-500 text-slate-950 shadow'
+                        : 'text-slate-400 hover:text-white'
                     }`}
                   >
-                    <div>
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <h4 className="font-bold text-white text-sm leading-tight">{product.name}</h4>
-                          <p className="text-[11px] text-slate-400 font-mono mt-0.5">{product.sku}</p>
-                        </div>
-                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-bold uppercase">
-                          {baseUnit}
-                        </span>
-                      </div>
+                    All Items ({filteredProducts.length + sellableRMs.length})
+                  </button>
 
-                      <div className="mt-2.5 p-2 rounded-xl bg-slate-800/50 border border-slate-700/60 flex items-center justify-between text-xs">
-                        <div>
-                          <span className="text-[10px] text-slate-400 uppercase block">Warehouse Stock:</span>
-                          <span className={`font-mono font-black ${isLow ? 'text-rose-400' : 'text-white'}`}>
-                            {product.current_stock} {baseUnit}
+                  <button
+                    type="button"
+                    onClick={() => setPosCatalogFilter('products')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      posCatalogFilter === 'products'
+                        ? 'bg-emerald-500 text-slate-950 shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    📦 Finished Products ({filteredProducts.length})
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setPosCatalogFilter('raw_materials')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      posCatalogFilter === 'raw_materials'
+                        ? 'bg-teal-500 text-slate-950 shadow font-bold'
+                        : 'text-teal-400 hover:text-teal-300'
+                    }`}
+                  >
+                    🧪 Raw Materials Resale ({sellableRMs.length})
+                  </button>
+                </div>
+              );
+            })()}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[580px] overflow-y-auto pr-1">
+              {/* 1. Finished Products */}
+              {(posCatalogFilter === 'all' || posCatalogFilter === 'products') &&
+                filteredProducts.map((product) => {
+                  const baseUnit = product.base_unit || product.unit || 'liter';
+                  const isOutOfStock = product.current_stock <= 0;
+                  const isLow = product.current_stock <= product.reorder_level;
+                  const packInfo = getSelectedPackForProduct(product);
+                  const packSizes = product.pack_sizes || [];
+
+                  const defaultPack = packSizes.find(p => p.is_default) || packSizes[0];
+                  const estPacksAvailable = defaultPack && defaultPack.size_in_base_unit > 0
+                    ? Math.floor(product.current_stock / defaultPack.size_in_base_unit)
+                    : 0;
+
+                  return (
+                    <div
+                      key={`prod-${product.id}`}
+                      className={`p-4 rounded-2xl border transition-all flex flex-col justify-between ${
+                        isOutOfStock
+                          ? 'bg-slate-900/40 border-slate-800/60 opacity-60'
+                          : 'bg-slate-900 border-slate-800 hover:border-emerald-500/50 shadow-sm'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <h4 className="font-bold text-white text-sm leading-tight">{product.name}</h4>
+                            <p className="text-[11px] text-slate-400 font-mono mt-0.5">{product.sku}</p>
+                          </div>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-bold uppercase">
+                            {baseUnit}
                           </span>
                         </div>
-                        {defaultPack && (
-                          <div className="text-right">
-                            <span className="text-[10px] text-slate-400 uppercase block">Pack Estimate:</span>
-                            <span className="font-mono text-[11px] text-emerald-400 font-semibold">
-                              ≈ {estPacksAvailable} {defaultPack.unit_label}s
+
+                        <div className="mt-2.5 p-2 rounded-xl bg-slate-800/50 border border-slate-700/60 flex items-center justify-between text-xs">
+                          <div>
+                            <span className="text-[10px] text-slate-400 uppercase block">Warehouse Stock:</span>
+                            <span className={`font-mono font-black ${isLow ? 'text-rose-400' : 'text-white'}`}>
+                              {product.current_stock} {baseUnit}
                             </span>
                           </div>
-                        )}
-                      </div>
+                          {defaultPack && (
+                            <div className="text-right">
+                              <span className="text-[10px] text-slate-400 uppercase block">Pack Estimate:</span>
+                              <span className="font-mono text-[11px] text-emerald-400 font-semibold">
+                                ≈ {estPacksAvailable} {defaultPack.unit_label}s
+                              </span>
+                            </div>
+                          )}
+                        </div>
 
-                      <div className="mt-3">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">
-                          Select Packaging for Sale:
-                        </label>
-                        <select
-                          value={selectedPackByProduct[product.id] || (defaultPack?.id || 'bulk')}
-                          onChange={(e) => setSelectedPackByProduct({
-                            ...selectedPackByProduct,
-                            [product.id]: e.target.value,
-                          })}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-emerald-500"
-                        >
-                          {packSizes.map(pk => (
-                            <option key={pk.id} value={pk.id}>
-                              {pk.name} ({pk.size_in_base_unit} {baseUnit}) • {formatPKR(pk.selling_price)}
+                        <div className="mt-3">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">
+                            Select Packaging for Sale:
+                          </label>
+                          <select
+                            value={selectedPackByProduct[product.id] || (defaultPack?.id || 'bulk')}
+                            onChange={(e) => setSelectedPackByProduct({
+                              ...selectedPackByProduct,
+                              [product.id]: e.target.value,
+                            })}
+                            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-emerald-500"
+                          >
+                            {packSizes.map(pk => (
+                              <option key={pk.id} value={pk.id}>
+                                {pk.name} ({pk.size_in_base_unit} {baseUnit}) • {formatPKR(pk.selling_price)}
+                              </option>
+                            ))}
+                            <option value="bulk">
+                              Bulk / Loose Wholesale (Per 1 {baseUnit}) • {formatPKR(product.selling_price)}
                             </option>
-                          ))}
-                          <option value="bulk">
-                            Bulk / Loose Wholesale (Per 1 {baseUnit}) • {formatPKR(product.selling_price)}
-                          </option>
-                        </select>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between">
+                        <div>
+                          <span className="text-[10px] text-slate-400 uppercase">Rate:</span>
+                          <p className="text-base font-black font-mono text-emerald-400 leading-none mt-0.5">
+                            {formatPKR(packInfo.price)}
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={isOutOfStock}
+                          onClick={() => addToCart(product.id)}
+                          className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-bold text-xs transition-colors flex items-center gap-1 shadow-sm"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Add to Cart</span>
+                        </button>
                       </div>
                     </div>
+                  );
+                })}
 
-                    <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between">
-                      <div>
-                        <span className="text-[10px] text-slate-400 uppercase">Rate:</span>
-                        <p className="text-base font-black font-mono text-emerald-400 leading-none mt-0.5">
-                          {formatPKR(packInfo.price)}
-                        </p>
-                      </div>
+              {/* 2. Direct Resale Raw Materials */}
+              {(posCatalogFilter === 'all' || posCatalogFilter === 'raw_materials') &&
+                rawMaterials
+                  .filter(rm =>
+                    Boolean(rm.is_sellable) &&
+                    !rm.is_archived &&
+                    rm.is_active !== false &&
+                    (!productSearch.trim() ||
+                      rm.name.toLowerCase().includes(productSearch.toLowerCase().trim()) ||
+                      (rm.category && rm.category.toLowerCase().includes(productSearch.toLowerCase().trim())))
+                  )
+                  .map((rm) => {
+                    const isOutOfStock = Number(rm.current_stock || 0) <= 0;
+                    const isLow = Number(rm.current_stock || 0) <= Number(rm.reorder_level || 0);
+                    const resaleRate = Number(rm.selling_price || 0) > 0 ? Number(rm.selling_price) : Number(rm.cost_per_unit || 0);
 
-                      <button
-                        type="button"
-                        disabled={isOutOfStock}
-                        onClick={() => addToCart(product.id)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs shadow-md disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                    return (
+                      <div
+                        key={`rm-${rm.id}`}
+                        className={`p-4 rounded-2xl border transition-all flex flex-col justify-between ${
+                          isOutOfStock
+                            ? 'bg-slate-900/40 border-slate-800/60 opacity-60'
+                            : 'bg-slate-900 border-teal-500/25 hover:border-teal-400/50 shadow-sm'
+                        }`}
                       >
-                        <Plus className="w-3.5 h-3.5 stroke-[3px]" />
-                        <span>Add to Bill</span>
-                      </button>
-                    </div>
+                        <div>
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-400 border border-teal-500/30">
+                                  🧪 Raw Material Resale
+                                </span>
+                              </div>
+                              <h4 className="font-bold text-white text-sm leading-tight mt-1.5">{rm.name}</h4>
+                              <p className="text-[11px] text-slate-400 mt-0.5">{rm.category}</p>
+                            </div>
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-teal-500/10 text-teal-400 font-bold uppercase">
+                              {rm.unit}
+                            </span>
+                          </div>
+
+                          <div className="mt-2.5 p-2 rounded-xl bg-slate-800/50 border border-slate-700/60 flex items-center justify-between text-xs">
+                            <div>
+                              <span className="text-[10px] text-slate-400 uppercase block">Warehouse Stock (Shared):</span>
+                              <span className={`font-mono font-black ${isLow ? 'text-rose-400' : 'text-teal-400'}`}>
+                                {rm.current_stock} {rm.unit}
+                              </span>
+                            </div>
+                            <div className="text-right text-[11px] text-slate-400">
+                              Cost: <span className="font-mono text-slate-300">{formatPKR(rm.cost_per_unit)}/{rm.unit}</span>
+                            </div>
+                          </div>
+
+                          <p className="text-[11px] text-slate-400 mt-2 line-clamp-1 italic">
+                            Direct resale to customer. Deducts from production raw stock.
+                          </p>
+                        </div>
+
+                        <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between">
+                          <div>
+                            <span className="text-[10px] text-slate-400 uppercase">Resale Rate:</span>
+                            <p className="text-base font-black font-mono text-teal-400 leading-none mt-0.5">
+                              {formatPKR(resaleRate)} <span className="text-[10px] text-slate-400 font-normal">/{rm.unit}</span>
+                            </p>
+                          </div>
+
+                          <button
+                            type="button"
+                            disabled={isOutOfStock}
+                            onClick={() => addRawMaterialToCart(rm.id)}
+                            className="px-3.5 py-2 rounded-xl bg-teal-500 hover:bg-teal-400 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-bold text-xs transition-colors flex items-center gap-1 shadow-sm"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>Add to Cart</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+              {/* Empty state */}
+              {(() => {
+                const sellableCount = rawMaterials.filter(rm =>
+                  Boolean(rm.is_sellable) && !rm.is_archived && rm.is_active !== false &&
+                  (!productSearch.trim() || rm.name.toLowerCase().includes(productSearch.toLowerCase().trim()))
+                ).length;
+                const showEmpty = (posCatalogFilter === 'products' && filteredProducts.length === 0) ||
+                  (posCatalogFilter === 'raw_materials' && sellableCount === 0) ||
+                  (posCatalogFilter === 'all' && filteredProducts.length === 0 && sellableCount === 0);
+
+                return showEmpty ? (
+                  <div className="col-span-2 py-12 text-center text-slate-500 text-xs">
+                    No products or sellable raw materials match your search criteria.
                   </div>
-                );
-              })}
+                ) : null;
+              })()}
             </div>
           </div>
 
@@ -503,25 +714,24 @@ export const SalesModule: React.FC = () => {
                   </div>
                 ) : (
                   cartItems.map((item, idx) => {
-                    const rateInfo = getRateDifferenceInfo(item, products);
+                    const rateInfo = getRateDifferenceInfo(item, products, rawMaterials);
                     return (
                       <div
                         key={idx}
-                        className={`p-2.5 rounded-xl border transition-all ${
-                          rateInfo.isCustom
-                            ? rateInfo.isDiscount
-                              ? 'bg-amber-950/20 border-amber-500/30'
-                              : 'bg-indigo-950/20 border-indigo-500/30'
-                            : 'bg-slate-850 border-slate-800'
-                        }`}
+                        className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-2"
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0 flex-1">
+                          <div className="flex-1">
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <p className="text-xs font-bold text-white truncate">{item.product_name}</p>
+                              <h5 className="font-bold text-white text-xs leading-tight">{item.product_name}</h5>
+                              {item.item_type === 'raw_material' && (
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-400 border border-teal-500/30">
+                                  🧪 Raw Material
+                                </span>
+                              )}
                               {rateInfo.isCustom && (
                                 <span
-                                  className={`inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider ${
+                                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold font-mono ${
                                     rateInfo.isDiscount
                                       ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
                                       : 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/30'
@@ -533,9 +743,15 @@ export const SalesModule: React.FC = () => {
                                 </span>
                               )}
                             </div>
-                            <p className="text-[10px] text-emerald-400 font-medium">
-                              Packaging: {item.pack_size_name}
-                            </p>
+                            {item.pack_size_name ? (
+                              <p className="text-[10px] text-emerald-400 font-medium">
+                                Packaging: {item.pack_size_name}
+                              </p>
+                            ) : item.item_type === 'raw_material' ? (
+                              <p className="text-[10px] text-teal-400 font-medium">
+                                Direct Resale ({item.unit})
+                              </p>
+                            ) : null}
                           </div>
 
                           <div className="flex items-center gap-2 shrink-0">
@@ -798,7 +1014,7 @@ export const SalesModule: React.FC = () => {
                           <span className="truncate">
                             {sale.items.map(i => `${i.quantity}x ${i.pack_size_name || i.product_name}`).join(', ')}
                           </span>
-                          {saleHasCustomRates(sale, products) && (
+                          {saleHasCustomRates(sale, products, rawMaterials) && (
                             <span 
                               className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 whitespace-nowrap"
                               title="This invoice contains custom negotiated rates"

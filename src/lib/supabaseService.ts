@@ -69,18 +69,31 @@ export const supabaseService = {
       ]);
 
 
-      // 0. Normalized Raw Materials (check for [unit:pcs] fallback tag)
+      // 0. Normalized Raw Materials (check for [unit:pcs] and [sellable:RATE] fallback tags)
       const normalizedRawMaterials: RawMaterial[] = (rmRes.data || []).map((rm: any) => {
         let unit = rm.unit;
         let desc = rm.description || '';
-        if (typeof desc === 'string' && desc.includes('[unit:pcs]')) {
-          unit = 'pcs';
-          desc = desc.replace(/\[unit:pcs\]\s*/g, '').trim();
+        let is_sellable = Boolean(rm.is_sellable);
+        let selling_price = Number(rm.selling_price || 0);
+
+        if (typeof desc === 'string') {
+          if (desc.includes('[unit:pcs]')) {
+            unit = 'pcs';
+            desc = desc.replace(/\[unit:pcs\]\s*/g, '').trim();
+          }
+          const sellableMatch = desc.match(/\[sellable:([0-9.]+)\]/);
+          if (sellableMatch) {
+            is_sellable = true;
+            selling_price = parseFloat(sellableMatch[1]) || 0;
+            desc = desc.replace(/\[sellable:[0-9.]+\]\s*/g, '').trim();
+          }
         }
         return {
           ...rm,
           unit,
-          description: desc
+          description: desc,
+          is_sellable,
+          selling_price
         };
       });
 
@@ -113,10 +126,25 @@ export const supabaseService = {
         raw_materials_consumed: b.raw_materials_consumed || (b as any).consumed_materials || []
       }));
 
-      // 3. Normalized Sales (extract sale_items into .items and enrich salesperson_name from profiles)
+      // 3. Normalized Sales (extract sale_items into .items, resolve raw_material_id if unmigrated)
       const normalizedSales = (salesRes.data || []).map((s: any) => ({
         ...s,
-        items: s.sale_items || [],
+        items: (s.sale_items || []).map((item: any) => {
+          let item_type = item.item_type || (item.raw_material_id ? 'raw_material' : 'finished_product');
+          let raw_material_id = item.raw_material_id;
+          if (!item.product_id && !raw_material_id) {
+            const matchedRm = normalizedRawMaterials.find(r => r.name.toLowerCase() === (item.product_name || '').toLowerCase());
+            if (matchedRm) {
+              item_type = 'raw_material';
+              raw_material_id = matchedRm.id;
+            }
+          }
+          return {
+            ...item,
+            item_type,
+            raw_material_id
+          };
+        }),
         salesperson_name: s.salesperson_id ? (profMap.get(s.salesperson_id) || 'Staff') : 'Staff'
       }));
 
@@ -338,6 +366,8 @@ export const supabaseService = {
       current_stock: Number(rm.current_stock || 0),
       reorder_level: Number(rm.reorder_level || 0),
       cost_per_unit: Number(rm.cost_per_unit || 0),
+      is_sellable: Boolean(rm.is_sellable),
+      selling_price: Number(rm.selling_price || 0),
       description: rm.description || '',
       is_active: rm.is_active !== false,
       is_archived: Boolean(rm.is_archived),
@@ -345,22 +375,41 @@ export const supabaseService = {
     };
 
     let { data, error } = await supabase.from('raw_materials').upsert(payload).select().single();
-    if (error && (error.message?.includes('raw_materials_unit_check') || error.code === '23514')) {
-      // Graceful fallback: If DB check constraint only permits 'kg' | 'liter', store unit as 'kg' and tag description
-      const safeDesc = payload.description.includes('[unit:pcs]')
-        ? payload.description
-        : `[unit:pcs] ${payload.description}`.trim();
-      const fallbackPayload = {
-        ...payload,
-        unit: 'kg',
-        description: safeDesc
+    if (error && (
+      error.message?.includes('is_sellable') || 
+      error.message?.includes('selling_price') || 
+      error.message?.includes('raw_materials_unit_check') || 
+      error.code === '23514' || 
+      error.code === 'PGRST204'
+    )) {
+      // Graceful fallback: If columns is_sellable/selling_price or unit constraint unmigrated in DB
+      let safeDesc = payload.description || '';
+      if (payload.unit === 'pcs' && !safeDesc.includes('[unit:pcs]')) {
+        safeDesc = `[unit:pcs] ${safeDesc}`.trim();
+      }
+      if (rm.is_sellable && !safeDesc.includes('[sellable:')) {
+        safeDesc = `[sellable:${Number(rm.selling_price || 0)}] ${safeDesc}`.trim();
+      }
+
+      const fallbackPayload: any = {
+        id: validId,
+        name: rm.name,
+        category: rm.category,
+        unit: (error.message?.includes('raw_materials_unit_check') || error.code === '23514') ? 'kg' : payload.unit,
+        current_stock: payload.current_stock,
+        reorder_level: payload.reorder_level,
+        cost_per_unit: payload.cost_per_unit,
+        description: safeDesc,
+        is_active: payload.is_active,
+        is_archived: payload.is_archived,
+        updated_at: payload.updated_at
       };
       const retryRes = await supabase.from('raw_materials').upsert(fallbackPayload).select().single();
       if (retryRes.error) {
         console.error('Supabase upsertRawMaterial fallback error:', retryRes.error);
         throw new Error(`Raw material database write failed: ${retryRes.error.message}`);
       }
-      data = { ...retryRes.data, unit: rm.unit, description: rm.description };
+      data = { ...retryRes.data, unit: rm.unit, is_sellable: rm.is_sellable, selling_price: rm.selling_price, description: rm.description };
     } else if (error) {
       console.error('Supabase upsertRawMaterial error:', error);
       throw new Error(`Raw material database write failed: ${error.message}`);
@@ -559,10 +608,13 @@ export const supabaseService = {
       const itemsToInsert = sale.items.map(item => {
         // Only pass pack_size_id if it's a real pack size UUID (bulk/loose must be NULL)
         const isPack = Boolean(item.pack_size_id && item.pack_size_id !== 'bulk' && isValidUUID(item.pack_size_id));
+        const isRawMaterial = Boolean(item.raw_material_id || item.item_type === 'raw_material');
         return {
           id: ensureUUID(item.id),
           sale_id: validId,
-          product_id: isValidUUID(item.product_id) ? item.product_id : null,
+          item_type: isRawMaterial ? 'raw_material' : 'finished_product',
+          raw_material_id: isRawMaterial && isValidUUID(item.raw_material_id) ? item.raw_material_id : null,
+          product_id: (!isRawMaterial && isValidUUID(item.product_id)) ? item.product_id : null,
           product_name: item.product_name || '',
           pack_size_id: isPack ? item.pack_size_id : null,
           pack_size_name: item.pack_size_name || null,
@@ -576,8 +628,20 @@ export const supabaseService = {
         };
       });
 
-      const { error: itemsError } = await supabase.from('sale_items').insert(itemsToInsert);
-      if (itemsError) {
+      let { error: itemsError } = await supabase.from('sale_items').insert(itemsToInsert);
+      if (itemsError && (
+        itemsError.message?.includes('raw_material_id') || 
+        itemsError.message?.includes('item_type') || 
+        itemsError.code === 'PGRST204'
+      )) {
+        // Fallback for unmigrated sale_items table: omit raw_material_id and item_type, keeping product_id: null
+        const fallbackItems = itemsToInsert.map(({ raw_material_id, item_type, ...rest }) => rest);
+        const retryRes = await supabase.from('sale_items').insert(fallbackItems);
+        if (retryRes.error) {
+          console.error('Supabase sale_items fallback insert error:', retryRes.error);
+          throw new Error(`Sale items write failed: ${retryRes.error.message}`);
+        }
+      } else if (itemsError) {
         console.error('Supabase sale_items insert error:', itemsError);
         throw new Error(`Sale items write failed: ${itemsError.message}`);
       }

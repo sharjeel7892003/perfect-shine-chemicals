@@ -63,6 +63,8 @@ export const RawMaterialsModule: React.FC = () => {
     current_stock: 0,
     reorder_level: 50,
     cost_per_unit: 0,
+    is_sellable: false,
+    selling_price: 0,
     description: '',
     is_active: true,
   });
@@ -83,6 +85,8 @@ export const RawMaterialsModule: React.FC = () => {
       current_stock: 0,
       reorder_level: 50,
       cost_per_unit: 0,
+      is_sellable: false,
+      selling_price: 0,
       description: '',
       is_active: true,
     });
@@ -99,6 +103,8 @@ export const RawMaterialsModule: React.FC = () => {
       current_stock: mat.current_stock,
       reorder_level: mat.reorder_level,
       cost_per_unit: mat.cost_per_unit,
+      is_sellable: Boolean(mat.is_sellable),
+      selling_price: Number(mat.selling_price || 0),
       description: mat.description || '',
       is_active: mat.is_active,
     });
@@ -349,7 +355,14 @@ export const RawMaterialsModule: React.FC = () => {
                   return (
                     <tr key={rm.id} className="hover:bg-slate-800/40 transition-colors">
                       <td className="py-3 px-3">
-                        <p className="font-bold text-white text-sm">{rm.name}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="font-bold text-white text-sm">{rm.name}</p>
+                          {rm.is_sellable && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-500/15 text-teal-400 border border-teal-500/30 whitespace-nowrap">
+                              Sellable • {formatPKR(rm.selling_price || 0)}/{rm.unit}
+                            </span>
+                          )}
+                        </div>
                         {rm.description && (
                           <p className="text-[11px] text-slate-400 line-clamp-1 mt-0.5">{rm.description}</p>
                         )}
@@ -623,6 +636,56 @@ export const RawMaterialsModule: React.FC = () => {
                 placeholder="e.g. 96% industrial active matter concentration"
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white"
               />
+            </div>
+
+            {/* Direct Resale to Customers Flag & Price */}
+            <div className="col-span-2 p-3.5 bg-slate-900/80 rounded-xl border border-slate-700/80 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label htmlFor="is_sellable_toggle" className="text-xs font-bold text-white flex items-center gap-1.5 cursor-pointer">
+                    <span>Also Sellable Directly to Customers</span>
+                  </label>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Allow direct sales to customers in the POS. Uses the same unified stock pool as production.
+                  </p>
+                </div>
+                <input
+                  id="is_sellable_toggle"
+                  type="checkbox"
+                  checked={formData.is_sellable}
+                  onChange={(e) => setFormData({ 
+                    ...formData, 
+                    is_sellable: e.target.checked,
+                    selling_price: e.target.checked && (!formData.selling_price || formData.selling_price <= 0)
+                      ? formData.cost_per_unit 
+                      : formData.selling_price
+                  })}
+                  className="w-4 h-4 rounded border-slate-700 bg-slate-800 text-teal-500 focus:ring-teal-500 focus:ring-offset-slate-900 cursor-pointer"
+                />
+              </div>
+
+              {formData.is_sellable && (
+                <div className="pt-2.5 border-t border-slate-800 flex items-center gap-3">
+                  <div className="flex-1">
+                    <label className="block text-[10px] font-bold text-teal-400 uppercase mb-1">
+                      Resale Selling Price (PKR / {formData.unit})
+                    </label>
+                    <input
+                      type="number"
+                      min="0.01"
+                      step="any"
+                      required={formData.is_sellable}
+                      placeholder={`e.g. 450 per ${formData.unit}`}
+                      value={formData.selling_price || ''}
+                      onChange={(e) => setFormData({ ...formData, selling_price: parseFloat(e.target.value) || 0 })}
+                      className="w-full bg-slate-900 border border-teal-500/50 rounded-xl px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-teal-400"
+                    />
+                  </div>
+                  <div className="text-[11px] text-slate-400 pt-3 font-mono">
+                    Cost: <span className="text-slate-300">{formatPKR(formData.cost_per_unit)}/{formData.unit}</span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

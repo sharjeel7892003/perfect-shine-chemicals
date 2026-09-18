@@ -115,7 +115,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
   const filteredSales = sales.filter(s => {
     const dateMatch = isDateInRange(s.date);
     const customerMatch = selectedCustomerFilter === 'all' || s.customer_id === selectedCustomerFilter;
-    const productMatch = selectedProductFilter === 'all' || s.items.some(i => i.product_id === selectedProductFilter);
+    const productMatch = selectedProductFilter === 'all' || s.items.some(i => i.product_id === selectedProductFilter || i.raw_material_id === selectedProductFilter);
     return dateMatch && customerMatch && productMatch;
   });
 
@@ -137,9 +137,9 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
 
   filteredSales.forEach(s => {
     s.items.forEach(item => {
-      if (selectedProductFilter === 'all' || item.product_id === selectedProductFilter) {
+      if (selectedProductFilter === 'all' || item.product_id === selectedProductFilter || item.raw_material_id === selectedProductFilter) {
         totalSalesUnits += item.quantity;
-        const rateInfo = getRateDifferenceInfo(item, products);
+        const rateInfo = getRateDifferenceInfo(item, products, rawMaterials);
         salesItemizedRows.push({
           invoiceNo: s.invoice_number,
           date: s.date,
@@ -173,10 +173,16 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
   filteredSales.forEach(sale => {
     profitRevenue += sale.total_amount;
     sale.items.forEach(item => {
-      const prod = products.find(p => p.id === item.product_id);
-      const unitCost = Number(item.unit_cost) > 0 
-        ? Number(item.unit_cost) 
-        : (prod ? Number(prod.cost_price || 0) * (item.size_in_base_unit || 1) : 0);
+      let unitCost = Number(item.unit_cost) || 0;
+      if (unitCost <= 0) {
+        if (item.raw_material_id) {
+          const rm = rawMaterials.find(m => m.id === item.raw_material_id);
+          unitCost = rm ? Number(rm.cost_per_unit || 0) : 0;
+        } else {
+          const prod = products.find(p => p.id === item.product_id);
+          unitCost = prod ? Number(prod.cost_price || 0) * (item.size_in_base_unit || 1) : 0;
+        }
+      }
       const itemCost = unitCost * item.quantity;
       profitCOGS += itemCost;
 
@@ -687,10 +693,19 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
                   onChange={(e) => setSelectedProductFilter(e.target.value)}
                   className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white"
                 >
-                  <option value="all">All Products</option>
-                  {products.map(p => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
+                  <option value="all">All Products & Resale Materials</option>
+                  <optgroup label="Finished Products">
+                    {products.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </optgroup>
+                  {rawMaterials.some(rm => rm.is_sellable) && (
+                    <optgroup label="Raw Materials (Resale)">
+                      {rawMaterials.filter(rm => rm.is_sellable).map(rm => (
+                        <option key={rm.id} value={rm.id}>{rm.name} (Resale)</option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               </>
             )}
@@ -1414,7 +1429,16 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
                       const isLow = Number(rm.current_stock || 0) <= Number(rm.reorder_level || 0);
                       return (
                         <tr key={rm.id} className="hover:bg-slate-800/40">
-                          <td className="py-3 px-3 font-bold text-white text-sm">{rm.name}</td>
+                          <td className="py-3 px-3 font-bold text-white text-sm">
+                            <div className="flex items-center gap-2">
+                              <span>{rm.name}</span>
+                              {rm.is_sellable && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                  Sellable @ {formatPKR(rm.selling_price || 0)}/{rm.unit}
+                                </span>
+                              )}
+                            </div>
+                          </td>
                           <td className="py-3 px-3 text-slate-400">{rm.category}</td>
                           <td className="py-3 px-3 text-center font-mono text-teal-400 font-semibold uppercase">{rm.unit}</td>
                           <td className="py-3 px-3 text-right font-mono font-bold text-white">

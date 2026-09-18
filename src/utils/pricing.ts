@@ -1,16 +1,24 @@
-import { SaleItem, Sale, Product } from '../types';
+import { SaleItem, Sale, Product, RawMaterial } from '../types';
 
 /**
  * Resolves the catalog/standard unit selling price for a line item.
  * Prioritizes item.default_unit_price if recorded at addition time,
- * or dynamically resolves from the current product / pack size definition.
+ * or dynamically resolves from the current product / pack size / raw material definition.
  */
 export const getStandardUnitPrice = (
   item: SaleItem,
-  products: Product[]
+  products: Product[],
+  rawMaterials?: RawMaterial[]
 ): number | undefined => {
   if (item.default_unit_price !== undefined && item.default_unit_price > 0) {
     return item.default_unit_price;
+  }
+
+  if (item.raw_material_id && rawMaterials) {
+    const rm = rawMaterials.find(r => r.id === item.raw_material_id);
+    if (rm && rm.selling_price !== undefined && rm.selling_price > 0) {
+      return rm.selling_price;
+    }
   }
 
   const product = products.find(p => p.id === item.product_id);
@@ -40,9 +48,10 @@ export interface RateDifferenceInfo {
  */
 export const getRateDifferenceInfo = (
   item: SaleItem,
-  products: Product[]
+  products: Product[],
+  rawMaterials?: RawMaterial[]
 ): RateDifferenceInfo => {
-  const standardPrice = getStandardUnitPrice(item, products);
+  const standardPrice = getStandardUnitPrice(item, products, rawMaterials);
   if (standardPrice === undefined) {
     return {
       isCustom: false,
@@ -71,7 +80,8 @@ export const getRateDifferenceInfo = (
  */
 export const saleHasCustomRates = (
   sale: Sale,
-  products: Product[]
+  products: Product[],
+  rawMaterials?: RawMaterial[]
 ): boolean => {
-  return (sale.items || []).some(item => getRateDifferenceInfo(item, products).isCustom);
+  return (sale.items || []).some(item => getRateDifferenceInfo(item, products, rawMaterials).isCustom);
 };

@@ -1077,36 +1077,73 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const savedSale = await supabaseService.upsertSale(newSale);
     setSales(prev => [savedSale, ...prev]);
 
-    // Deduct stock for each sold product
+    // Deduct stock for each sold product or raw material
     const movementsToAdd: StockMovement[] = [];
-    for (const item of savedSale.items) {
-      const prod = products.find(p => p.id === item.product_id);
-      if (prod) {
-        const deductBaseQty = item.base_quantity || item.quantity;
-        const prevStk = Number(prod.current_stock);
-        const nextStk = Math.max(0, prevStk - deductBaseQty);
-        const updatedProd = { ...prod, current_stock: nextStk, updated_at: new Date().toISOString() };
-        await supabaseService.upsertProduct(updatedProd);
+    const rawMovementsToAdd: RawMaterialMovement[] = [];
+    const updatedRawMaterials: RawMaterial[] = [...rawMaterials];
 
-        const mvt: StockMovement = {
-          id: generateId(),
-          product_id: prod.id,
-          product_name: prod.name,
-          movement_type: 'sale_out',
-          quantity: -deductBaseQty,
-          previous_stock: prevStk,
-          new_stock: nextStk,
-          reference_id: savedSale.id,
-          notes: `Sold via Invoice ${invoiceNum} (${item.pack_size_name ? `${item.quantity}x ${item.pack_size_name}` : `${deductBaseQty} ${prod.base_unit || prod.unit}`})`,
-          date: savedSale.date,
-          created_by_name: savedSale.salesperson_name,
-        };
-        await supabaseService.upsertStockMovement(mvt);
-        movementsToAdd.push(mvt);
+    for (const item of savedSale.items) {
+      if (item.raw_material_id || item.item_type === 'raw_material') {
+        const rmId = item.raw_material_id!;
+        const rmIdx = updatedRawMaterials.findIndex(m => m.id === rmId);
+        if (rmIdx !== -1) {
+          const rm = updatedRawMaterials[rmIdx];
+          const deductQty = item.quantity;
+          const prevStk = Number(rm.current_stock);
+          const nextStk = Math.max(0, prevStk - deductQty);
+          const updatedRm = { ...rm, current_stock: nextStk, updated_at: new Date().toISOString() };
+          updatedRawMaterials[rmIdx] = updatedRm;
+          await supabaseService.upsertRawMaterial(updatedRm);
+
+          const rmMvt: RawMaterialMovement = {
+            id: generateId(),
+            raw_material_id: rm.id,
+            raw_material_name: rm.name,
+            movement_type: 'sale_out',
+            quantity: -deductQty,
+            previous_stock: prevStk,
+            new_stock: nextStk,
+            reference_id: savedSale.id,
+            notes: `Sold directly via Invoice ${invoiceNum} (${deductQty} ${rm.unit})`,
+            date: savedSale.date,
+            created_by_name: savedSale.salesperson_name,
+          };
+          await supabaseService.upsertRawMaterialMovement(rmMvt);
+          rawMovementsToAdd.push(rmMvt);
+        }
+      } else {
+        const prod = products.find(p => p.id === item.product_id);
+        if (prod) {
+          const deductBaseQty = item.base_quantity || item.quantity;
+          const prevStk = Number(prod.current_stock);
+          const nextStk = Math.max(0, prevStk - deductBaseQty);
+          const updatedProd = { ...prod, current_stock: nextStk, updated_at: new Date().toISOString() };
+          await supabaseService.upsertProduct(updatedProd);
+
+          const mvt: StockMovement = {
+            id: generateId(),
+            product_id: prod.id,
+            product_name: prod.name,
+            movement_type: 'sale_out',
+            quantity: -deductBaseQty,
+            previous_stock: prevStk,
+            new_stock: nextStk,
+            reference_id: savedSale.id,
+            notes: `Sold via Invoice ${invoiceNum} (${item.pack_size_name ? `${item.quantity}x ${item.pack_size_name}` : `${deductBaseQty} ${prod.base_unit || prod.unit}`})`,
+            date: savedSale.date,
+            created_by_name: savedSale.salesperson_name,
+          };
+          await supabaseService.upsertStockMovement(mvt);
+          movementsToAdd.push(mvt);
+        }
       }
     }
 
     setStockMovements(prev => [...movementsToAdd, ...prev]);
+    if (rawMovementsToAdd.length > 0) {
+      setRawMaterials(updatedRawMaterials);
+      setRawMaterialMovements(prev => [...rawMovementsToAdd, ...prev]);
+    }
 
     // Update customer balance if credit sale
     const unpaid = savedSale.total_amount - savedSale.amount_paid;
@@ -1148,30 +1185,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const now = new Date().toISOString();
 
-    // 1. Restore finished products stock
+    // 1. Restore finished products and raw materials stock
     for (const item of targetSale.items) {
-      const prod = products.find(p => p.id === item.product_id);
-      if (prod) {
-        const addBackBaseQty = item.base_quantity || item.quantity;
-        const prevStk = Number(prod.current_stock);
-        const nextStk = prevStk + addBackBaseQty;
-        const updatedProd = { ...prod, current_stock: nextStk, updated_at: now };
-        await supabaseService.upsertProduct(updatedProd);
+      if (item.raw_material_id || item.item_type === 'raw_material') {
+        const rm = rawMaterials.find(m => m.id === item.raw_material_id);
+        if (rm) {
+          const addBackQty = item.quantity;
+          const prevStk = Number(rm.current_stock);
+          const nextStk = prevStk + addBackQty;
+          const updatedRm = { ...rm, current_stock: nextStk, updated_at: now };
+          await supabaseService.upsertRawMaterial(updatedRm);
 
-        const mvt: StockMovement = {
-          id: generateId(),
-          product_id: prod.id,
-          product_name: prod.name,
-          movement_type: 'return',
-          quantity: addBackBaseQty,
-          previous_stock: prevStk,
-          new_stock: nextStk,
-          reference_id: targetSale.invoice_number,
-          notes: `Restored from deleted invoice ${targetSale.invoice_number}`,
-          date: now,
-          created_by_name: user.name,
-        };
-        await supabaseService.upsertStockMovement(mvt);
+          const rmMvt: RawMaterialMovement = {
+            id: generateId(),
+            raw_material_id: rm.id,
+            raw_material_name: rm.name,
+            movement_type: 'purchase_in',
+            quantity: addBackQty,
+            previous_stock: prevStk,
+            new_stock: nextStk,
+            reference_id: targetSale.invoice_number,
+            notes: `Restored from deleted invoice ${targetSale.invoice_number}`,
+            date: now,
+            created_by_name: user.name,
+          };
+          await supabaseService.upsertRawMaterialMovement(rmMvt);
+        }
+      } else {
+        const prod = products.find(p => p.id === item.product_id);
+        if (prod) {
+          const addBackBaseQty = item.base_quantity || item.quantity;
+          const prevStk = Number(prod.current_stock);
+          const nextStk = prevStk + addBackBaseQty;
+          const updatedProd = { ...prod, current_stock: nextStk, updated_at: now };
+          await supabaseService.upsertProduct(updatedProd);
+
+          const mvt: StockMovement = {
+            id: generateId(),
+            product_id: prod.id,
+            product_name: prod.name,
+            movement_type: 'return',
+            quantity: addBackBaseQty,
+            previous_stock: prevStk,
+            new_stock: nextStk,
+            reference_id: targetSale.invoice_number,
+            notes: `Restored from deleted invoice ${targetSale.invoice_number}`,
+            date: now,
+            created_by_name: user.name,
+          };
+          await supabaseService.upsertStockMovement(mvt);
+        }
       }
     }
 

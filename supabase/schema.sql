@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS public.raw_materials (
 );
 
 ALTER TABLE public.raw_materials ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE public.raw_materials ADD COLUMN IF NOT EXISTS is_sellable BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE public.raw_materials ADD COLUMN IF NOT EXISTS selling_price NUMERIC(12, 2) DEFAULT 0.00;
 ALTER TABLE public.raw_materials DROP CONSTRAINT IF EXISTS raw_materials_unit_check;
 ALTER TABLE public.raw_materials ADD CONSTRAINT raw_materials_unit_check CHECK (unit IN ('kg', 'liter', 'pcs'));
 
@@ -190,6 +192,9 @@ CREATE TABLE IF NOT EXISTS public.sale_items (
     subtotal NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE public.sale_items ADD COLUMN IF NOT EXISTS item_type TEXT NOT NULL DEFAULT 'finished_product';
+ALTER TABLE public.sale_items ADD COLUMN IF NOT EXISTS raw_material_id TEXT;
 
 -- 10. PURCHASES TABLE (PURCHASE ORDERS - Normalized parent table, NO items column)
 CREATE TABLE IF NOT EXISTS public.purchases (
