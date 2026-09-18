@@ -416,16 +416,25 @@ export const PurchasesModule: React.FC = () => {
                       />
                     </div>
 
-                    <div className="col-span-2">
+                    <div className="col-span-2 flex items-center gap-1">
                       <input
                         type="number"
                         min="1"
+                        step={item.unit === 'pcs' ? "1" : "any"}
                         placeholder="Qty"
                         required
                         value={item.quantity || ''}
-                        onChange={(e) => handleItemChange(idx, 'quantity', parseFloat(e.target.value) || 0)}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          handleItemChange(idx, 'quantity', item.unit === 'pcs' ? Math.round(val) : val);
+                        }}
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white text-center font-mono"
                       />
+                      {item.unit && (
+                        <span className="text-[10px] font-mono text-slate-400 uppercase shrink-0">
+                          {item.unit}
+                        </span>
+                      )}
                     </div>
 
                     <div className="col-span-2 flex items-center gap-1">

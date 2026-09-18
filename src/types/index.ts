@@ -46,15 +46,16 @@ export interface Product {
 
 // 1. RAW MATERIALS ENTITY
 export type RawMaterialCategory = 'Surfactants' | 'Acids & Alkalis' | 'Fragrances & Perfumes' | 'Dyes & Colorants' | 'Salts & Fillers' | 'Packaging & Containers' | 'General';
+export type RawMaterialUnit = 'kg' | 'liter' | 'pcs';
 
 export interface RawMaterial {
   id: string;
-  name: string; // e.g. "LABSA 96%", "SLES 70%", "Caustic Soda", "Hydrochloric Acid 33%"
+  name: string; // e.g. "LABSA 96%", "SLES 70%", "Caustic Soda", "Phenyl Bottle 1L"
   category: string;
-  unit: 'kg' | 'liter';
+  unit: RawMaterialUnit;
   current_stock: number;
   reorder_level: number;
-  cost_per_unit: number; // PKR per kg or liter
+  cost_per_unit: number; // PKR per kg, liter, or piece
   description?: string;
   is_active: boolean;
   is_archived?: boolean;
@@ -67,7 +68,7 @@ export interface FormulationItem {
   raw_material_id: string;
   raw_material_name: string;
   quantity: number; // Quantity required to produce 1 base unit (1 kg or 1 liter)
-  unit: 'kg' | 'liter';
+  unit: RawMaterialUnit;
   cost_per_unit?: number;
 }
 
@@ -89,7 +90,7 @@ export interface ConsumedRawMaterial {
   raw_material_id: string;
   raw_material_name: string;
   quantity_consumed: number;
-  unit: 'kg' | 'liter';
+  unit: RawMaterialUnit;
   unit_cost: number;
   total_cost: number;
 }

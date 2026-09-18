@@ -206,7 +206,7 @@ export const ProductionReportView: React.FC<ProductionReportViewProps> = ({ embe
           id: rmId,
           name: item.raw_material_name,
           category: masterRm?.category || 'Chemical Material',
-          unit: item.unit || masterRm?.unit || 'kg',
+          unit: masterRm?.unit || item.unit || 'pcs',
           totalQuantity: 0,
           totalCost: 0,
           batchCount: 0,

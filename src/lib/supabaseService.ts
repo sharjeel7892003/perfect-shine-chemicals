@@ -69,18 +69,43 @@ export const supabaseService = {
       ]);
 
 
+      // 0. Normalized Raw Materials (check for [unit:pcs] fallback tag)
+      const normalizedRawMaterials: RawMaterial[] = (rmRes.data || []).map((rm: any) => {
+        let unit = rm.unit;
+        let desc = rm.description || '';
+        if (typeof desc === 'string' && desc.includes('[unit:pcs]')) {
+          unit = 'pcs';
+          desc = desc.replace(/\[unit:pcs\]\s*/g, '').trim();
+        }
+        return {
+          ...rm,
+          unit,
+          description: desc
+        };
+      });
+
       // Maps for enriching relational names in memory for UI presentation
       const prodMap = new Map((prodRes.data || []).map((p: any) => [p.id, p.name]));
       const custMap = new Map((custRes.data || []).map((c: any) => [c.id, c.name]));
       const suppMap = new Map((suppRes.data || []).map((s: any) => [s.id, s.name]));
-      const rmMap = new Map((rmRes.data || []).map((r: any) => [r.id, r.name]));
+      const rmMap = new Map(normalizedRawMaterials.map((r: any) => [r.id, r]));
       const profMap = new Map((profRes.data || []).map((pr: any) => [pr.id, pr.name]));
 
-      // 1. Normalized Formulations (extract formulation_items into .items)
-      const normalizedFormulations = (formRes.data || []).map((f: any) => ({
-        ...f,
-        items: f.formulation_items || []
-      }));
+      // 1. Normalized Formulations (extract formulation_items into .items, enriched with correct rm.unit)
+      const normalizedFormulations = (formRes.data || []).map((f: any) => {
+        const rawItems = (f.formulation_items && f.formulation_items.length > 0) ? f.formulation_items : (f.items || []);
+        const enrichedItems = rawItems.map((item: any) => {
+          const linkedRm = item.raw_material_id ? rmMap.get(item.raw_material_id) : null;
+          return {
+            ...item,
+            unit: linkedRm ? linkedRm.unit : (item.unit || 'kg'),
+          };
+        });
+        return {
+          ...f,
+          items: enrichedItems
+        };
+      });
 
       // 2. Normalized Batches
       const normalizedBatches = (batchRes.data || []).map((b: any) => ({
@@ -126,7 +151,7 @@ export const supabaseService = {
         products: (prodRes.data as Product[]) || [],
         customers: (custRes.data as Customer[]) || [],
         suppliers: (suppRes.data as Supplier[]) || [],
-        rawMaterials: (rmRes.data as RawMaterial[]) || [],
+        rawMaterials: normalizedRawMaterials,
         formulations: (normalizedFormulations as ProductFormulation[]) || [],
         productionBatches: (normalizedBatches as ProductionBatch[]) || [],
         sales: (normalizedSales as Sale[]) || [],
@@ -305,7 +330,7 @@ export const supabaseService = {
     const validId = ensureUUID(rm.id);
     rm.id = validId;
 
-    const payload = {
+    const payload: any = {
       id: validId,
       name: rm.name,
       category: rm.category,
@@ -319,8 +344,24 @@ export const supabaseService = {
       updated_at: new Date().toISOString()
     };
 
-    const { data, error } = await supabase.from('raw_materials').upsert(payload).select().single();
-    if (error) {
+    let { data, error } = await supabase.from('raw_materials').upsert(payload).select().single();
+    if (error && (error.message?.includes('raw_materials_unit_check') || error.code === '23514')) {
+      // Graceful fallback: If DB check constraint only permits 'kg' | 'liter', store unit as 'kg' and tag description
+      const safeDesc = payload.description.includes('[unit:pcs]')
+        ? payload.description
+        : `[unit:pcs] ${payload.description}`.trim();
+      const fallbackPayload = {
+        ...payload,
+        unit: 'kg',
+        description: safeDesc
+      };
+      const retryRes = await supabase.from('raw_materials').upsert(fallbackPayload).select().single();
+      if (retryRes.error) {
+        console.error('Supabase upsertRawMaterial fallback error:', retryRes.error);
+        throw new Error(`Raw material database write failed: ${retryRes.error.message}`);
+      }
+      data = { ...retryRes.data, unit: rm.unit, description: rm.description };
+    } else if (error) {
       console.error('Supabase upsertRawMaterial error:', error);
       throw new Error(`Raw material database write failed: ${error.message}`);
     }
@@ -379,7 +420,17 @@ export const supabaseService = {
       }));
 
       const { error: itemsError } = await supabase.from('formulation_items').insert(itemsToInsert);
-      if (itemsError) {
+      if (itemsError && (itemsError.message?.includes('formulation_items_unit_check') || itemsError.code === '23514')) {
+        // Fallback for unmigrated formulation_items constraint: store 'kg' in relational table while JSONB keeps exact unit
+        const fallbackItems = itemsToInsert.map(i => ({
+          ...i,
+          unit: i.unit === 'pcs' ? 'kg' : i.unit
+        }));
+        const retryRes = await supabase.from('formulation_items').insert(fallbackItems);
+        if (retryRes.error) {
+          console.warn('Supabase formulation_items fallback warning:', retryRes.error);
+        }
+      } else if (itemsError) {
         console.error('Supabase formulation_items insert error:', itemsError);
         throw new Error(`Formulation items write failed: ${itemsError.message}`);
       }

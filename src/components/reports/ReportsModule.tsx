@@ -237,6 +237,8 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
   const totalStockCostValue = products.reduce((acc, p) => acc + (p.current_stock * p.cost_price), 0);
   const totalStockRetailValue = products.reduce((acc, p) => acc + (p.current_stock * p.selling_price), 0);
   const unrealizedStockProfit = totalStockRetailValue - totalStockCostValue;
+  const totalRawValuation = rawMaterials.reduce((acc, rm) => acc + (Number(rm.current_stock || 0) * Number(rm.cost_per_unit || 0)), 0);
+  const totalCombinedValuation = totalStockCostValue + totalRawValuation;
 
   // ================= 6. PRODUCTION BATCHES REPORT DATA =================
   const filteredProductionBatches = productionBatches.filter(b => {
@@ -357,7 +359,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
           id: rmId,
           name: item.raw_material_name,
           category: masterRm?.category || 'Chemical Material',
-          unit: item.unit || masterRm?.unit || 'kg',
+          unit: masterRm?.unit || item.unit || 'pcs',
           totalQuantity: 0,
           totalCost: 0,
           batchCount: 0,
@@ -461,9 +463,30 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
       const rows = filteredPurchases.map(p => [p.invoice_number, p.date.slice(0, 10), p.supplier_name, p.payment_status, p.payment_method, p.total_amount, p.amount_paid]);
       exportToCSV(`PSC_Purchases_Report_${dateRangeLabel}`, headers, rows);
     } else if (activeReport === 'valuation') {
-      const headers = ['Product', 'Unit', 'Current Stock', 'Cost Price (PKR)', 'Selling Price (PKR)', 'Cost Value (PKR)', 'Retail Value (PKR)'];
-      const rows = products.map(p => [p.name, p.unit, p.current_stock, p.cost_price, p.selling_price, p.current_stock * p.cost_price, p.current_stock * p.selling_price]);
-      exportToCSV(`PSC_Stock_Valuation_${dateRangeLabel}`, headers, rows);
+      const headers = ['Item Type', 'Item Name', 'Category', 'Stock Unit', 'In-Stock Quantity', 'Cost Rate (PKR)', 'Selling Rate (PKR)', 'Cost Valuation (PKR)', 'Retail Valuation (PKR)'];
+      const productRows = products.map(p => [
+        'Finished Product',
+        p.name,
+        p.category || 'Finished Good',
+        p.unit,
+        p.current_stock,
+        p.cost_price,
+        p.selling_price,
+        p.current_stock * p.cost_price,
+        p.current_stock * p.selling_price
+      ]);
+      const rmRows = rawMaterials.map(rm => [
+        'Raw Material / Packaging',
+        rm.name,
+        rm.category,
+        rm.unit,
+        rm.current_stock,
+        rm.cost_per_unit,
+        '-',
+        rm.current_stock * rm.cost_per_unit,
+        '-'
+      ]);
+      exportToCSV(`PSC_Stock_Valuation_${dateRangeLabel}`, headers, [...productRows, ...rmRows]);
     }
   };
 
@@ -1284,23 +1307,29 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
       {/* ================= REPORT 6: STOCK VALUATION REPORT ================= */}
       {activeReport === 'valuation' && (
         <div className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
-              <span className="text-xs font-semibold text-slate-400 uppercase">Stock Asset Value (At Cost Price)</span>
+              <span className="text-xs font-semibold text-slate-400 uppercase">Finished Goods (Cost)</span>
               <p className="text-2xl font-black text-white mt-2 font-mono">{formatPKR(totalStockCostValue)}</p>
-              <p className="text-xs text-slate-500 mt-1">Capital invested in finished stock</p>
+              <p className="text-xs text-slate-500 mt-1">Capital in finished inventory</p>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-teal-400 uppercase">Raw Materials & Packaging</span>
+              <p className="text-2xl font-black text-teal-400 mt-2 font-mono">{formatPKR(totalRawValuation)}</p>
+              <p className="text-xs text-slate-500 mt-1">Chemicals & pcs-based packaging</p>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-xs font-semibold text-amber-400 uppercase">Total Factory Valuation</span>
+              <p className="text-2xl font-black text-amber-400 mt-2 font-mono">{formatPKR(totalCombinedValuation)}</p>
+              <p className="text-xs text-slate-500 mt-1">Combined warehouse capital</p>
             </div>
 
             <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
               <span className="text-xs font-semibold text-slate-400 uppercase">Potential Retail Revenue</span>
               <p className="text-2xl font-black text-emerald-400 mt-2 font-mono">{formatPKR(totalStockRetailValue)}</p>
-              <p className="text-xs text-slate-500 mt-1">Projected revenue upon full dispatch</p>
-            </div>
-
-            <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
-              <span className="text-xs font-semibold text-slate-400 uppercase">Unrealized Stock Margin</span>
-              <p className="text-2xl font-black text-blue-400 mt-2 font-mono">{formatPKR(unrealizedStockProfit)}</p>
-              <p className="text-xs text-slate-500 mt-1">Expected gross profit locked in warehouse</p>
+              <p className="text-xs text-slate-500 mt-1">Gross potential from finished goods</p>
             </div>
           </div>
 
@@ -1339,6 +1368,67 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
                           <td className="py-3 px-3 text-right font-mono text-slate-300">{formatPKR(p.selling_price)}</td>
                           <td className="py-3 px-3 text-right font-mono font-semibold text-white">{formatPKR(costVal)}</td>
                           <td className="py-3 px-3 text-right font-mono font-bold text-emerald-400">{formatPKR(retailVal)}</td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Raw Materials & Packaging Asset Valuation */}
+          <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-base font-bold text-white">Raw Materials & Packaging Asset Valuation</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Chemicals (kg/liter) and packaging materials like bottles, caps, and cartons (pcs)</p>
+              </div>
+              <span className="text-sm font-black font-mono text-teal-400 bg-teal-500/10 border border-teal-500/20 px-3 py-1 rounded-xl">
+                Valuation: {formatPKR(totalRawValuation)}
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+                    <th className="py-3 px-3">Material / Packaging Name</th>
+                    <th className="py-3 px-3">Category</th>
+                    <th className="py-3 px-3 text-center">Unit</th>
+                    <th className="py-3 px-3 text-right">In-Stock Qty</th>
+                    <th className="py-3 px-3 text-right">Cost Rate (PKR)</th>
+                    <th className="py-3 px-3 text-right">Total Asset Value</th>
+                    <th className="py-3 px-3 text-center">Stock Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {rawMaterials.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-slate-500 text-xs">
+                        No raw materials or packaging items recorded in factory stock.
+                      </td>
+                    </tr>
+                  ) : (
+                    rawMaterials.map((rm) => {
+                      const costVal = Number(rm.current_stock || 0) * Number(rm.cost_per_unit || 0);
+                      const isLow = Number(rm.current_stock || 0) <= Number(rm.reorder_level || 0);
+                      return (
+                        <tr key={rm.id} className="hover:bg-slate-800/40">
+                          <td className="py-3 px-3 font-bold text-white text-sm">{rm.name}</td>
+                          <td className="py-3 px-3 text-slate-400">{rm.category}</td>
+                          <td className="py-3 px-3 text-center font-mono text-teal-400 font-semibold uppercase">{rm.unit}</td>
+                          <td className="py-3 px-3 text-right font-mono font-bold text-white">
+                            {rm.current_stock} <span className="text-[11px] font-normal text-slate-400">{rm.unit}</span>
+                          </td>
+                          <td className="py-3 px-3 text-right font-mono text-slate-400">{formatPKR(rm.cost_per_unit)}/{rm.unit}</td>
+                          <td className="py-3 px-3 text-right font-mono font-bold text-teal-400">{formatPKR(costVal)}</td>
+                          <td className="py-3 px-3 text-center">
+                            {isLow ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/20 text-rose-400 border border-rose-500/30">Low Stock</span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">In Stock</span>
+                            )}
+                          </td>
                         </tr>
                       );
                     })

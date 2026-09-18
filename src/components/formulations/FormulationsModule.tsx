@@ -65,7 +65,7 @@ export const FormulationsModule: React.FC = () => {
       {
         raw_material_id: rawMaterials[0]?.id || '',
         raw_material_name: rawMaterials[0]?.name || '',
-        quantity: 0.1,
+        quantity: rawMaterials[0]?.unit === 'pcs' ? 1 : 0.1,
         unit: rawMaterials[0]?.unit || 'kg',
         cost_per_unit: rawMaterials[0]?.cost_per_unit || 0,
       }
@@ -92,7 +92,7 @@ export const FormulationsModule: React.FC = () => {
       {
         raw_material_id: defaultRm.id,
         raw_material_name: defaultRm.name,
-        quantity: 0.05,
+        quantity: defaultRm.unit === 'pcs' ? 1 : 0.05,
         unit: defaultRm.unit,
         cost_per_unit: defaultRm.cost_per_unit,
       }
@@ -468,8 +468,8 @@ export const FormulationsModule: React.FC = () => {
                   <div className="col-span-3 flex items-center gap-1">
                     <input
                       type="number"
-                      step="0.0001"
-                      min="0.0001"
+                      step={item.unit === 'pcs' ? "1" : "0.0001"}
+                      min={item.unit === 'pcs' ? "1" : "0.0001"}
                       required
                       placeholder="Qty"
                       value={item.quantity}

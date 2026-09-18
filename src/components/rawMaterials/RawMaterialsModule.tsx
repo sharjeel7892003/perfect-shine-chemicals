@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
-import { RawMaterial, RawMaterialMovementType, RawMaterialCategory } from '../../types';
+import { RawMaterial, RawMaterialMovementType, RawMaterialCategory, RawMaterialUnit } from '../../types';
 import { formatPKR, formatDate, formatDateTime } from '../../utils/formatters';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
@@ -59,7 +59,7 @@ export const RawMaterialsModule: React.FC = () => {
   const [formData, setFormData] = useState({
     name: '',
     category: 'Surfactants' as RawMaterialCategory,
-    unit: 'kg' as 'kg' | 'liter',
+    unit: 'kg' as RawMaterialUnit,
     current_stock: 0,
     reorder_level: 50,
     cost_per_unit: 0,
@@ -566,11 +566,12 @@ export const RawMaterialsModule: React.FC = () => {
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Stock Unit</label>
               <select
                 value={formData.unit}
-                onChange={(e) => setFormData({ ...formData, unit: e.target.value as 'kg' | 'liter' })}
+                onChange={(e) => setFormData({ ...formData, unit: e.target.value as RawMaterialUnit })}
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white uppercase font-mono"
               >
                 <option value="kg">Kilogram (kg)</option>
                 <option value="liter">Liter (liter)</option>
+                <option value="pcs">Pieces (pcs) - Packaging/Containers/Caps/Bottles</option>
               </select>
             </div>
 
@@ -588,10 +589,11 @@ export const RawMaterialsModule: React.FC = () => {
 
             {!isEditModalOpen && (
               <div>
-                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Opening Stock</label>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Opening Stock ({formData.unit})</label>
                 <input
                   type="number"
                   min="0"
+                  step={formData.unit === 'pcs' ? "1" : "any"}
                   value={formData.current_stock}
                   onChange={(e) => setFormData({ ...formData, current_stock: parseFloat(e.target.value) || 0 })}
                   className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono"
@@ -600,10 +602,11 @@ export const RawMaterialsModule: React.FC = () => {
             )}
 
             <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Reorder Level Threshold</label>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Reorder Level Threshold ({formData.unit})</label>
               <input
                 type="number"
                 min="1"
+                step={formData.unit === 'pcs' ? "1" : "any"}
                 required
                 value={formData.reorder_level}
                 onChange={(e) => setFormData({ ...formData, reorder_level: parseFloat(e.target.value) || 0 })}
@@ -690,10 +693,11 @@ export const RawMaterialsModule: React.FC = () => {
 
             <div>
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
-                Quantity Difference (+ or -)
+                Quantity Difference ({rawMaterials.find(m => m.id === adjustData.materialId)?.unit || 'unit'})
               </label>
               <input
                 type="number"
+                step={rawMaterials.find(m => m.id === adjustData.materialId)?.unit === 'pcs' ? "1" : "any"}
                 required
                 value={adjustData.qtyDiff}
                 onChange={(e) => setAdjustData({ ...adjustData, qtyDiff: parseFloat(e.target.value) || 0 })}

@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS public.raw_materials (
 );
 
 ALTER TABLE public.raw_materials ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE public.raw_materials DROP CONSTRAINT IF EXISTS raw_materials_unit_check;
+ALTER TABLE public.raw_materials ADD CONSTRAINT raw_materials_unit_check CHECK (unit IN ('kg', 'liter', 'pcs'));
 
 -- 4. PRODUCT FORMULATIONS (BILL OF MATERIALS / RECIPES)
 CREATE TABLE IF NOT EXISTS public.product_formulations (
