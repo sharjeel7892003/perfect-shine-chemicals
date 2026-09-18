@@ -449,7 +449,8 @@ export const supabaseService = {
       customer_id: isValidUUID(sale.customer_id) ? sale.customer_id : null,
       customer_name: sale.customer_name,
       date: sale.date || new Date().toISOString(),
-      items: sale.items || [],
+      // CRITICAL: Do NOT add 'items' here! The live 'sales' table does NOT have an 'items' column.
+      // All line items are normalized and inserted into 'sale_items' below.
       subtotal: Number(sale.subtotal || 0),
       discount: Number(sale.discount || 0),
       tax: Number(sale.tax || 0),

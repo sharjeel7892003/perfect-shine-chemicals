@@ -150,14 +150,13 @@ CREATE TABLE IF NOT EXISTS public.suppliers (
 
 ALTER TABLE public.suppliers ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT false;
 
--- 9. SALES TABLE (INVOICES)
+-- 9. SALES TABLE (INVOICES - Normalized parent table, NO items column)
 CREATE TABLE IF NOT EXISTS public.sales (
     id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
     invoice_number TEXT UNIQUE NOT NULL,
     customer_id TEXT,
     customer_name TEXT,
     date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    items JSONB DEFAULT '[]'::jsonb,
     subtotal NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
     discount NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
     tax NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
@@ -172,19 +171,50 @@ CREATE TABLE IF NOT EXISTS public.sales (
 
 ALTER TABLE public.sales ADD COLUMN IF NOT EXISTS salesperson_id TEXT;
 
--- 10. PURCHASES TABLE
+-- 9B. SALE ITEMS TABLE (Normalized line items)
+CREATE TABLE IF NOT EXISTS public.sale_items (
+    id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    sale_id TEXT NOT NULL REFERENCES public.sales(id) ON DELETE CASCADE,
+    product_id TEXT,
+    product_name TEXT NOT NULL,
+    pack_size_id TEXT,
+    pack_size_name TEXT,
+    pack_quantity NUMERIC(12, 4),
+    size_in_base_unit NUMERIC(12, 4),
+    base_quantity NUMERIC(12, 4) NOT NULL DEFAULT 1,
+    quantity NUMERIC(12, 4) NOT NULL DEFAULT 1,
+    unit_cost NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    unit_price NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    subtotal NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 10. PURCHASES TABLE (PURCHASE ORDERS - Normalized parent table, NO items column)
 CREATE TABLE IF NOT EXISTS public.purchases (
     id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
     invoice_number TEXT UNIQUE NOT NULL,
     supplier_id TEXT,
     supplier_name TEXT,
     date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    items JSONB DEFAULT '[]'::jsonb,
     total_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
     amount_paid NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
     payment_status TEXT NOT NULL DEFAULT 'unpaid',
     payment_method TEXT DEFAULT 'cash',
     notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 10B. PURCHASE ITEMS TABLE (Normalized line items)
+CREATE TABLE IF NOT EXISTS public.purchase_items (
+    id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    purchase_id TEXT NOT NULL REFERENCES public.purchases(id) ON DELETE CASCADE,
+    item_type TEXT DEFAULT 'raw_material',
+    raw_material_id TEXT,
+    product_id TEXT,
+    product_or_material_name TEXT NOT NULL,
+    quantity NUMERIC(12, 4) NOT NULL DEFAULT 1,
+    unit_cost NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    subtotal NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
