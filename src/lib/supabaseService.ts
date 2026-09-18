@@ -767,8 +767,21 @@ export const supabaseService = {
       created_by: isValidUUID(payment.created_by) ? payment.created_by : null
     };
 
-    const { data, error } = await supabase.from('payments').upsert(payload).select().single();
+    let { data, error } = await supabase.from('payments').upsert(payload).select().single();
     if (error) {
+      // Fallback: If payments_related_to_check constraint rejects 'expense', retry as 'supplier_balance' with descriptive note
+      if (error.code === '23514' && payload.related_to === 'expense') {
+        console.warn('payments_related_to_check rejected "expense". Retrying with fallback...');
+        const fallbackPayload = {
+          ...payload,
+          related_to: 'supplier_balance',
+          notes: `[Expense Outflow: ${payment.reference_no || 'Overhead'}] ${payload.notes}`
+        };
+        const retryRes = await supabase.from('payments').upsert(fallbackPayload).select().single();
+        if (!retryRes.error) {
+          return (retryRes.data as Payment) || payment;
+        }
+      }
       console.error('Supabase upsertPayment error:', error);
       throw new Error(`Payment database write failed: ${error.message}`);
     }

@@ -3,6 +3,8 @@
 -- Run this in your Supabase Project SQL Editor to enable cloud sync for Expenses
 -- ==============================================================================
 
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
 -- 1. Create expenses table
 CREATE TABLE IF NOT EXISTS public.expenses (
     id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
@@ -32,7 +34,12 @@ CREATE TABLE IF NOT EXISTS public.recurring_expenses (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 3. Enable RLS
+-- 3. Update payments table check constraint to support 'expense' cash vouchers
+ALTER TABLE public.payments DROP CONSTRAINT IF EXISTS payments_related_to_check;
+ALTER TABLE public.payments ADD CONSTRAINT payments_related_to_check 
+  CHECK (related_to IN ('sale', 'purchase', 'customer_balance', 'supplier_balance', 'expense'));
+
+-- 4. Enable RLS
 ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.recurring_expenses ENABLE ROW LEVEL SECURITY;
 

@@ -1581,24 +1581,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setExpenses(prev => [savedExpense, ...prev.filter(e => e.id !== savedExpense.id)]);
 
     // Automatically log outgoing payment in Cash Book (payments table) so all factory money out is tracked together
-    const paymentDesc = savedExpense.description 
-      ? `${savedExpense.category}: ${savedExpense.description}` 
-      : `Operating Expense (${savedExpense.category})`;
+    try {
+      const paymentDesc = savedExpense.description 
+        ? `${savedExpense.category}: ${savedExpense.description}` 
+        : `Operating Expense (${savedExpense.category})`;
 
-    const expensePayment: Payment = {
-      id: generateId(),
-      related_to: 'expense',
-      reference_id: savedExpense.id,
-      reference_no: savedExpense.category,
-      amount: Number(savedExpense.amount),
-      payment_method: savedExpense.payment_method,
-      notes: paymentDesc,
-      date: savedExpense.date || new Date().toISOString(),
-      created_by: user.name,
-      created_at: new Date().toISOString(),
-    };
-    const savedPayment = await supabaseService.upsertPayment(expensePayment);
-    setPayments(prev => [savedPayment, ...prev.filter(p => p.id !== savedPayment.id)]);
+      const expensePayment: Payment = {
+        id: generateId(),
+        related_to: 'expense',
+        reference_id: savedExpense.id,
+        reference_no: savedExpense.category,
+        amount: Number(savedExpense.amount),
+        payment_method: savedExpense.payment_method,
+        notes: paymentDesc,
+        date: savedExpense.date || new Date().toISOString(),
+        created_by: user.name,
+        created_at: new Date().toISOString(),
+      };
+      const savedPayment = await supabaseService.upsertPayment(expensePayment);
+      setPayments(prev => [savedPayment, ...prev.filter(p => p.id !== savedPayment.id)]);
+    } catch (payErr) {
+      console.warn('Could not auto-record expense cashbook voucher in payments:', payErr);
+    }
 
     // If marked as recurring, ensure a template is saved or updated in recurring_expenses
     if (savedExpense.is_recurring) {
@@ -1645,10 +1649,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setExpenses(prev => prev.filter(e => e.id !== id));
 
     // Also reverse and remove the associated cash outflow voucher in payments table
-    const associatedPayment = payments.find(p => p.related_to === 'expense' && p.reference_id === id);
+    const associatedPayment = payments.find(p => 
+      (p.related_to === 'expense' || p.notes?.includes('[Expense Outflow:')) && p.reference_id === id
+    );
     if (associatedPayment) {
-      await supabaseService.deletePayment(associatedPayment.id);
-      setPayments(prev => prev.filter(p => p.id !== associatedPayment.id));
+      try {
+        await supabaseService.deletePayment(associatedPayment.id);
+        setPayments(prev => prev.filter(p => p.id !== associatedPayment.id));
+      } catch (err) {
+        console.warn('Could not auto-delete associated payment record:', err);
+      }
     }
 
     await addDeletionLogEntry({

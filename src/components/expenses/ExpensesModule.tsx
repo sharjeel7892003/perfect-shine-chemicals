@@ -321,7 +321,10 @@ export const ExpensesModule: React.FC = () => {
     }
   };
 
-  const sqlSnippet = `-- PERFECT SHINE CHEMICALS — EXPENSES MIGRATION
+  const sqlSnippet = `-- PERFECT SHINE CHEMICALS — EXPENSES & RECURRING EXPENSES MIGRATION
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- 1. Create expenses table
 CREATE TABLE IF NOT EXISTS public.expenses (
     id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
     date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -336,6 +339,7 @@ CREATE TABLE IF NOT EXISTS public.expenses (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 2. Create recurring_expenses template table
 CREATE TABLE IF NOT EXISTS public.recurring_expenses (
     id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
     category TEXT NOT NULL,
@@ -349,14 +353,27 @@ CREATE TABLE IF NOT EXISTS public.recurring_expenses (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- 3. Update payments check constraint so automated cashbook expense payments succeed
+ALTER TABLE public.payments DROP CONSTRAINT IF EXISTS payments_related_to_check;
+ALTER TABLE public.payments ADD CONSTRAINT payments_related_to_check 
+  CHECK (related_to IN ('sale', 'purchase', 'customer_balance', 'supplier_balance', 'expense'));
+
+-- 4. Enable Row Level Security (RLS)
 ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.recurring_expenses ENABLE ROW LEVEL SECURITY;
 
+-- 5. RLS Policies
+DROP POLICY IF EXISTS "Expenses read" ON public.expenses;
 CREATE POLICY "Expenses read" ON public.expenses FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Expenses manage" ON public.expenses;
 CREATE POLICY "Expenses manage" ON public.expenses FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Recurring read" ON public.recurring_expenses;
 CREATE POLICY "Recurring read" ON public.recurring_expenses FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Recurring manage" ON public.recurring_expenses;
 CREATE POLICY "Recurring manage" ON public.recurring_expenses FOR ALL USING (true) WITH CHECK (true);
 
+-- 6. Add to Realtime publication
 DO $$ BEGIN
   BEGIN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.expenses, public.recurring_expenses;
