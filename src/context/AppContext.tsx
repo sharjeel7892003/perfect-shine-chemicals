@@ -209,13 +209,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCloudSyncError(null);
       const cloudData = await supabaseService.fetchAll();
       if (cloudData) {
+        // Auto-reconcile customer balances if any invoice or payment desynchronization occurred
+        const reconciledCustomers = (cloudData.customers || []).map(cust => {
+          const custSales = (cloudData.sales || []).filter(s => s.customer_id === cust.id);
+          if (custSales.length === 0) return cust;
+          const unpaidSales = custSales.reduce((acc, s) => acc + (Number(s.total_amount || 0) - Number(s.amount_paid || 0)), 0);
+          const directPayments = (cloudData.payments || [])
+            .filter(p => p.customer_id === cust.id && p.related_to === 'customer_balance')
+            .reduce((acc, p) => acc + Number(p.amount || 0), 0);
+          const expectedBal = Math.max(0, Number((unpaidSales - directPayments).toFixed(2)));
+          if (Math.abs(expectedBal - Number(cust.current_balance || 0)) > 0.01) {
+            console.info(`Auto-reconciling customer "${cust.name}" balance: ${cust.current_balance} -> ${expectedBal}`);
+            supabaseService.upsertCustomer({ ...cust, current_balance: expectedBal }).catch(err => {
+              console.warn('Could not auto-sync reconciled customer balance to Supabase:', err);
+            });
+            return { ...cust, current_balance: expectedBal };
+          }
+          return cust;
+        });
+
+        // Auto-reconcile supplier balances if any PO or payment desynchronization occurred
+        const reconciledSuppliers = (cloudData.suppliers || []).map(supp => {
+          const suppPurchases = (cloudData.purchases || []).filter(p => p.supplier_id === supp.id);
+          if (suppPurchases.length === 0) return supp;
+          const unpaidPOs = suppPurchases.reduce((acc, p) => acc + (Number(p.total_amount || 0) - Number(p.amount_paid || 0)), 0);
+          const directPayments = (cloudData.payments || [])
+            .filter(p => p.supplier_id === supp.id && p.related_to === 'supplier_balance')
+            .reduce((acc, p) => acc + Number(p.amount || 0), 0);
+          const expectedBal = Math.max(0, Number((unpaidPOs - directPayments).toFixed(2)));
+          if (Math.abs(expectedBal - Number(supp.current_balance || 0)) > 0.01) {
+            console.info(`Auto-reconciling supplier "${supp.name}" balance: ${supp.current_balance} -> ${expectedBal}`);
+            supabaseService.upsertSupplier({ ...supp, current_balance: expectedBal }).catch(err => {
+              console.warn('Could not auto-sync reconciled supplier balance to Supabase:', err);
+            });
+            return { ...supp, current_balance: expectedBal };
+          }
+          return supp;
+        });
+
         setProducts(cloudData.products || []);
         setRawMaterials(cloudData.rawMaterials || []);
         setFormulations(cloudData.formulations || []);
         setProductionBatches(cloudData.productionBatches || []);
         setRawMaterialMovements(cloudData.rawMaterialMovements || []);
-        setCustomers(cloudData.customers || []);
-        setSuppliers(cloudData.suppliers || []);
+        setCustomers(reconciledCustomers);
+        setSuppliers(reconciledSuppliers);
         setSales(cloudData.sales || []);
         setPurchases(cloudData.purchases || []);
         setStockMovements(cloudData.stockMovements || []);
@@ -1082,67 +1120,71 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const rawMovementsToAdd: RawMaterialMovement[] = [];
     const updatedRawMaterials: RawMaterial[] = [...rawMaterials];
 
-    for (const item of savedSale.items) {
-      if (item.raw_material_id || item.item_type === 'raw_material') {
-        const rmId = item.raw_material_id!;
-        const rmIdx = updatedRawMaterials.findIndex(m => m.id === rmId);
-        if (rmIdx !== -1) {
-          const rm = updatedRawMaterials[rmIdx];
-          const deductQty = Number(item.quantity);
-          const prevStk = Number(rm.current_stock);
-          const nextStk = Math.max(0, Number((prevStk - deductQty).toFixed(4)));
-          const updatedRm = { ...rm, current_stock: nextStk, updated_at: new Date().toISOString() };
-          updatedRawMaterials[rmIdx] = updatedRm;
-          await supabaseService.upsertRawMaterial(updatedRm);
+    try {
+      for (const item of savedSale.items) {
+        if (item.raw_material_id || item.item_type === 'raw_material') {
+          const rmId = item.raw_material_id!;
+          const rmIdx = updatedRawMaterials.findIndex(m => m.id === rmId);
+          if (rmIdx !== -1) {
+            const rm = updatedRawMaterials[rmIdx];
+            const deductQty = Number(item.quantity);
+            const prevStk = Number(rm.current_stock);
+            const nextStk = Math.max(0, Number((prevStk - deductQty).toFixed(4)));
+            const updatedRm = { ...rm, current_stock: nextStk, updated_at: new Date().toISOString() };
+            updatedRawMaterials[rmIdx] = updatedRm;
+            await supabaseService.upsertRawMaterial(updatedRm);
 
-          const rmMvt: RawMaterialMovement = {
-            id: generateId(),
-            raw_material_id: rm.id,
-            raw_material_name: rm.name,
-            movement_type: 'sale_out',
-            quantity: -deductQty,
-            previous_stock: prevStk,
-            new_stock: nextStk,
-            reference_id: savedSale.id,
-            notes: `Sold directly via Invoice ${invoiceNum} (${deductQty} ${rm.unit})`,
-            date: savedSale.date,
-            created_by_name: savedSale.salesperson_name,
-          };
-          await supabaseService.upsertRawMaterialMovement(rmMvt);
-          rawMovementsToAdd.push(rmMvt);
-        }
-      } else {
-        const prod = products.find(p => p.id === item.product_id);
-        if (prod) {
-          const deductBaseQty = item.base_quantity || item.quantity;
-          const prevStk = Number(prod.current_stock);
-          const nextStk = Math.max(0, prevStk - deductBaseQty);
-          const updatedProd = { ...prod, current_stock: nextStk, updated_at: new Date().toISOString() };
-          await supabaseService.upsertProduct(updatedProd);
+            const rmMvt: RawMaterialMovement = {
+              id: generateId(),
+              raw_material_id: rm.id,
+              raw_material_name: rm.name,
+              movement_type: 'sale_out',
+              quantity: -deductQty,
+              previous_stock: prevStk,
+              new_stock: nextStk,
+              reference_id: savedSale.id,
+              notes: `Sold directly via Invoice ${invoiceNum} (${deductQty} ${rm.unit})`,
+              date: savedSale.date,
+              created_by_name: savedSale.salesperson_name,
+            };
+            await supabaseService.upsertRawMaterialMovement(rmMvt);
+            rawMovementsToAdd.push(rmMvt);
+          }
+        } else {
+          const prod = products.find(p => p.id === item.product_id);
+          if (prod) {
+            const deductBaseQty = item.base_quantity || item.quantity;
+            const prevStk = Number(prod.current_stock);
+            const nextStk = Math.max(0, prevStk - deductBaseQty);
+            const updatedProd = { ...prod, current_stock: nextStk, updated_at: new Date().toISOString() };
+            await supabaseService.upsertProduct(updatedProd);
 
-          const mvt: StockMovement = {
-            id: generateId(),
-            product_id: prod.id,
-            product_name: prod.name,
-            movement_type: 'sale_out',
-            quantity: -deductBaseQty,
-            previous_stock: prevStk,
-            new_stock: nextStk,
-            reference_id: savedSale.id,
-            notes: `Sold via Invoice ${invoiceNum} (${item.pack_size_name ? `${item.quantity}x ${item.pack_size_name}` : `${deductBaseQty} ${prod.base_unit || prod.unit}`})`,
-            date: savedSale.date,
-            created_by_name: savedSale.salesperson_name,
-          };
-          await supabaseService.upsertStockMovement(mvt);
-          movementsToAdd.push(mvt);
+            const mvt: StockMovement = {
+              id: generateId(),
+              product_id: prod.id,
+              product_name: prod.name,
+              movement_type: 'sale_out',
+              quantity: -deductBaseQty,
+              previous_stock: prevStk,
+              new_stock: nextStk,
+              reference_id: savedSale.id,
+              notes: `Sold via Invoice ${invoiceNum} (${item.pack_size_name ? `${item.quantity}x ${item.pack_size_name}` : `${deductBaseQty} ${prod.base_unit || prod.unit}`})`,
+              date: savedSale.date,
+              created_by_name: savedSale.salesperson_name,
+            };
+            await supabaseService.upsertStockMovement(mvt);
+            movementsToAdd.push(mvt);
+          }
         }
       }
-    }
 
-    setStockMovements(prev => [...movementsToAdd, ...prev]);
-    if (rawMovementsToAdd.length > 0) {
-      setRawMaterials(updatedRawMaterials);
-      setRawMaterialMovements(prev => [...rawMovementsToAdd, ...prev]);
+      setStockMovements(prev => [...movementsToAdd, ...prev]);
+      if (rawMovementsToAdd.length > 0) {
+        setRawMaterials(updatedRawMaterials);
+        setRawMaterialMovements(prev => [...rawMovementsToAdd, ...prev]);
+      }
+    } catch (stockErr) {
+      console.warn('Error during inventory stock deduction for sale:', stockErr);
     }
 
     // Update customer balance if credit sale
@@ -1150,7 +1192,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (savedSale.customer_id && unpaid > 0) {
       const cust = customers.find(c => c.id === savedSale.customer_id);
       if (cust) {
-        const updatedCust = { ...cust, current_balance: (cust.current_balance || 0) + unpaid, updated_at: new Date().toISOString() };
+        const updatedCust = { ...cust, current_balance: Number(((cust.current_balance || 0) + unpaid).toFixed(2)), updated_at: new Date().toISOString() };
         await supabaseService.upsertCustomer(updatedCust);
         setCustomers(prev => prev.map(c => c.id === savedSale.customer_id ? updatedCust : c));
       }

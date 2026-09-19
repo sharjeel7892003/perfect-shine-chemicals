@@ -228,13 +228,37 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
 
 
   // ================= 4. RECEIVABLES REPORT DATA =================
+  // Reconcile each customer's actual receivable balance from their sales invoices & payments
+  const getCustomerActualBalance = (c: Customer): number => {
+    const custSales = sales.filter(s => s.customer_id === c.id);
+    if (custSales.length === 0) return Number(c.current_balance || 0);
+    const unpaidSales = custSales.reduce((acc, s) => acc + (Number(s.total_amount || 0) - Number(s.amount_paid || 0)), 0);
+    const directPayments = payments
+      .filter(p => p.customer_id === c.id && p.related_to === 'customer_balance')
+      .reduce((acc, p) => acc + Number(p.amount || 0), 0);
+    return Math.max(0, Number((unpaidSales - directPayments).toFixed(2)));
+  };
+
   const sortedDebtors = [...customers]
+    .map(c => ({ ...c, current_balance: getCustomerActualBalance(c) }))
     .filter(c => (c.current_balance || 0) > 0)
     .sort((a, b) => (b.current_balance || 0) - (a.current_balance || 0));
   const totalReceivables = sortedDebtors.reduce((acc, c) => acc + c.current_balance, 0);
 
   // ================= 5. PAYABLES REPORT DATA =================
+  // Reconcile each supplier's actual payable balance from their purchase orders & payments
+  const getSupplierActualBalance = (s: Supplier): number => {
+    const suppPurchases = purchases.filter(p => p.supplier_id === s.id);
+    if (suppPurchases.length === 0) return Number(s.current_balance || 0);
+    const unpaidPOs = suppPurchases.reduce((acc, p) => acc + (Number(p.total_amount || 0) - Number(p.amount_paid || 0)), 0);
+    const directPayments = payments
+      .filter(p => p.supplier_id === s.id && p.related_to === 'supplier_balance')
+      .reduce((acc, p) => acc + Number(p.amount || 0), 0);
+    return Math.max(0, Number((unpaidPOs - directPayments).toFixed(2)));
+  };
+
   const sortedCreditors = [...suppliers]
+    .map(s => ({ ...s, current_balance: getSupplierActualBalance(s) }))
     .filter(s => (s.current_balance || 0) > 0)
     .sort((a, b) => (b.current_balance || 0) - (a.current_balance || 0));
   const totalPayables = sortedCreditors.reduce((acc, s) => acc + s.current_balance, 0);
