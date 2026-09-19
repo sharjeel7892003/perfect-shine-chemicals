@@ -29,7 +29,7 @@ import { formatPKR, formatDate, getTodayDateString } from '../../utils/formatter
 import { getRateDifferenceInfo, RateDifferenceInfo } from '../../utils/pricing';
 import { exportToCSV } from '../../utils/batchNumber';
 import { Badge } from '../common/Badge';
-import { Sale, ProductionBatch, ConsumedRawMaterial } from '../../types';
+import { Sale, ProductionBatch, ConsumedRawMaterial, Customer, Supplier } from '../../types';
 import { ProductionReportView } from './ProductionReportView';
 
 export type ReportType = 'sales' | 'purchases' | 'profit' | 'production' | 'receivables' | 'payables' | 'valuation';
@@ -45,6 +45,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
     products, 
     customers, 
     suppliers, 
+    payments,
     expenses,
     productionBatches,
     rawMaterials

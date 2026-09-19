@@ -209,12 +209,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCloudSyncError(null);
       const cloudData = await supabaseService.fetchAll();
       if (cloudData) {
+        // Defensive filter: exclude any orphaned payments whose parent sale or purchase order was deleted
+        const validSalesIds = new Set((cloudData.sales || []).map(s => s.id));
+        const validSalesInvs = new Set((cloudData.sales || []).map(s => s.invoice_number));
+        const validPoIds = new Set((cloudData.purchases || []).map(p => p.id));
+        const validPoInvs = new Set((cloudData.purchases || []).map(p => p.invoice_number));
+
+        const sanitizedPayments = (cloudData.payments || []).filter(p => {
+          if (p.related_to === 'sale') {
+            if (p.reference_id && !validSalesIds.has(p.reference_id) && !validSalesInvs.has(p.reference_id)) {
+              return false;
+            }
+            if (p.reference_no && !validSalesInvs.has(p.reference_no)) {
+              return false;
+            }
+          }
+          if (p.related_to === 'purchase') {
+            if (p.reference_id && !validPoIds.has(p.reference_id) && !validPoInvs.has(p.reference_id)) {
+              return false;
+            }
+            if (p.reference_no && !validPoInvs.has(p.reference_no)) {
+              return false;
+            }
+          }
+          return true;
+        });
+
         // Auto-reconcile customer balances if any invoice or payment desynchronization occurred
         const reconciledCustomers = (cloudData.customers || []).map(cust => {
           const custSales = (cloudData.sales || []).filter(s => s.customer_id === cust.id);
           if (custSales.length === 0) return cust;
           const unpaidSales = custSales.reduce((acc, s) => acc + (Number(s.total_amount || 0) - Number(s.amount_paid || 0)), 0);
-          const directPayments = (cloudData.payments || [])
+          const directPayments = sanitizedPayments
             .filter(p => p.customer_id === cust.id && p.related_to === 'customer_balance')
             .reduce((acc, p) => acc + Number(p.amount || 0), 0);
           const expectedBal = Math.max(0, Number((unpaidSales - directPayments).toFixed(2)));
@@ -233,7 +259,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const suppPurchases = (cloudData.purchases || []).filter(p => p.supplier_id === supp.id);
           if (suppPurchases.length === 0) return supp;
           const unpaidPOs = suppPurchases.reduce((acc, p) => acc + (Number(p.total_amount || 0) - Number(p.amount_paid || 0)), 0);
-          const directPayments = (cloudData.payments || [])
+          const directPayments = sanitizedPayments
             .filter(p => p.supplier_id === supp.id && p.related_to === 'supplier_balance')
             .reduce((acc, p) => acc + Number(p.amount || 0), 0);
           const expectedBal = Math.max(0, Number((unpaidPOs - directPayments).toFixed(2)));
@@ -257,7 +283,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setSales(cloudData.sales || []);
         setPurchases(cloudData.purchases || []);
         setStockMovements(cloudData.stockMovements || []);
-        setPayments(cloudData.payments || []);
+        setPayments(sanitizedPayments);
         setExpenses(cloudData.expenses || []);
         setRecurringExpenses(cloudData.recurringExpenses || []);
         setDeletionLogs(cloudData.deletionLogs || []);
@@ -1290,7 +1316,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // 3. Delete sale invoice record from Supabase
+    // 3. Delete associated payments/receipts from Supabase
+    const associatedSalePayments = payments.filter(p => 
+      (p.related_to === 'sale' && (p.reference_id === saleId || p.reference_no === targetSale.invoice_number || p.notes?.includes(targetSale.invoice_number))) ||
+      p.reference_id === saleId ||
+      (p.reference_no && p.reference_no === targetSale.invoice_number)
+    );
+    for (const pay of associatedSalePayments) {
+      try {
+        await supabaseService.deletePayment(pay.id);
+      } catch (err) {
+        console.warn('Could not auto-delete associated sale payment record:', err);
+      }
+    }
+    setPayments(prev => prev.filter(p => !associatedSalePayments.some(ap => ap.id === p.id)));
+
+    // 4. Delete sale invoice record from Supabase
     await supabaseService.deleteSale(saleId);
     setSales(prev => prev.filter(s => s.id !== saleId));
 
@@ -1516,7 +1557,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // 3. Delete PO record from Supabase
+    // 3. Delete associated payments/disbursements from Supabase
+    const associatedPurchPayments = payments.filter(p => 
+      (p.related_to === 'purchase' && (p.reference_id === purchaseId || p.reference_no === targetPurchase.invoice_number || p.notes?.includes(targetPurchase.invoice_number))) ||
+      p.reference_id === purchaseId ||
+      (p.reference_no && p.reference_no === targetPurchase.invoice_number)
+    );
+    for (const pay of associatedPurchPayments) {
+      try {
+        await supabaseService.deletePayment(pay.id);
+      } catch (err) {
+        console.warn('Could not auto-delete associated purchase payment record:', err);
+      }
+    }
+    setPayments(prev => prev.filter(p => !associatedPurchPayments.some(ap => ap.id === p.id)));
+
+    // 4. Delete PO record from Supabase
     await supabaseService.deletePurchase(purchaseId);
     setPurchases(prev => prev.filter(p => p.id !== purchaseId));
 
@@ -1597,8 +1653,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deletePayment = async (paymentId: string): Promise<void> => {
+    const target = payments.find(p => p.id === paymentId);
     await supabaseService.deletePayment(paymentId);
     setPayments(prev => prev.filter(p => p.id !== paymentId));
+
+    if (target) {
+      // Revert sale amount_paid if this payment was for a specific sale
+      if (target.related_to === 'sale' && target.reference_id) {
+        const sale = sales.find(s => s.id === target.reference_id || s.invoice_number === target.reference_id);
+        if (sale) {
+          const newPaid = Math.max(0, Number(sale.amount_paid || 0) - Number(target.amount || 0));
+          const status = newPaid === 0 ? 'unpaid' : (newPaid >= sale.total_amount ? 'paid' : 'partial');
+          const updatedSale: Sale = { ...sale, amount_paid: newPaid, payment_status: status };
+          await supabaseService.upsertSale(updatedSale);
+          setSales(prev => prev.map(s => s.id === sale.id ? updatedSale : s));
+        }
+      }
+      // Revert customer balance if this payment was a balance credit
+      if (target.customer_id && target.related_to === 'customer_balance') {
+        const cust = customers.find(c => c.id === target.customer_id);
+        if (cust) {
+          const updatedCust = { ...cust, current_balance: Number(((cust.current_balance || 0) + Number(target.amount || 0)).toFixed(2)), updated_at: new Date().toISOString() };
+          await supabaseService.upsertCustomer(updatedCust);
+          setCustomers(prev => prev.map(c => c.id === cust.id ? updatedCust : c));
+        }
+      }
+      // Revert purchase amount_paid if this payment was for a specific PO
+      if (target.related_to === 'purchase' && target.reference_id) {
+        const po = purchases.find(p => p.id === target.reference_id || p.invoice_number === target.reference_id);
+        if (po) {
+          const newPaid = Math.max(0, Number(po.amount_paid || 0) - Number(target.amount || 0));
+          const status = newPaid === 0 ? 'unpaid' : (newPaid >= po.total_amount ? 'paid' : 'partial');
+          const updatedPO: Purchase = { ...po, amount_paid: newPaid, payment_status: status };
+          await supabaseService.upsertPurchase(updatedPO);
+          setPurchases(prev => prev.map(p => p.id === po.id ? updatedPO : p));
+        }
+      }
+      // Revert supplier balance if this payment was a balance disbursement
+      if (target.supplier_id && target.related_to === 'supplier_balance') {
+        const supp = suppliers.find(s => s.id === target.supplier_id);
+        if (supp) {
+          const updatedSupp = { ...supp, current_balance: Number(((supp.current_balance || 0) + Number(target.amount || 0)).toFixed(2)), updated_at: new Date().toISOString() };
+          await supabaseService.upsertSupplier(updatedSupp);
+          setSuppliers(prev => prev.map(s => s.id === supp.id ? updatedSupp : s));
+        }
+      }
+    }
   };
 
   // ==============================================================================
