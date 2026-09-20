@@ -18,6 +18,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { formatPKR, formatDate } from '../../utils/formatters';
+import { calculateFinancialMetrics } from '../../utils/financialEngine';
 import { Badge } from '../common/Badge';
 import { ActiveTab } from '../layout/Sidebar';
 
@@ -31,6 +32,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     rawMaterials,
     sales, 
     purchases, 
+    payments,
     customers, 
     suppliers, 
     lowStockProducts,
@@ -44,8 +46,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   
   const { currentUser, isOwner, canCreateSale, canManagePurchases, canRecordProduction } = useAuth();
 
-  // Metrics calculations
-  const totalSalesRevenue = sales.reduce((acc, s) => acc + (s.total_amount || 0), 0);
+  // Authoritative financial calculations from central financialEngine
+  const overallFinancials = calculateFinancialMetrics({
+    sales,
+    purchases,
+    payments,
+    expenses,
+    customers,
+    suppliers,
+  });
+
+  const totalSalesRevenue = overallFinancials.totalSalesRevenue;
+  const totalReceivables = overallFinancials.totalUncollectedCredit;
+  const totalPayables = overallFinancials.supplierSummaries.reduce((acc, s) => acc + s.outstandingPayable, 0);
+
   const totalCOGS = sales.reduce((acc, s) => 
     acc + (s.items || []).reduce((iAcc, item) => iAcc + ((item.unit_cost || 0) * (item.quantity || 0)), 0), 0
   );
@@ -63,8 +77,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const thisMonthGrossProfit = thisMonthRevenue - thisMonthCOGS;
   const thisMonthNetProfit = thisMonthGrossProfit - thisMonthExpenses;
 
-  const totalReceivables = customers.reduce((acc, c) => acc + (c.current_balance || 0), 0);
-  const totalPayables = suppliers.reduce((acc, s) => acc + (s.current_balance || 0), 0);
   const combinedFactoryValuation = totalProductsValuation + totalRawMaterialsValuation;
 
   // Recent 5 sales

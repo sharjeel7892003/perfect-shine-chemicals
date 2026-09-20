@@ -30,6 +30,7 @@ import { getRateDifferenceInfo, RateDifferenceInfo } from '../../utils/pricing';
 import { exportToCSV } from '../../utils/batchNumber';
 import { Badge } from '../common/Badge';
 import { Sale, ProductionBatch, ConsumedRawMaterial, Customer, Supplier } from '../../types';
+import { calculateFinancialMetrics, calculateCustomerFinancials, calculateSupplierFinancials } from '../../utils/financialEngine';
 import { ProductionReportView } from './ProductionReportView';
 
 export type ReportType = 'sales' | 'purchases' | 'profit' | 'production' | 'receivables' | 'payables' | 'valuation';
@@ -120,8 +121,26 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
     return dateMatch && customerMatch && productMatch;
   });
 
-  const totalSalesRevenue = filteredSales.reduce((acc, s) => acc + s.total_amount, 0);
-  const totalSalesPaid = filteredSales.reduce((acc, s) => acc + s.amount_paid, 0);
+  // Authoritative financial calculations from central financialEngine
+  const financialMetrics = calculateFinancialMetrics({
+    sales,
+    purchases,
+    payments,
+    expenses,
+    customers,
+    suppliers,
+    filters: {
+      startDate,
+      endDate,
+      customerId: selectedCustomerFilter,
+      supplierId: selectedSupplierFilter,
+      productId: selectedProductFilter,
+    },
+  });
+
+  const totalSalesRevenue = financialMetrics.totalSalesRevenue;
+  const totalSalesPaid = financialMetrics.totalCashCollected;
+  const totalUncollectedCredit = financialMetrics.totalUncollectedCredit;
   
   let totalSalesUnits = 0;
   const salesItemizedRows: {
@@ -228,38 +247,34 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
   const netMarginPercent = profitRevenue > 0 ? ((netProfit / profitRevenue) * 100).toFixed(1) : '0';
 
 
-  // ================= 4. RECEIVABLES REPORT DATA =================
-  // Reconcile each customer's actual receivable balance from their sales invoices & payments
-  const getCustomerActualBalance = (c: Customer): number => {
-    const custSales = sales.filter(s => s.customer_id === c.id);
-    if (custSales.length === 0) return Number(c.current_balance || 0);
-    const unpaidSales = custSales.reduce((acc, s) => acc + (Number(s.total_amount || 0) - Number(s.amount_paid || 0)), 0);
-    const directPayments = payments
-      .filter(p => p.customer_id === c.id && p.related_to === 'customer_balance')
-      .reduce((acc, p) => acc + Number(p.amount || 0), 0);
-    return Math.max(0, Number((unpaidSales - directPayments).toFixed(2)));
-  };
-
-  const sortedDebtors = [...customers]
-    .map(c => ({ ...c, current_balance: getCustomerActualBalance(c) }))
+  // ================= 4. RECEIVABLES REPORT DATA (CENTRAL ENGINE) =================
+  const sortedDebtors = customers
+    .filter(c => !c.is_archived)
+    .map(c => {
+      const summary = calculateCustomerFinancials(c, sales, payments);
+      return {
+        ...c,
+        current_balance: summary.outstandingReceivable,
+        totalSales: summary.totalSales,
+        totalPaid: summary.totalPaymentsCollected,
+      };
+    })
     .filter(c => (c.current_balance || 0) > 0)
     .sort((a, b) => (b.current_balance || 0) - (a.current_balance || 0));
   const totalReceivables = sortedDebtors.reduce((acc, c) => acc + c.current_balance, 0);
 
-  // ================= 5. PAYABLES REPORT DATA =================
-  // Reconcile each supplier's actual payable balance from their purchase orders & payments
-  const getSupplierActualBalance = (s: Supplier): number => {
-    const suppPurchases = purchases.filter(p => p.supplier_id === s.id);
-    if (suppPurchases.length === 0) return Number(s.current_balance || 0);
-    const unpaidPOs = suppPurchases.reduce((acc, p) => acc + (Number(p.total_amount || 0) - Number(p.amount_paid || 0)), 0);
-    const directPayments = payments
-      .filter(p => p.supplier_id === s.id && p.related_to === 'supplier_balance')
-      .reduce((acc, p) => acc + Number(p.amount || 0), 0);
-    return Math.max(0, Number((unpaidPOs - directPayments).toFixed(2)));
-  };
-
-  const sortedCreditors = [...suppliers]
-    .map(s => ({ ...s, current_balance: getSupplierActualBalance(s) }))
+  // ================= 5. PAYABLES REPORT DATA (CENTRAL ENGINE) =================
+  const sortedCreditors = suppliers
+    .filter(s => !s.is_archived)
+    .map(s => {
+      const summary = calculateSupplierFinancials(s, purchases, payments);
+      return {
+        ...s,
+        current_balance: summary.outstandingPayable,
+        totalPurchases: summary.totalPurchases,
+        totalPaid: summary.totalDisbursementsPaid,
+      };
+    })
     .filter(s => (s.current_balance || 0) > 0)
     .sort((a, b) => (b.current_balance || 0) - (a.current_balance || 0));
   const totalPayables = sortedCreditors.reduce((acc, s) => acc + s.current_balance, 0);
@@ -518,6 +533,28 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
         '-'
       ]);
       exportToCSV(`PSC_Stock_Valuation_${dateRangeLabel}`, headers, [...productRows, ...rmRows]);
+    } else if (activeReport === 'receivables') {
+      const headers = ['Customer Name', 'Category', 'Phone', 'Address', 'City', 'Credit Limit (PKR)', 'Outstanding Receivable (PKR)'];
+      const rows = sortedDebtors.map(c => [
+        c.name,
+        c.customer_type,
+        c.phone,
+        c.address,
+        c.city,
+        c.credit_limit,
+        c.current_balance
+      ]);
+      exportToCSV(`PSC_Outstanding_Receivables_${dateRangeLabel}`, headers, rows);
+    } else if (activeReport === 'payables') {
+      const headers = ['Supplier / Vendor', 'Raw Material Type', 'Phone', 'City', 'Payable Balance (PKR)'];
+      const rows = sortedCreditors.map(s => [
+        s.name,
+        s.raw_material_type,
+        s.phone,
+        s.city,
+        s.current_balance
+      ]);
+      exportToCSV(`PSC_Outstanding_Payables_${dateRangeLabel}`, headers, rows);
     }
   };
 
@@ -869,7 +906,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
 
             <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
               <span className="text-xs font-semibold text-slate-400 uppercase">Uncollected Credit</span>
-              <p className="text-xl font-black text-amber-400 mt-1 font-mono">{formatPKR(totalSalesRevenue - totalSalesPaid)}</p>
+              <p className="text-xl font-black text-amber-400 mt-1 font-mono">{formatPKR(totalUncollectedCredit)}</p>
               <p className="text-[11px] text-amber-300 mt-0.5">Pending receivables</p>
             </div>
           </div>

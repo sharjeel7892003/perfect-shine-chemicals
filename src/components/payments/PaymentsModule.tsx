@@ -19,11 +19,12 @@ import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { Payment, PaymentMethod } from '../../types';
 import { formatPKR, formatDate, formatDateTime, getTodayDateString, formatSelectedDateToIso } from '../../utils/formatters';
+import { calculateFinancialMetrics, calculateCustomerFinancials, calculateSupplierFinancials } from '../../utils/financialEngine';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 
 export const PaymentsModule: React.FC = () => {
-  const { payments, customers, suppliers, sales, purchases, recordPayment } = useApp();
+  const { payments, customers, suppliers, sales, purchases, expenses, recordPayment } = useApp();
   const { isOwner, canManagePurchases } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'vouchers' | 'customer_ledger' | 'supplier_ledger'>('vouchers');
@@ -40,7 +41,7 @@ export const PaymentsModule: React.FC = () => {
   const [selectedCustId, setSelectedCustId] = useState('');
   const [linkedSaleId, setLinkedSaleId] = useState('');
   const [custPayAmount, setCustPayAmount] = useState<number>(0);
-  const [custPayMethod, setCustPayMethod] = useState<PaymentMethod>('jazzcash');
+  const [custPayMethod, setCustPayMethod] = useState<PaymentMethod>('cash');
   const [custPayRef, setCustPayRef] = useState('');
   const [custPayNotes, setCustPayNotes] = useState('');
 
@@ -59,16 +60,19 @@ export const PaymentsModule: React.FC = () => {
   const [ledgerStartDate, setLedgerStartDate] = useState<string>('');
   const [ledgerEndDate, setLedgerEndDate] = useState<string>('');
 
-  // Cashflow calculations
-  const totalInflow = payments
-    .filter(p => p.related_to === 'sale' || p.related_to === 'customer_balance')
-    .reduce((acc, p) => acc + p.amount, 0);
+  // Authoritative cashflow calculations from central financialEngine
+  const financialMetrics = calculateFinancialMetrics({
+    sales,
+    purchases,
+    payments,
+    expenses,
+    customers,
+    suppliers,
+  });
 
-  const totalOutflow = payments
-    .filter(p => p.related_to === 'purchase' || p.related_to === 'supplier_balance' || p.related_to === 'expense')
-    .reduce((acc, p) => acc + p.amount, 0);
-
-  const netCashflow = totalInflow - totalOutflow;
+  const totalInflow = financialMetrics.totalCashCollected;
+  const totalOutflow = financialMetrics.totalDisbursements;
+  const netCashflow = financialMetrics.netCashflow;
 
   // Selected customer/supplier helpers
   const currentSelectedCustomer = customers.find(c => c.id === selectedCustId);
@@ -86,8 +90,9 @@ export const PaymentsModule: React.FC = () => {
     setSelectedCustId(custId);
     setLinkedSaleId('');
     const target = customers.find(c => c.id === custId);
-    if (target && target.current_balance > 0) {
-      setCustPayAmount(target.current_balance);
+    if (target) {
+      const summary = calculateCustomerFinancials(target, sales, payments);
+      setCustPayAmount(summary.outstandingReceivable);
     } else {
       setCustPayAmount(0);
     }
@@ -104,7 +109,8 @@ export const PaymentsModule: React.FC = () => {
       }
     } else {
       if (currentSelectedCustomer) {
-        setCustPayAmount(currentSelectedCustomer.current_balance || 0);
+        const summary = calculateCustomerFinancials(currentSelectedCustomer, sales, payments);
+        setCustPayAmount(summary.outstandingReceivable);
       }
     }
   };
@@ -114,8 +120,9 @@ export const PaymentsModule: React.FC = () => {
     setSelectedSuppId(suppId);
     setLinkedPurchaseId('');
     const target = suppliers.find(s => s.id === suppId);
-    if (target && target.current_balance > 0) {
-      setSuppPayAmount(target.current_balance);
+    if (target) {
+      const summary = calculateSupplierFinancials(target, purchases, payments);
+      setSuppPayAmount(summary.outstandingPayable);
     } else {
       setSuppPayAmount(0);
     }

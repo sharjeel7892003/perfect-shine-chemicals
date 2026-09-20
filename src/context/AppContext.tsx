@@ -25,6 +25,7 @@ import { getNextBatchNumberForProduct } from '../utils/batchNumber';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { supabaseService } from '../lib/supabaseService';
 import { generateId } from '../utils/uuid';
+import { calculateCustomerFinancials, calculateSupplierFinancials } from '../utils/financialEngine';
 
 interface AppContextType {
   // State
@@ -235,15 +236,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return true;
         });
 
-        // Auto-reconcile customer balances if any invoice or payment desynchronization occurred
+        // Auto-reconcile customer balances with authoritative financialEngine
         const reconciledCustomers = (cloudData.customers || []).map(cust => {
-          const custSales = (cloudData.sales || []).filter(s => s.customer_id === cust.id);
-          if (custSales.length === 0) return cust;
-          const unpaidSales = custSales.reduce((acc, s) => acc + (Number(s.total_amount || 0) - Number(s.amount_paid || 0)), 0);
-          const directPayments = sanitizedPayments
-            .filter(p => p.customer_id === cust.id && p.related_to === 'customer_balance')
-            .reduce((acc, p) => acc + Number(p.amount || 0), 0);
-          const expectedBal = Math.max(0, Number((unpaidSales - directPayments).toFixed(2)));
+          const summary = calculateCustomerFinancials(cust, cloudData.sales || [], sanitizedPayments);
+          const expectedBal = summary.outstandingReceivable;
           if (Math.abs(expectedBal - Number(cust.current_balance || 0)) > 0.01) {
             console.info(`Auto-reconciling customer "${cust.name}" balance: ${cust.current_balance} -> ${expectedBal}`);
             supabaseService.upsertCustomer({ ...cust, current_balance: expectedBal }).catch(err => {
@@ -254,15 +250,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return cust;
         });
 
-        // Auto-reconcile supplier balances if any PO or payment desynchronization occurred
+        // Auto-reconcile supplier balances with authoritative financialEngine
         const reconciledSuppliers = (cloudData.suppliers || []).map(supp => {
-          const suppPurchases = (cloudData.purchases || []).filter(p => p.supplier_id === supp.id);
-          if (suppPurchases.length === 0) return supp;
-          const unpaidPOs = suppPurchases.reduce((acc, p) => acc + (Number(p.total_amount || 0) - Number(p.amount_paid || 0)), 0);
-          const directPayments = sanitizedPayments
-            .filter(p => p.supplier_id === supp.id && p.related_to === 'supplier_balance')
-            .reduce((acc, p) => acc + Number(p.amount || 0), 0);
-          const expectedBal = Math.max(0, Number((unpaidPOs - directPayments).toFixed(2)));
+          const summary = calculateSupplierFinancials(supp, cloudData.purchases || [], sanitizedPayments);
+          const expectedBal = summary.outstandingPayable;
           if (Math.abs(expectedBal - Number(supp.current_balance || 0)) > 0.01) {
             console.info(`Auto-reconciling supplier "${supp.name}" balance: ${supp.current_balance} -> ${expectedBal}`);
             supabaseService.upsertSupplier({ ...supp, current_balance: expectedBal }).catch(err => {
