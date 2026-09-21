@@ -600,6 +600,7 @@ export const InventoryModule: React.FC = () => {
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Cost Rate (PKR/Base Unit)</label>
               <input
                 type="number"
+                step="any"
                 min="0"
                 required
                 value={formData.cost_price}
@@ -612,6 +613,7 @@ export const InventoryModule: React.FC = () => {
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Selling Rate (PKR/Base Unit)</label>
               <input
                 type="number"
+                step="any"
                 min="0"
                 required
                 value={formData.selling_price}
@@ -625,6 +627,7 @@ export const InventoryModule: React.FC = () => {
                 <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Opening Base Stock</label>
                 <input
                   type="number"
+                  step="any"
                   min="0"
                   value={formData.current_stock}
                   onChange={(e) => setFormData({ ...formData, current_stock: parseFloat(e.target.value) || 0 })}
@@ -637,7 +640,8 @@ export const InventoryModule: React.FC = () => {
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Reorder Level Threshold</label>
               <input
                 type="number"
-                min="1"
+                step="any"
+                min="0.001"
                 required
                 value={formData.reorder_level}
                 onChange={(e) => setFormData({ ...formData, reorder_level: parseFloat(e.target.value) || 0 })}
@@ -717,6 +721,7 @@ export const InventoryModule: React.FC = () => {
               </label>
               <input
                 type="number"
+                step="any"
                 required
                 value={adjustData.qtyDiff}
                 onChange={(e) => setAdjustData({ ...adjustData, qtyDiff: parseFloat(e.target.value) || 0 })}

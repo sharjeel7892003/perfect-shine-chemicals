@@ -23,7 +23,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { ProductionBatch, ProductFormulation, ConsumedRawMaterial } from '../../types';
-import { formatPKR, formatDate, formatDateTime, getTodayDateString, formatSelectedDateToIso } from '../../utils/formatters';
+import { formatPKR, formatDate, formatDateTime, formatQuantity, getTodayDateString, formatSelectedDateToIso } from '../../utils/formatters';
 import { getNextBatchNumberForProduct } from '../../utils/batchNumber';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
@@ -99,14 +99,16 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
   const selectedFormulation = formulations.find(f => f.product_id === selectedProductId);
   const baseUnit = selectedProduct?.base_unit || selectedProduct?.unit || 'liter';
 
-  // Calculate live raw materials needed for current input quantity
+  // Calculate live raw materials needed for current input quantity with exact decimal precision
   const requiredMaterialsCalculations = selectedFormulation?.items.map(item => {
     const rm = rawMaterials.find(m => m.id === item.raw_material_id);
-    const totalNeeded = Number((item.quantity * quantityProduced).toFixed(4));
+    const yieldQty = selectedFormulation.yield_quantity > 0 ? selectedFormulation.yield_quantity : 1.0;
+    const multiplier = quantityProduced / yieldQty;
+    const totalNeeded = Number((item.quantity * multiplier).toFixed(4));
     const availableStock = rm ? Number(rm.current_stock) : 0;
     const isSufficient = availableStock >= totalNeeded;
     const unitCost = rm ? rm.cost_per_unit : (item.cost_per_unit || 0);
-    const estimatedCost = totalNeeded * unitCost;
+    const estimatedCost = Number((totalNeeded * unitCost).toFixed(2));
 
     return {
       item,
@@ -120,7 +122,8 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
   }) || [];
 
   const hasAnyShortage = requiredMaterialsCalculations.some(r => !r.isSufficient);
-  const totalEstimatedBatchCost = requiredMaterialsCalculations.reduce((acc, r) => acc + r.estimatedCost, 0);
+  const totalEstimatedBatchCost = Number(requiredMaterialsCalculations.reduce((acc, r) => acc + r.estimatedCost, 0).toFixed(2));
+  const estimatedCostPerUnit = quantityProduced > 0 ? Number((totalEstimatedBatchCost / quantityProduced).toFixed(2)) : 0;
 
   const handleRecordProductionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -294,7 +297,7 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
                     <td className="py-3 px-3 text-slate-400">{formatDate(batch.date)}</td>
                     <td className="py-3 px-3 font-bold text-white">{batch.product_name}</td>
                     <td className="py-3 px-3 text-right font-mono font-bold text-white">
-                      +{batch.quantity_produced} <span className="text-[11px] font-normal text-slate-400">{batch.base_unit}</span>
+                      +{formatQuantity(batch.quantity_produced)} <span className="text-[11px] font-normal text-slate-400">{batch.base_unit}</span>
                     </td>
                     <td className="py-3 px-3 text-right font-mono text-slate-300">
                       {formatPKR(batch.total_batch_cost)}
@@ -368,7 +371,7 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
               >
                 {products.map(p => (
                   <option key={p.id} value={p.id}>
-                    {p.name} (Current Stock: {p.current_stock} {p.base_unit || p.unit})
+                    {p.name} (Current Stock: {formatQuantity(p.current_stock)} {p.base_unit || p.unit})
                   </option>
                 ))}
               </select>
@@ -376,16 +379,25 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
 
             <div>
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
-                Batch Output Quantity ({baseUnit})
+                Batch Output Quantity ({baseUnit}) *
               </label>
               <input
                 type="number"
-                min="1"
+                min="0.001"
+                step="any"
                 required
-                value={quantityProduced}
-                onChange={(e) => setQuantityProduced(parseFloat(e.target.value) || 0)}
-                placeholder="e.g. 500"
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono"
+                value={quantityProduced === 0 ? '' : quantityProduced}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === '') {
+                    setQuantityProduced(0);
+                    return;
+                  }
+                  const parsed = parseFloat(val);
+                  setQuantityProduced(isNaN(parsed) ? 0 : parsed);
+                }}
+                placeholder="e.g. 51.500"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono font-bold text-emerald-400 focus:outline-none focus:border-emerald-500"
               />
             </div>
 
@@ -461,11 +473,18 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-1.5">
                 <Layers className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Raw Materials Required for {quantityProduced} {baseUnit}</span>
+                <span>Raw Materials Required for {formatQuantity(quantityProduced)} {baseUnit}</span>
               </label>
-              <span className="text-[11px] text-slate-400 font-mono">
-                Est. Cost: <strong className="text-emerald-400">{formatPKR(totalEstimatedBatchCost)}</strong>
-              </span>
+              <div className="flex items-center gap-2 text-[11px] font-mono">
+                <span className="text-slate-400">
+                  Est. Cost: <strong className="text-emerald-400">{formatPKR(totalEstimatedBatchCost)}</strong>
+                </span>
+                {quantityProduced > 0 && (
+                  <span className="text-slate-400">
+                    ({formatPKR(estimatedCostPerUnit)}/{baseUnit})
+                  </span>
+                )}
+              </div>
             </div>
 
             {!selectedFormulation ? (
@@ -493,13 +512,13 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
                         <span className="font-semibold text-white truncate">{req.item.raw_material_name}</span>
                       </div>
                       <p className="text-[11px] text-slate-400 ml-5.5 mt-0.5">
-                        Current In-Stock: <span className={req.isSufficient ? 'text-slate-300' : 'text-rose-400 font-bold'}>{req.availableStock} {req.item.unit}</span>
+                        Current In-Stock: <span className={req.isSufficient ? 'text-slate-300' : 'text-rose-400 font-bold'}>{formatQuantity(req.availableStock)} {req.item.unit}</span>
                       </p>
                     </div>
 
                     <div className="text-right pl-3">
                       <span className="font-mono font-bold text-white text-xs block">
-                        Deduct: -{req.totalNeeded} {req.item.unit}
+                        Deduct: -{formatQuantity(req.totalNeeded)} {req.item.unit}
                       </span>
                       <span className="text-[10px] font-mono text-emerald-400">
                         {formatPKR(req.estimatedCost)}
@@ -579,7 +598,7 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
               <div>
                 <span className="text-slate-400 text-[10px] uppercase">Output Qty</span>
                 <p className="font-bold font-mono text-emerald-400 text-sm">
-                  +{selectedBatchDetails.quantity_produced} {selectedBatchDetails.base_unit}
+                  +{formatQuantity(selectedBatchDetails.quantity_produced)} {selectedBatchDetails.base_unit}
                 </p>
               </div>
               <div>
@@ -615,7 +634,7 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
 
                     <div className="text-right">
                       <span className="font-mono font-bold text-rose-400 text-xs">
-                        -{rm.quantity_consumed} {rm.unit}
+                        -{formatQuantity(rm.quantity_consumed)} {rm.unit}
                       </span>
                       <p className="text-[11px] font-mono text-slate-300">
                         {formatPKR(rm.total_cost)}

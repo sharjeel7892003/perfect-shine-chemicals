@@ -419,7 +419,7 @@ export const PurchasesModule: React.FC = () => {
                     <div className="col-span-2 flex items-center gap-1">
                       <input
                         type="number"
-                        min="1"
+                        min={item.unit === 'pcs' ? "1" : "0.001"}
                         step={item.unit === 'pcs' ? "1" : "any"}
                         placeholder="Qty"
                         required

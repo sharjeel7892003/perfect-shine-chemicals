@@ -147,8 +147,8 @@ export const PackSizesModal: React.FC<PackSizesModalProps> = ({
                       <div className="flex items-center gap-1">
                         <input
                           type="number"
-                          step="0.01"
-                          min="0.01"
+                          step="any"
+                          min="0.001"
                           required
                           value={pack.size_in_base_unit}
                           onChange={(e) => handleChangeField(idx, 'size_in_base_unit', parseFloat(e.target.value) || 0)}
@@ -162,6 +162,7 @@ export const PackSizesModal: React.FC<PackSizesModalProps> = ({
                       <label className="text-[10px] text-slate-400 uppercase block mb-0.5">Selling Price (PKR)</label>
                       <input
                         type="number"
+                        step="any"
                         min="0"
                         required
                         value={pack.selling_price}

@@ -594,6 +594,7 @@ export const RawMaterialsModule: React.FC = () => {
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Cost Rate (PKR / Unit)</label>
               <input
                 type="number"
+                step="any"
                 min="0"
                 required
                 value={formData.cost_per_unit}
@@ -620,7 +621,7 @@ export const RawMaterialsModule: React.FC = () => {
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Reorder Level Threshold ({formData.unit})</label>
               <input
                 type="number"
-                min="1"
+                min={formData.unit === 'pcs' ? "1" : "0.001"}
                 step={formData.unit === 'pcs' ? "1" : "any"}
                 required
                 value={formData.reorder_level}

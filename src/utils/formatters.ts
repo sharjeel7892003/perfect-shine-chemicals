@@ -89,3 +89,25 @@ export const formatSelectedDateToIso = (dateStr?: string): string => {
   return new Date().toISOString();
 };
 
+/**
+ * Format quantity with consistent decimal precision
+ * Avoids floating-point noise (e.g. 51.50000000001) while preserving exact decimals.
+ * E.g. 51.5 -> "51.5 kg", 360.5 -> "360.500 L", or without unit.
+ */
+export const formatQuantity = (
+  quantity: number | null | undefined, 
+  unit?: string,
+  minDecimals: number = 0,
+  maxDecimals: number = 3
+): string => {
+  if (quantity === null || quantity === undefined || isNaN(quantity)) {
+    return `0${unit ? ` ${unit}` : ''}`;
+  }
+  const formatted = Number(quantity).toLocaleString('en-PK', {
+    minimumFractionDigits: minDecimals,
+    maximumFractionDigits: maxDecimals,
+  });
+  return unit ? `${formatted} ${unit}` : formatted;
+};
+
+

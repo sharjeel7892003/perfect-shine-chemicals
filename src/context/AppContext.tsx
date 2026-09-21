@@ -625,7 +625,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const rmIdx = updatedRawMaterials.findIndex(m => m.id === rmReq.item.raw_material_id);
       if (rmIdx !== -1) {
         const prevStk = Number(updatedRawMaterials[rmIdx].current_stock);
-        const nextStk = Math.max(0, prevStk - rmReq.totalNeeded);
+        const nextStk = Math.max(0, Number((prevStk - rmReq.totalNeeded).toFixed(4)));
         const updatedRm = {
           ...updatedRawMaterials[rmIdx],
           current_stock: nextStk,
@@ -657,8 +657,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Update finished product stock
     const prevProdStock = Number(targetProduct.current_stock);
-    const nextProdStock = prevProdStock + Number(params.quantityProduced);
-    const calculatedCostPerUnit = Number((totalBatchCost / params.quantityProduced).toFixed(2));
+    const nextProdStock = Number((prevProdStock + Number(params.quantityProduced)).toFixed(4));
+    const calculatedCostPerUnit = Number((totalBatchCost / Number(params.quantityProduced)).toFixed(2));
 
     const updatedTargetProd: Product = {
       ...targetProduct,
@@ -722,7 +722,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const targetProduct = products.find(p => p.id === targetBatch.product_id);
     const currentProdStock = targetProduct ? Number(targetProduct.current_stock) : 0;
-    const wouldBeProdStock = currentProdStock - targetBatch.quantity_produced;
+    const wouldBeProdStock = Number((currentProdStock - Number(targetBatch.quantity_produced)).toFixed(4));
 
     const warningDetails: string[] = [];
     if (wouldBeProdStock < 0) {
@@ -748,7 +748,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const rm = rawMaterials.find(m => m.id === consumed.raw_material_id);
         if (rm) {
           const prevStk = Number(rm.current_stock);
-          const nextStk = prevStk + Number(consumed.quantity_consumed);
+          const nextStk = Number((prevStk + Number(consumed.quantity_consumed)).toFixed(4));
           const updatedRm = { ...rm, current_stock: nextStk, updated_at: now };
           await supabaseService.upsertRawMaterial(updatedRm);
 
@@ -773,7 +773,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 2. Deduct finished goods output
     if (targetProduct) {
       const prevStk = Number(targetProduct.current_stock);
-      const nextStk = Math.max(0, prevStk - targetBatch.quantity_produced);
+      const nextStk = Math.max(0, Number((prevStk - Number(targetBatch.quantity_produced)).toFixed(4)));
       const updatedProd = { ...targetProduct, current_stock: nextStk, updated_at: now };
       await supabaseService.upsertProduct(updatedProd);
 
