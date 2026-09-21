@@ -21,7 +21,8 @@ import {
   FileSpreadsheet,
   AlertTriangle,
   CheckCircle2,
-  Clock
+  Clock,
+  FlaskConical
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -32,14 +33,16 @@ import { Badge } from '../common/Badge';
 import { Sale, ProductionBatch, ConsumedRawMaterial, Customer, Supplier } from '../../types';
 import { calculateFinancialMetrics, calculateCustomerFinancials, calculateSupplierFinancials } from '../../utils/financialEngine';
 import { ProductionReportView } from './ProductionReportView';
+import { RawMaterialPurchaseReportView } from './RawMaterialPurchaseReportView';
 
-export type ReportType = 'sales' | 'purchases' | 'profit' | 'production' | 'receivables' | 'payables' | 'valuation';
+export type ReportType = 'sales' | 'purchases' | 'rm_purchases' | 'profit' | 'production' | 'receivables' | 'payables' | 'valuation';
 
 interface ReportsModuleProps {
   initialReport?: ReportType;
+  initialRawMaterialId?: string;
 }
 
-export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 'sales' }) => {
+export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 'sales', initialRawMaterialId }) => {
   const { 
     sales, 
     purchases, 
@@ -508,6 +511,25 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
       const headers = ['PO / Invoice No', 'Date', 'Supplier', 'Payment Status', 'Payment Method', 'Total Amount (PKR)', 'Amount Paid (PKR)'];
       const rows = filteredPurchases.map(p => [p.invoice_number, p.date.slice(0, 10), p.supplier_name, p.payment_status, p.payment_method, p.total_amount, p.amount_paid]);
       exportToCSV(`PSC_Purchases_Report_${dateRangeLabel}`, headers, rows);
+    } else if (activeReport === 'rm_purchases') {
+      const headers = ['Date', 'PO Number', 'Supplier', 'Raw Material', 'Quantity', 'Unit', 'Unit Cost (PKR)', 'Total (PKR)', 'Status'];
+      const rmRows: (string | number)[][] = [];
+      purchases.forEach(p => {
+        p.items?.forEach(item => {
+          rmRows.push([
+            p.date.slice(0, 10),
+            p.invoice_number,
+            p.supplier_name,
+            item.product_or_material_name,
+            item.quantity,
+            item.unit || 'kg',
+            item.unit_cost,
+            item.subtotal || (item.quantity * item.unit_cost),
+            p.payment_status
+          ]);
+        });
+      });
+      exportToCSV(`PSC_RM_Purchase_History_${dateRangeLabel}`, headers, rmRows);
     } else if (activeReport === 'valuation') {
       const headers = ['Item Type', 'Item Name', 'Category', 'Stock Unit', 'In-Stock Quantity', 'Cost Rate (PKR)', 'Selling Rate (PKR)', 'Cost Valuation (PKR)', 'Retail Valuation (PKR)'];
       const productRows = products.map(p => [
@@ -562,6 +584,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
     switch (type) {
       case 'sales': return 'Sales & Revenue Report';
       case 'purchases': return 'Purchases & Procurement Report';
+      case 'rm_purchases': return 'Raw Material Purchase History & Procurement Report';
       case 'profit': return 'Profit & Loss (P&L) Statement';
       case 'production':
         if (productionSubView === 'period') return `Production Period Summary (${periodGrouping.toUpperCase()})`;
@@ -615,7 +638,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
         </div>
       </div>
 
-      {/* Navigation Tabs for All 6 Reports (Hidden during print) */}
+      {/* Navigation Tabs for All Reports (Hidden during print) */}
       <div className="no-print flex flex-wrap items-center gap-2 p-1.5 rounded-2xl bg-slate-900 border border-slate-800">
         <button
           onClick={() => setActiveReport('sales')}
@@ -635,6 +658,16 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
         >
           <Truck className="w-4 h-4" />
           <span>Purchase Report</span>
+        </button>
+
+        <button
+          onClick={() => setActiveReport('rm_purchases')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            activeReport === 'rm_purchases' ? 'bg-emerald-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <FlaskConical className="w-4 h-4" />
+          <span>RM Purchase History</span>
         </button>
 
         <button
@@ -1034,6 +1067,11 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
             </div>
           </div>
         </div>
+      )}
+
+      {/* ================= REPORT 2B: RAW MATERIAL PURCHASE HISTORY ================= */}
+      {activeReport === 'rm_purchases' && (
+        <RawMaterialPurchaseReportView initialRawMaterialId={initialRawMaterialId} embedded={true} />
       )}
 
       {/* ================= REPORT 3: PROFIT & LOSS STATEMENT (P&L) ================= */}

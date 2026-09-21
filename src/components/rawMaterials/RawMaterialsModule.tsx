@@ -24,7 +24,11 @@ import { formatPKR, formatDate, formatDateTime } from '../../utils/formatters';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 
-export const RawMaterialsModule: React.FC = () => {
+interface RawMaterialsModuleProps {
+  onNavigateToPurchaseHistory?: (rmId?: string) => void;
+}
+
+export const RawMaterialsModule: React.FC<RawMaterialsModuleProps> = ({ onNavigateToPurchaseHistory }) => {
   const { 
     rawMaterials, 
     rawMaterialMovements, 
@@ -202,6 +206,17 @@ export const RawMaterialsModule: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          {onNavigateToPurchaseHistory && (
+            <button
+              onClick={() => onNavigateToPurchaseHistory()}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
+              title="View Raw Material Purchase History Report"
+            >
+              <History className="w-4 h-4 text-emerald-400" />
+              <span>Purchase History</span>
+            </button>
+          )}
+
           {canManageRawMaterials && (
             <>
               <button
@@ -417,6 +432,15 @@ export const RawMaterialsModule: React.FC = () => {
                                     <Edit3 className="w-3.5 h-3.5" />
                                   </button>
                                 </>
+                              )}
+                              {onNavigateToPurchaseHistory && (
+                                <button
+                                  onClick={() => onNavigateToPurchaseHistory(rm.id)}
+                                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-emerald-400 border border-slate-700/60 transition-colors"
+                                  title="View Purchase History & Price Trends"
+                                >
+                                  <History className="w-3.5 h-3.5" />
+                                </button>
                               )}
                               {isOwner ? (
                                 checkRawMaterialHasHistory(rm.id) ? (

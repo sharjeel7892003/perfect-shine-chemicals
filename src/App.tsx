@@ -23,6 +23,7 @@ import { WifiOff, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
 const MainLayout: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [reportsInitialTab, setReportsInitialTab] = useState<ReportType>('sales');
+  const [reportsInitialRMId, setReportsInitialRMId] = useState<string | undefined>();
   const { isLoadingCloudData, cloudSyncError, isOnline, refreshCloudData } = useApp();
 
   const renderActiveModule = () => {
@@ -34,7 +35,15 @@ const MainLayout: React.FC = () => {
       case 'inventory':
         return <InventoryModule />;
       case 'raw_materials':
-        return <RawMaterialsModule />;
+        return (
+          <RawMaterialsModule 
+            onNavigateToPurchaseHistory={(rmId) => {
+              setReportsInitialTab('rm_purchases');
+              setReportsInitialRMId(rmId);
+              setActiveTab('reports');
+            }} 
+          />
+        );
       case 'formulations':
         return <FormulationsModule />;
       case 'production':
@@ -57,7 +66,7 @@ const MainLayout: React.FC = () => {
       case 'expenses':
         return <ExpensesModule />;
       case 'reports':
-        return <ReportsModule initialReport={reportsInitialTab} />;
+        return <ReportsModule initialReport={reportsInitialTab} initialRawMaterialId={reportsInitialRMId} />;
       case 'users':
         return <UsersModule />;
       default:
