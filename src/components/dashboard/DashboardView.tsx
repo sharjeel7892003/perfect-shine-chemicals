@@ -6,14 +6,17 @@ import {
   AlertTriangle, 
   Users, 
   ArrowUpRight, 
+  ArrowDownLeft,
   Plus, 
-  CheckCircle2,
-  Package,
-  Layers,
-  FlaskConical,
-  Factory,
-  DollarSign,
-  Receipt
+  CheckCircle2, 
+  Package, 
+  Layers, 
+  FlaskConical, 
+  Factory, 
+  DollarSign, 
+  Receipt,
+  Wallet,
+  UserCheck
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -288,6 +291,87 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             <p className="text-[11px] text-slate-400 mt-1">
               Gross ({formatPKR(thisMonthGrossProfit)}) − Overheads ({formatPKR(thisMonthExpenses)})
             </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Cash Position & Liquidity Strip: Net Cash Position & Working Capital */}
+      <div className="p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900 to-blue-950/30 border border-slate-800 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3 mb-4">
+          <div className="flex items-center gap-2">
+            <Wallet className="w-4 h-4 text-blue-400" />
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+              Liquid Cash Position & Working Capital
+            </h3>
+          </div>
+          <button
+            onClick={() => onNavigate('payments')}
+            className="text-xs text-blue-400 hover:text-blue-300 font-semibold flex items-center gap-1 self-start sm:self-auto"
+          >
+            <span>Open Cash Book & Payments</span>
+            <ArrowUpRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+          {/* Net Cash Position */}
+          <div className={`p-3.5 rounded-xl border ${
+            overallFinancials.netCashPosition >= 0 ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-rose-500/10 border-rose-500/30'
+          }`}>
+            <div className="flex items-center justify-between mb-1">
+              <span className={`font-bold uppercase text-[10px] ${
+                overallFinancials.netCashPosition >= 0 ? 'text-emerald-400' : 'text-rose-400'
+              }`}>
+                Net Cash Position
+              </span>
+              <Badge variant={overallFinancials.netCashPosition >= 0 ? 'emerald' : 'rose'} size="sm">
+                {overallFinancials.netCashPosition >= 0 ? 'Liquid Surplus' : 'Liquid Deficit'}
+              </Badge>
+            </div>
+            <p className={`text-xl font-black font-mono ${
+              overallFinancials.netCashPosition >= 0 ? 'text-emerald-400' : 'text-rose-400'
+            }`}>
+              {formatPKR(overallFinancials.netCashPosition)}
+            </p>
+            <p className="text-[11px] text-slate-300 mt-1">Total Cash In − Total Cash Out</p>
+          </div>
+
+          {/* Total Inflow */}
+          <div className="p-3.5 rounded-xl bg-slate-800/60 border border-slate-700/60">
+            <div className="flex items-center justify-between text-slate-400 mb-1">
+              <span className="font-semibold uppercase text-[10px]">Total Cash Inflows</span>
+              <span className="text-[10px] text-emerald-400 font-mono">+ Inflows</span>
+            </div>
+            <p className="text-xl font-black text-emerald-400 font-mono">{formatPKR(overallFinancials.totalCashCollected)}</p>
+            <div className="text-[11px] text-slate-400 mt-1 flex flex-wrap gap-x-1.5">
+              <span>Sales: <strong className="text-white">{formatPKR(overallFinancials.salesCashCollected)}</strong></span>
+              {overallFinancials.capitalInjected > 0 && <span>• Cap: <strong className="text-indigo-400">{formatPKR(overallFinancials.capitalInjected)}</strong></span>}
+              {overallFinancials.customerAdvancesReceived > 0 && <span>• Adv: <strong className="text-cyan-400">{formatPKR(overallFinancials.customerAdvancesReceived)}</strong></span>}
+            </div>
+          </div>
+
+          {/* Total Outflow */}
+          <div className="p-3.5 rounded-xl bg-slate-800/60 border border-slate-700/60">
+            <div className="flex items-center justify-between text-slate-400 mb-1">
+              <span className="font-semibold uppercase text-[10px]">Total Cash Outflows</span>
+              <span className="text-[10px] text-rose-400 font-mono">- Outflows</span>
+            </div>
+            <p className="text-xl font-black text-rose-400 font-mono">- {formatPKR(overallFinancials.totalDisbursements)}</p>
+            <div className="text-[11px] text-slate-400 mt-1 flex flex-wrap gap-x-1.5">
+              <span>POs: <strong className="text-white">{formatPKR(overallFinancials.purchaseDisbursements)}</strong></span>
+              <span>• Exp: <strong className="text-amber-300">{formatPKR(overallFinancials.operatingExpenses)}</strong></span>
+              {overallFinancials.ownerWithdrawals > 0 && <span>• Draw: <strong className="text-rose-400">{formatPKR(overallFinancials.ownerWithdrawals)}</strong></span>}
+            </div>
+          </div>
+
+          {/* Customer Advances Held */}
+          <div className="p-3.5 rounded-xl bg-cyan-500/10 border border-cyan-500/20">
+            <div className="flex items-center justify-between text-slate-400 mb-1">
+              <span className="font-semibold uppercase text-[10px] text-cyan-300">Customer Advances Held</span>
+              <span className="text-[10px] text-cyan-400">Liability</span>
+            </div>
+            <p className="text-xl font-black text-cyan-300 font-mono">{formatPKR(overallFinancials.totalOutstandingAdvances)}</p>
+            <p className="text-[11px] text-slate-300 mt-1">Prepayments held for future orders</p>
           </div>
         </div>
       </div>

@@ -162,7 +162,7 @@ export interface Supplier {
 }
 
 export type PaymentStatus = 'paid' | 'partial' | 'unpaid' | 'credit';
-export type PaymentMethod = 'cash' | 'bank' | 'jazzcash' | 'easypaisa' | 'cheque' | 'credit';
+export type PaymentMethod = 'cash' | 'bank' | 'jazzcash' | 'easypaisa' | 'cheque' | 'credit' | 'advance';
 
 export interface SaleItem {
   id?: string;
@@ -196,6 +196,7 @@ export interface Sale {
   tax: number;
   total_amount: number;
   amount_paid: number;
+  advance_amount_applied?: number;
   payment_status: PaymentStatus;
   payment_method: PaymentMethod;
   salesperson_id?: string;
@@ -286,7 +287,7 @@ export interface RecurringExpense {
 
 export interface Payment {
   id: string;
-  related_to: 'sale' | 'purchase' | 'customer_balance' | 'supplier_balance' | 'expense';
+  related_to: 'sale' | 'purchase' | 'customer_balance' | 'supplier_balance' | 'expense' | 'capital_injection' | 'owner_withdrawal' | 'customer_advance';
   reference_id?: string;
   reference_no?: string;
   customer_id?: string;

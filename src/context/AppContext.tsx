@@ -136,6 +136,9 @@ interface AppContextType {
   
   recordPayment: (paymentData: Omit<Payment, 'id' | 'created_at'>) => Promise<Payment>;
   deletePayment: (paymentId: string) => Promise<void>;
+  recordCapitalInjection: (data: { amount: number; payment_method: PaymentMethod; transaction_ref?: string; notes?: string; date?: string; depositor_name?: string }) => Promise<Payment>;
+  recordOwnerWithdrawal: (data: { amount: number; payment_method: PaymentMethod; transaction_ref?: string; notes?: string; date?: string; withdrawn_by?: string }) => Promise<Payment>;
+  recordCustomerAdvance: (data: { customer_id: string; customer_name: string; amount: number; payment_method: PaymentMethod; transaction_ref?: string; notes?: string; date?: string }) => Promise<Payment>;
 
   // Expense Actions
   addExpense: (expenseData: Omit<Expense, 'id' | 'created_at'>, user: Profile) => Promise<Expense>;
@@ -1204,35 +1207,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn('Error during inventory stock deduction for sale:', stockErr);
     }
 
-    // Update customer balance if credit sale
-    const unpaid = savedSale.total_amount - savedSale.amount_paid;
-    if (savedSale.customer_id && unpaid > 0) {
+    // Update customer balance using authoritative financialEngine
+    if (savedSale.customer_id) {
       const cust = customers.find(c => c.id === savedSale.customer_id);
       if (cust) {
-        const updatedCust = { ...cust, current_balance: Number(((cust.current_balance || 0) + unpaid).toFixed(2)), updated_at: new Date().toISOString() };
+        const nextSales = [savedSale, ...sales];
+        const summary = calculateCustomerFinancials(cust, nextSales, payments);
+        const updatedCust = {
+          ...cust,
+          current_balance: summary.outstandingReceivable,
+          updated_at: new Date().toISOString(),
+        };
         await supabaseService.upsertCustomer(updatedCust);
-        setCustomers(prev => prev.map(c => c.id === savedSale.customer_id ? updatedCust : c));
+        setCustomers(prev => prev.map(c => (c.id === savedSale.customer_id ? updatedCust : c)));
       }
     }
 
-    // Log payment if paid
+    // Log payment if fresh cash paid (excluding any advance portion already in payments)
     if (savedSale.amount_paid > 0) {
-      const pay: Payment = {
-        id: generateId(),
-        related_to: 'sale',
-        reference_id: savedSale.id,
-        reference_no: savedSale.invoice_number,
-        customer_id: savedSale.customer_id,
-        customer_name: savedSale.customer_name,
-        amount: savedSale.amount_paid,
-        payment_method: savedSale.payment_method,
-        notes: `Received for invoice ${invoiceNum}`,
-        date: savedSale.date,
-        created_by: savedSale.salesperson_name,
-        created_at: new Date().toISOString(),
-      };
-      const savedPay = await supabaseService.upsertPayment(pay);
-      setPayments(prev => [savedPay, ...prev]);
+      const advanceApplied = Number(savedSale.advance_amount_applied || 0);
+      const freshCashPaid = Math.max(0, Number((savedSale.amount_paid - advanceApplied).toFixed(2)));
+
+      if (freshCashPaid > 0) {
+        const pay: Payment = {
+          id: generateId(),
+          related_to: 'sale',
+          reference_id: savedSale.id,
+          reference_no: savedSale.invoice_number,
+          customer_id: savedSale.customer_id,
+          customer_name: savedSale.customer_name,
+          amount: freshCashPaid,
+          payment_method: savedSale.payment_method,
+          notes: advanceApplied > 0 
+            ? `Received for invoice ${invoiceNum} (PKR ${freshCashPaid} cash + PKR ${advanceApplied} advance applied)`
+            : `Received for invoice ${invoiceNum}`,
+          date: savedSale.date,
+          created_by: savedSale.salesperson_name,
+          created_at: new Date().toISOString(),
+        };
+        const savedPay = await supabaseService.upsertPayment(pay);
+        setPayments(prev => [savedPay, ...prev]);
+      }
     }
 
     return savedSale;
@@ -1598,11 +1613,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const savedPayment = await supabaseService.upsertPayment(newPayment);
     setPayments(prev => [savedPayment, ...prev]);
 
-    // Customer payment
+    // Customer payment or advance
     if (newPayment.customer_id) {
       const cust = customers.find(c => c.id === newPayment.customer_id);
       if (cust) {
-        const updatedCust = { ...cust, current_balance: Math.max(0, (cust.current_balance || 0) - newPayment.amount), updated_at: new Date().toISOString() };
+        const nextPayments = [savedPayment, ...payments];
+        const summary = calculateCustomerFinancials(cust, sales, nextPayments);
+        const updatedCust = { 
+          ...cust, 
+          current_balance: summary.outstandingReceivable, 
+          updated_at: new Date().toISOString() 
+        };
         await supabaseService.upsertCustomer(updatedCust);
         setCustomers(prev => prev.map(c => c.id === newPayment.customer_id ? updatedCust : c));
       }
@@ -1641,6 +1662,65 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return savedPayment;
+  };
+
+  const recordCapitalInjection = async (data: {
+    amount: number;
+    payment_method: PaymentMethod;
+    transaction_ref?: string;
+    notes?: string;
+    date?: string;
+    depositor_name?: string;
+  }): Promise<Payment> => {
+    return recordPayment({
+      related_to: 'capital_injection',
+      amount: Number(data.amount || 0),
+      payment_method: data.payment_method,
+      transaction_ref: data.transaction_ref,
+      notes: data.notes || `Capital injection by ${data.depositor_name || 'Owner'}`,
+      date: data.date || new Date().toISOString(),
+      created_by: data.depositor_name,
+    });
+  };
+
+  const recordOwnerWithdrawal = async (data: {
+    amount: number;
+    payment_method: PaymentMethod;
+    transaction_ref?: string;
+    notes?: string;
+    date?: string;
+    withdrawn_by?: string;
+  }): Promise<Payment> => {
+    return recordPayment({
+      related_to: 'owner_withdrawal',
+      amount: Number(data.amount || 0),
+      payment_method: data.payment_method,
+      transaction_ref: data.transaction_ref,
+      notes: data.notes || `Owner drawing by ${data.withdrawn_by || 'Owner'}`,
+      date: data.date || new Date().toISOString(),
+      created_by: data.withdrawn_by,
+    });
+  };
+
+  const recordCustomerAdvance = async (data: {
+    customer_id: string;
+    customer_name: string;
+    amount: number;
+    payment_method: PaymentMethod;
+    transaction_ref?: string;
+    notes?: string;
+    date?: string;
+  }): Promise<Payment> => {
+    return recordPayment({
+      related_to: 'customer_advance',
+      customer_id: data.customer_id,
+      customer_name: data.customer_name,
+      amount: Number(data.amount || 0),
+      payment_method: data.payment_method,
+      transaction_ref: data.transaction_ref,
+      notes: data.notes || `Customer advance deposit from ${data.customer_name}`,
+      date: data.date || new Date().toISOString(),
+    });
   };
 
   const deletePayment = async (paymentId: string): Promise<void> => {
@@ -1965,6 +2045,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deletePurchaseInvoice,
         recordPayment,
         deletePayment,
+        recordCapitalInjection,
+        recordOwnerWithdrawal,
+        recordCustomerAdvance,
         addExpense,
         deleteExpense,
         addRecurringExpense,

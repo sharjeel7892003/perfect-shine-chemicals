@@ -13,7 +13,10 @@ import {
   Users,
   Printer,
   FileText,
-  CheckCircle2
+  CheckCircle2,
+  Landmark,
+  ShieldCheck,
+  UserCheck
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -24,7 +27,18 @@ import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 
 export const PaymentsModule: React.FC = () => {
-  const { payments, customers, suppliers, sales, purchases, expenses, recordPayment } = useApp();
+  const { 
+    payments, 
+    customers, 
+    suppliers, 
+    sales, 
+    purchases, 
+    expenses, 
+    recordPayment,
+    recordCapitalInjection,
+    recordOwnerWithdrawal,
+    recordCustomerAdvance 
+  } = useApp();
   const { isOwner, canManagePurchases } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'vouchers' | 'customer_ledger' | 'supplier_ledger'>('vouchers');
@@ -35,6 +49,9 @@ export const PaymentsModule: React.FC = () => {
   // Modal States
   const [isCustomerPayModalOpen, setIsCustomerPayModalOpen] = useState(false);
   const [isSupplierPayModalOpen, setIsSupplierPayModalOpen] = useState(false);
+  const [isCapitalModalOpen, setIsCapitalModalOpen] = useState(false);
+  const [isWithdrawalModalOpen, setIsWithdrawalModalOpen] = useState(false);
+  const [isAdvanceModalOpen, setIsAdvanceModalOpen] = useState(false);
 
   // Customer Payment Form State
   const [custPaymentDate, setCustPaymentDate] = useState<string>(getTodayDateString());
@@ -54,6 +71,28 @@ export const PaymentsModule: React.FC = () => {
   const [suppPayRef, setSuppPayRef] = useState('');
   const [suppPayNotes, setSuppPayNotes] = useState('');
 
+  // Owner Capital Injection Form State
+  const [capitalDate, setCapitalDate] = useState<string>(getTodayDateString());
+  const [capitalAmount, setCapitalAmount] = useState<number>(0);
+  const [capitalMethod, setCapitalMethod] = useState<PaymentMethod>('bank');
+  const [capitalRef, setCapitalRef] = useState('');
+  const [capitalNotes, setCapitalNotes] = useState('');
+
+  // Owner Withdrawal Form State
+  const [withdrawalDate, setWithdrawalDate] = useState<string>(getTodayDateString());
+  const [withdrawalAmount, setWithdrawalAmount] = useState<number>(0);
+  const [withdrawalMethod, setWithdrawalMethod] = useState<PaymentMethod>('bank');
+  const [withdrawalRef, setWithdrawalRef] = useState('');
+  const [withdrawalNotes, setWithdrawalNotes] = useState('');
+
+  // Customer Advance Payment Form State
+  const [advanceDate, setAdvanceDate] = useState<string>(getTodayDateString());
+  const [advanceCustId, setAdvanceCustId] = useState('');
+  const [advanceAmount, setAdvanceAmount] = useState<number>(0);
+  const [advanceMethod, setAdvanceMethod] = useState<PaymentMethod>('bank');
+  const [advanceRef, setAdvanceRef] = useState('');
+  const [advanceNotes, setAdvanceNotes] = useState('');
+
   // Ledger state
   const [ledgerCustomerId, setLedgerCustomerId] = useState<string>(customers[0]?.id || '');
   const [ledgerSupplierId, setLedgerSupplierId] = useState<string>(suppliers[0]?.id || '');
@@ -72,7 +111,7 @@ export const PaymentsModule: React.FC = () => {
 
   const totalInflow = financialMetrics.totalCashCollected;
   const totalOutflow = financialMetrics.totalDisbursements;
-  const netCashflow = financialMetrics.netCashflow;
+  const netCashPosition = financialMetrics.netCashPosition;
 
   // Selected customer/supplier helpers
   const currentSelectedCustomer = customers.find(c => c.id === selectedCustId);
@@ -209,6 +248,80 @@ export const PaymentsModule: React.FC = () => {
     setSuppPaymentDate(getTodayDateString());
   };
 
+  // Submit Capital Injection
+  const handleSubmitCapital = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (capitalAmount <= 0) {
+      alert('Please enter a valid capital injection amount.');
+      return;
+    }
+
+    recordCapitalInjection({
+      amount: capitalAmount,
+      payment_method: capitalMethod,
+      transaction_ref: capitalRef,
+      notes: capitalNotes || 'Owner personal capital injection into business',
+      date: formatSelectedDateToIso(capitalDate),
+    });
+
+    setIsCapitalModalOpen(false);
+    setCapitalAmount(0);
+    setCapitalRef('');
+    setCapitalNotes('');
+    setCapitalDate(getTodayDateString());
+  };
+
+  // Submit Owner Withdrawal
+  const handleSubmitWithdrawal = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (withdrawalAmount <= 0) {
+      alert('Please enter a valid withdrawal amount.');
+      return;
+    }
+
+    recordOwnerWithdrawal({
+      amount: withdrawalAmount,
+      payment_method: withdrawalMethod,
+      transaction_ref: withdrawalRef,
+      notes: withdrawalNotes || 'Owner drawings / withdrawal for personal use',
+      date: formatSelectedDateToIso(withdrawalDate),
+    });
+
+    setIsWithdrawalModalOpen(false);
+    setWithdrawalAmount(0);
+    setWithdrawalRef('');
+    setWithdrawalNotes('');
+    setWithdrawalDate(getTodayDateString());
+  };
+
+  // Submit Customer Advance
+  const handleSubmitAdvance = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!advanceCustId || advanceAmount <= 0) {
+      alert('Please select a customer and enter a valid advance amount.');
+      return;
+    }
+
+    const cust = customers.find(c => c.id === advanceCustId);
+
+    recordCustomerAdvance({
+      customer_id: advanceCustId,
+      customer_name: cust?.name || 'Customer',
+      amount: advanceAmount,
+      payment_method: advanceMethod,
+      transaction_ref: advanceRef,
+      notes: advanceNotes || `Customer advance deposit from ${cust?.name || 'Customer'}`,
+      date: formatSelectedDateToIso(advanceDate),
+    });
+
+    setIsAdvanceModalOpen(false);
+    setAdvanceCustId('');
+    setAdvanceAmount(0);
+    setAdvanceRef('');
+    setAdvanceNotes('');
+    setAdvanceDate(getTodayDateString());
+  };
+
   // Filtered Vouchers List
   const filteredPayments = payments.filter(p => {
     const matchesSearch = 
@@ -221,8 +334,11 @@ export const PaymentsModule: React.FC = () => {
     const matchesChannel = channelFilter === 'all' || p.payment_method === channelFilter;
     const matchesType = 
       typeFilter === 'all' || 
-      (typeFilter === 'inflow' && (p.related_to === 'sale' || p.related_to === 'customer_balance')) ||
-      (typeFilter === 'outflow' && (p.related_to === 'purchase' || p.related_to === 'supplier_balance' || p.related_to === 'expense')) ||
+      (typeFilter === 'inflow' && (p.related_to === 'sale' || p.related_to === 'customer_balance' || p.related_to === 'capital_injection' || p.related_to === 'customer_advance')) ||
+      (typeFilter === 'outflow' && (p.related_to === 'purchase' || p.related_to === 'supplier_balance' || p.related_to === 'expense' || p.related_to === 'owner_withdrawal')) ||
+      (typeFilter === 'capital' && p.related_to === 'capital_injection') ||
+      (typeFilter === 'drawings' && p.related_to === 'owner_withdrawal') ||
+      (typeFilter === 'advance' && p.related_to === 'customer_advance') ||
       (typeFilter === 'expense' && p.related_to === 'expense');
 
     return matchesSearch && matchesChannel && matchesType;
@@ -269,13 +385,13 @@ export const PaymentsModule: React.FC = () => {
       }
     });
 
-    // Get all direct payments recorded
-    const custPayments = payments.filter(p => p.customer_id === ledgerCustomerId && p.related_to === 'customer_balance');
+    // Get all direct payments recorded (balance settlements & advances)
+    const custPayments = payments.filter(p => p.customer_id === ledgerCustomerId && (p.related_to === 'customer_balance' || p.related_to === 'customer_advance'));
     custPayments.forEach(pay => {
       rows.push({
         date: pay.date,
-        ref: pay.transaction_ref || pay.reference_no || 'REC',
-        description: pay.notes || 'Payment receipt voucher',
+        ref: pay.transaction_ref || pay.reference_no || (pay.related_to === 'customer_advance' ? 'ADV' : 'REC'),
+        description: pay.notes || (pay.related_to === 'customer_advance' ? 'Customer advance deposit' : 'Payment receipt voucher'),
         method: pay.payment_method,
         debit: 0,
         credit: pay.amount,
@@ -385,7 +501,7 @@ export const PaymentsModule: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => {
               setCustPaymentDate(getTodayDateString());
@@ -394,7 +510,18 @@ export const PaymentsModule: React.FC = () => {
             className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20 transition-all active:scale-95"
           >
             <Plus className="w-4 h-4 stroke-[3px]" />
-            <span>Receive Customer Payment</span>
+            <span>Receive Payment</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setAdvanceDate(getTodayDateString());
+              setIsAdvanceModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 text-xs font-bold border border-cyan-500/30 transition-all active:scale-95 shadow-sm"
+          >
+            <UserCheck className="w-4 h-4 text-cyan-400" />
+            <span>Customer Advance (+)</span>
           </button>
 
           {canManagePurchases && (
@@ -408,6 +535,32 @@ export const PaymentsModule: React.FC = () => {
               <ArrowUpRight className="w-4 h-4 text-rose-400" />
               <span>Pay Supplier Bill</span>
             </button>
+          )}
+
+          {isOwner && (
+            <>
+              <button
+                onClick={() => {
+                  setCapitalDate(getTodayDateString());
+                  setIsCapitalModalOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 text-xs font-bold border border-indigo-500/30 transition-all active:scale-95 shadow-sm"
+              >
+                <Landmark className="w-4 h-4 text-indigo-400" />
+                <span>Capital Injection (+)</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setWithdrawalDate(getTodayDateString());
+                  setIsWithdrawalModalOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-xs font-bold border border-amber-500/30 transition-all active:scale-95 shadow-sm"
+              >
+                <ArrowUpRight className="w-4 h-4 text-amber-400" />
+                <span>Owner Drawings (-)</span>
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -457,37 +610,73 @@ export const PaymentsModule: React.FC = () => {
       {activeTab === 'vouchers' && (
         <div className="space-y-6">
           {/* Cashflow Summary Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-between">
-              <div>
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Inflow (Receipts)</p>
-                <p className="text-xl font-black text-emerald-400 mt-1 font-mono">{formatPKR(totalInflow)}</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Total Inflow */}
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Cash Inflow</p>
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+                  <ArrowDownLeft className="w-5 h-5 stroke-[2.5px]" />
+                </div>
               </div>
-              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
-                <ArrowDownLeft className="w-5 h-5 stroke-[2.5px]" />
+              <p className="text-xl font-black text-emerald-400 mt-2 font-mono">{formatPKR(totalInflow)}</p>
+              <div className="text-[10px] text-slate-400 mt-1.5 flex flex-wrap gap-x-2">
+                <span>Sales: <strong className="text-slate-300 font-mono">{formatPKR(financialMetrics.salesCashCollected)}</strong></span>
+                {financialMetrics.capitalInjected > 0 && (
+                  <span>• Cap: <strong className="text-indigo-400 font-mono">{formatPKR(financialMetrics.capitalInjected)}</strong></span>
+                )}
+                {financialMetrics.customerAdvancesReceived > 0 && (
+                  <span>• Adv: <strong className="text-cyan-400 font-mono">{formatPKR(financialMetrics.customerAdvancesReceived)}</strong></span>
+                )}
               </div>
             </div>
 
-            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-between">
-              <div>
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Outflow (Disbursements)</p>
-                <p className="text-xl font-black text-rose-400 mt-1 font-mono">{formatPKR(totalOutflow)}</p>
+            {/* Total Outflow */}
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Cash Outflow</p>
+                <div className="w-9 h-9 rounded-xl bg-rose-500/10 text-rose-400 flex items-center justify-center">
+                  <ArrowUpRight className="w-5 h-5 stroke-[2.5px]" />
+                </div>
               </div>
-              <div className="w-10 h-10 rounded-xl bg-rose-500/10 text-rose-400 flex items-center justify-center">
-                <ArrowUpRight className="w-5 h-5 stroke-[2.5px]" />
+              <p className="text-xl font-black text-rose-400 mt-2 font-mono">{formatPKR(totalOutflow)}</p>
+              <div className="text-[10px] text-slate-400 mt-1.5 flex flex-wrap gap-x-2">
+                <span>Purchases: <strong className="text-slate-300 font-mono">{formatPKR(financialMetrics.purchaseDisbursements)}</strong></span>
+                <span>• Exp: <strong className="text-amber-300 font-mono">{formatPKR(financialMetrics.operatingExpenses)}</strong></span>
+                {financialMetrics.ownerWithdrawals > 0 && (
+                  <span>• Draw: <strong className="text-rose-400 font-mono">{formatPKR(financialMetrics.ownerWithdrawals)}</strong></span>
+                )}
               </div>
             </div>
 
-            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-between">
-              <div>
+            {/* Outstanding Customer Advances (Liability) */}
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Customer Advances Held</p>
+                <div className="w-9 h-9 rounded-xl bg-cyan-500/10 text-cyan-400 flex items-center justify-center">
+                  <UserCheck className="w-5 h-5" />
+                </div>
+              </div>
+              <p className="text-xl font-black text-cyan-400 mt-2 font-mono">{formatPKR(financialMetrics.totalOutstandingAdvances)}</p>
+              <p className="text-[10px] text-slate-400 mt-1.5">
+                Unallocated advance liability owed to customers
+              </p>
+            </div>
+
+            {/* Net Cash Position */}
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col justify-between">
+              <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Net Cash Position</p>
-                <p className={`text-xl font-black mt-1 font-mono ${netCashflow >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {formatPKR(netCashflow)}
-                </p>
+                <div className="w-9 h-9 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center">
+                  <Wallet className="w-5 h-5" />
+                </div>
               </div>
-              <div className="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center">
-                <CreditCard className="w-5 h-5" />
-              </div>
+              <p className={`text-xl font-black mt-2 font-mono ${netCashPosition >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {formatPKR(netCashPosition)}
+              </p>
+              <p className="text-[10px] text-slate-400 mt-1.5">
+                All Cash In − All Cash Out (Liquid Bank & Cash)
+              </p>
             </div>
           </div>
 
@@ -513,9 +702,12 @@ export const PaymentsModule: React.FC = () => {
                   className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
                 >
                   <option value="all">All Inflow & Outflow</option>
-                  <option value="inflow">Inflow (Customer Receipts)</option>
-                  <option value="outflow">All Outflow (Suppliers & Overheads)</option>
-                  <option value="expense">Operating Overheads Only</option>
+                  <option value="inflow">All Inflow (Sales, Capital, Advances)</option>
+                  <option value="outflow">All Outflow (Suppliers, Expenses, Drawings)</option>
+                  <option value="capital">Owner Capital Injections (+)</option>
+                  <option value="drawings">Owner Withdrawals (-)</option>
+                  <option value="advance">Customer Advances (+)</option>
+                  <option value="expense">Operating Overheads (-)</option>
                 </select>
 
                 <select
@@ -555,22 +747,53 @@ export const PaymentsModule: React.FC = () => {
                     </tr>
                   ) : (
                     filteredPayments.map((p) => {
-                      const isInflow = p.related_to === 'sale' || p.related_to === 'customer_balance';
+                      const isCapital = p.related_to === 'capital_injection';
+                      const isWithdrawal = p.related_to === 'owner_withdrawal';
+                      const isAdvance = p.related_to === 'customer_advance';
+                      const isInflow = p.related_to === 'sale' || p.related_to === 'customer_balance' || isCapital || isAdvance;
                       const isExpense = p.related_to === 'expense';
-                      const partyName = isExpense 
+
+                      const partyName = isCapital
+                        ? 'Owner Equity (Capital Injection)'
+                        : isWithdrawal
+                        ? 'Owner Drawings (Personal Withdrawal)'
+                        : isAdvance
+                        ? `${p.customer_name || 'Customer'} (Advance Deposit)`
+                        : isExpense 
                         ? `Overhead: ${p.reference_no || 'Expense'}` 
                         : (p.customer_name || p.supplier_name || 'Walk-in Retail');
+
+                      const badgeVariant = isCapital 
+                        ? 'blue' 
+                        : isWithdrawal 
+                        ? 'amber' 
+                        : isAdvance 
+                        ? 'blue' 
+                        : isExpense 
+                        ? 'amber' 
+                        : (isInflow ? 'emerald' : 'rose');
+
+                      const badgeText = isCapital 
+                        ? 'Capital (+)' 
+                        : isWithdrawal 
+                        ? 'Drawings (-)' 
+                        : isAdvance 
+                        ? 'Advance (+)' 
+                        : isExpense 
+                        ? 'Expense (-)' 
+                        : (isInflow ? 'Receipt (+)' : 'Disbursement (-)');
+
                       return (
                         <tr key={p.id} className="hover:bg-slate-800/40 transition-colors">
                           <td className="py-3 px-3 text-slate-400 font-mono">{formatDateTime(p.date)}</td>
                           <td className="py-3 px-3 font-bold text-white">
-                            <span className={isExpense ? 'text-amber-300' : 'text-white'}>
+                            <span className={isCapital ? 'text-indigo-300' : isAdvance ? 'text-cyan-300' : isWithdrawal ? 'text-amber-300' : isExpense ? 'text-amber-300' : 'text-white'}>
                               {partyName}
                             </span>
                           </td>
                           <td className="py-3 px-3 capitalize">
-                            <Badge variant={isExpense ? 'amber' : (isInflow ? 'emerald' : 'rose')}>
-                              {isExpense ? 'Expense (-)' : (isInflow ? 'Receipt (+)' : 'Disbursement (-)')}
+                            <Badge variant={badgeVariant}>
+                              {badgeText}
                             </Badge>
                           </td>
                           <td className="py-3 px-3 capitalize text-slate-300 font-medium">
@@ -1115,6 +1338,366 @@ export const PaymentsModule: React.FC = () => {
               className="px-5 py-2.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-white text-xs font-black shadow-lg transition-all"
             >
               Confirm Disbursement ({formatPKR(suppPayAmount)})
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* ================= MODAL: OWNER CAPITAL INJECTION ================= */}
+      <Modal
+        isOpen={isCapitalModalOpen}
+        onClose={() => setIsCapitalModalOpen(false)}
+        title="Record Owner Capital Injection"
+        subtitle="Deposit owner personal funds into business bank account or cash register to boost liquidity"
+      >
+        <form onSubmit={handleSubmitCapital} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1 flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Deposit Date *</span>
+              </label>
+              <input
+                type="date"
+                required
+                value={capitalDate}
+                onChange={(e) => setCapitalDate(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Deposit Account / Channel *
+              </label>
+              <select
+                value={capitalMethod}
+                onChange={(e) => setCapitalMethod(e.target.value as PaymentMethod)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 font-semibold"
+              >
+                <option value="bank">Business Bank Account (HBL / MCB)</option>
+                <option value="cash">Factory Cash Drawer</option>
+                <option value="jazzcash">JazzCash Business</option>
+                <option value="easypaisa">EasyPaisa</option>
+                <option value="cheque">Bank Cheque</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Capital Amount (PKR) *
+              </label>
+              <input
+                type="number"
+                min="1"
+                required
+                value={capitalAmount || ''}
+                onChange={(e) => setCapitalAmount(parseFloat(e.target.value) || 0)}
+                placeholder="0"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base font-mono font-bold text-white focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Bank Deposit Slip / Reference
+              </label>
+              <input
+                type="text"
+                value={capitalRef}
+                onChange={(e) => setCapitalRef(e.target.value)}
+                placeholder="e.g. HBL-DEP-001842"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+              Description / Notes
+            </label>
+            <input
+              type="text"
+              value={capitalNotes}
+              onChange={(e) => setCapitalNotes(e.target.value)}
+              placeholder="e.g. Owner equity injection for raw materials working capital"
+              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+            />
+          </div>
+
+          <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs text-indigo-300">
+            <p className="font-semibold flex items-center gap-1.5">
+              <Landmark className="w-4 h-4 text-indigo-400" />
+              <span>Cash Flow Impact:</span>
+            </p>
+            <p className="mt-1 text-[11px] text-slate-300">
+              This will increase your Net Cash Position as liquid money in, clearly classified as owner capital equity (distinct from sales revenue).
+            </p>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-4 border-t border-slate-800">
+            <button
+              type="button"
+              onClick={() => setIsCapitalModalOpen(false)}
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="px-5 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-black shadow-lg shadow-indigo-500/20 transition-all"
+            >
+              Confirm Capital Deposit ({formatPKR(capitalAmount)})
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* ================= MODAL: OWNER WITHDRAWAL / DRAWINGS ================= */}
+      <Modal
+        isOpen={isWithdrawalModalOpen}
+        onClose={() => setIsWithdrawalModalOpen(false)}
+        title="Record Owner Drawings / Withdrawal"
+        subtitle="Withdraw money from business funds for owner personal use"
+      >
+        <form onSubmit={handleSubmitWithdrawal} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1 flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-amber-400" />
+                <span>Withdrawal Date *</span>
+              </label>
+              <input
+                type="date"
+                required
+                value={withdrawalDate}
+                onChange={(e) => setWithdrawalDate(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Disbursing Account / Method *
+              </label>
+              <select
+                value={withdrawalMethod}
+                onChange={(e) => setWithdrawalMethod(e.target.value as PaymentMethod)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500 font-semibold"
+              >
+                <option value="bank">Business Bank Transfer</option>
+                <option value="cash">Cash From Counter / Drawer</option>
+                <option value="cheque">Owner Cheque</option>
+                <option value="jazzcash">JazzCash</option>
+                <option value="easypaisa">EasyPaisa</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Withdrawal Amount (PKR) *
+              </label>
+              <input
+                type="number"
+                min="1"
+                required
+                value={withdrawalAmount || ''}
+                onChange={(e) => setWithdrawalAmount(parseFloat(e.target.value) || 0)}
+                placeholder="0"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base font-mono font-bold text-white focus:outline-none focus:border-amber-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Cheque / Reference No
+              </label>
+              <input
+                type="text"
+                value={withdrawalRef}
+                onChange={(e) => setWithdrawalRef(e.target.value)}
+                placeholder="e.g. Chq #90112"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+              Purpose / Notes
+            </label>
+            <input
+              type="text"
+              value={withdrawalNotes}
+              onChange={(e) => setWithdrawalNotes(e.target.value)}
+              placeholder="e.g. Owner monthly personal drawings"
+              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+            />
+          </div>
+
+          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
+            <p className="font-semibold flex items-center gap-1.5">
+              <ArrowUpRight className="w-4 h-4 text-amber-400" />
+              <span>Cash Flow Impact:</span>
+            </p>
+            <p className="mt-1 text-[11px] text-slate-300">
+              Drawings reduce your Net Cash Position as money out, but are tracked separately from operational business expenses so they don't distort factory profit.
+            </p>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-4 border-t border-slate-800">
+            <button
+              type="button"
+              onClick={() => setIsWithdrawalModalOpen(false)}
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black shadow-lg shadow-amber-500/20 transition-all"
+            >
+              Confirm Withdrawal ({formatPKR(withdrawalAmount)})
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* ================= MODAL: CUSTOMER ADVANCE PAYMENT ================= */}
+      <Modal
+        isOpen={isAdvanceModalOpen}
+        onClose={() => setIsAdvanceModalOpen(false)}
+        title="Record Customer Advance Payment"
+        subtitle="Accept upfront advance funds from a customer before an invoice is issued"
+      >
+        <form onSubmit={handleSubmitAdvance} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1 flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Receipt Date *</span>
+              </label>
+              <input
+                type="date"
+                required
+                value={advanceDate}
+                onChange={(e) => setAdvanceDate(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Select Customer *
+              </label>
+              <select
+                required
+                value={advanceCustId}
+                onChange={(e) => setAdvanceCustId(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500 font-semibold"
+              >
+                <option value="">Choose customer...</option>
+                {customers.map(c => {
+                  const summary = calculateCustomerFinancials(c, sales, payments);
+                  return (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.customer_type}) {summary.advanceBalance > 0 ? `• Held Advance: ${formatPKR(summary.advanceBalance)}` : summary.outstandingReceivable > 0 ? `• Due: ${formatPKR(summary.outstandingReceivable)}` : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Advance Amount (PKR) *
+              </label>
+              <input
+                type="number"
+                min="1"
+                required
+                value={advanceAmount || ''}
+                onChange={(e) => setAdvanceAmount(parseFloat(e.target.value) || 0)}
+                placeholder="0"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base font-mono font-bold text-white focus:outline-none focus:border-cyan-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Payment Channel *
+              </label>
+              <select
+                value={advanceMethod}
+                onChange={(e) => setAdvanceMethod(e.target.value as PaymentMethod)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500 font-semibold"
+              >
+                <option value="bank">Bank Transfer (HBL / MCB)</option>
+                <option value="cash">Cash Counter Receipt</option>
+                <option value="jazzcash">JazzCash</option>
+                <option value="easypaisa">EasyPaisa</option>
+                <option value="cheque">Cheque</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                TID / Slip / Cheque Ref
+              </label>
+              <input
+                type="text"
+                value={advanceRef}
+                onChange={(e) => setAdvanceRef(e.target.value)}
+                placeholder="e.g. ADV-9921 or Online Ref"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Notes
+              </label>
+              <input
+                type="text"
+                value={advanceNotes}
+                onChange={(e) => setAdvanceNotes(e.target.value)}
+                placeholder="e.g. Advance deposit for upcoming 1000L car shampoo order"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+              />
+            </div>
+          </div>
+
+          <div className="p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-xs text-cyan-300">
+            <p className="font-semibold flex items-center gap-1.5">
+              <UserCheck className="w-4 h-4 text-cyan-400" />
+              <span>Advance Tracking:</span>
+            </p>
+            <p className="mt-1 text-[11px] text-slate-300">
+              Immediately recorded as Cash In to your Net Cash Position and credited to customer's account as an advance balance. When creating a POS invoice later, you will be prompted to apply this advance balance!
+            </p>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-4 border-t border-slate-800">
+            <button
+              type="button"
+              onClick={() => setIsAdvanceModalOpen(false)}
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-black shadow-lg shadow-cyan-500/20 transition-all"
+            >
+              Confirm Advance Receipt ({formatPKR(advanceAmount)})
             </button>
           </div>
         </form>

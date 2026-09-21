@@ -17,19 +17,21 @@ import {
   Layers,
   ChevronDown,
   AlertTriangle,
-  Loader2
+  Loader2,
+  UserCheck
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { Sale, SaleItem, PaymentMethod, PaymentStatus, Product, PackSize } from '../../types';
 import { formatPKR, formatDate, getTodayDateString, formatSelectedDateToIso } from '../../utils/formatters';
 import { getRateDifferenceInfo, saleHasCustomRates } from '../../utils/pricing';
+import { calculateCustomerFinancials } from '../../utils/financialEngine';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { InvoiceModal } from './InvoiceModal';
 
 export const SalesModule: React.FC = () => {
-  const { products, rawMaterials, customers, sales, createSale, deleteSaleInvoice } = useApp();
+  const { products, rawMaterials, customers, sales, payments, createSale, deleteSaleInvoice } = useApp();
   const { currentUser, allUsers, isOwner, canCreateSale } = useAuth();
 
   // Dynamically resolve staff member name by looking up salesperson_id in profiles
@@ -56,6 +58,8 @@ export const SalesModule: React.FC = () => {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>('paid');
   const [amountPaid, setAmountPaid] = useState<number>(0);
+  const [applyCustomerAdvance, setApplyCustomerAdvance] = useState(false);
+  const [advanceAmountToApply, setAdvanceAmountToApply] = useState<number>(0);
   const [salesNotes, setSalesNotes] = useState<string>('');
   const [productSearch, setProductSearch] = useState<string>('');
   const [historySearch, setHistorySearch] = useState<string>('');
@@ -66,6 +70,8 @@ export const SalesModule: React.FC = () => {
   const [selectedPackByProduct, setSelectedPackByProduct] = useState<Record<string, string>>({});
 
   const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
+  const customerFinancials = selectedCustomer ? calculateCustomerFinancials(selectedCustomer, sales, payments) : null;
+  const availableAdvance = customerFinancials ? customerFinancials.advanceBalance : 0;
 
   // Cart Calculations
   const subtotal = cartItems.reduce((acc, item) => acc + item.subtotal, 0);
@@ -300,6 +306,8 @@ export const SalesModule: React.FC = () => {
     setCartItems([]);
     setDiscountAmount(0);
     setAmountPaid(0);
+    setApplyCustomerAdvance(false);
+    setAdvanceAmountToApply(0);
     setSelectedCustomerId('');
     setSalesNotes('');
     setSaleDate(getTodayDateString());
@@ -314,7 +322,19 @@ export const SalesModule: React.FC = () => {
     }
 
     const customerName = selectedCustomer ? selectedCustomer.name : 'Counter Walk-in Retail';
-    const finalAmountPaid = paymentStatus === 'paid' ? totalAmount : amountPaid;
+    const advanceApplied = (applyCustomerAdvance && availableAdvance > 0)
+      ? Math.min(advanceAmountToApply > 0 ? advanceAmountToApply : availableAdvance, availableAdvance, totalAmount)
+      : 0;
+
+    let finalAmountPaid = paymentStatus === 'paid' ? totalAmount : amountPaid;
+    if (advanceApplied > 0 && finalAmountPaid < advanceApplied) {
+      finalAmountPaid = advanceApplied;
+    }
+
+    const finalPaymentMethod: PaymentMethod = 
+      (advanceApplied >= totalAmount && totalAmount > 0)
+        ? 'advance'
+        : paymentMethod;
 
     setIsSubmitting(true);
     setSubmitError(null);
@@ -329,8 +349,9 @@ export const SalesModule: React.FC = () => {
         tax: 0,
         total_amount: totalAmount,
         amount_paid: finalAmountPaid,
+        advance_amount_applied: advanceApplied,
         payment_status: paymentStatus,
-        payment_method: paymentMethod,
+        payment_method: finalPaymentMethod,
         salesperson_id: currentUser.id,
         notes: salesNotes,
       });
@@ -691,14 +712,43 @@ export const SalesModule: React.FC = () => {
                   className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
                 >
                   <option value="">Counter Walk-in Retail Customer</option>
-                  {customers.filter(c => !c.is_archived).map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} ({c.customer_type}) {c.current_balance > 0 ? `• Due: ${formatPKR(c.current_balance)}` : ''}
-                    </option>
-                  ))}
+                  {customers.filter(c => !c.is_archived).map((c) => {
+                    const cFin = calculateCustomerFinancials(c, sales, payments);
+                    return (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({c.customer_type}) {cFin.advanceBalance > 0 ? `• Held Advance: ${formatPKR(cFin.advanceBalance)}` : cFin.outstandingReceivable > 0 ? `• Due: ${formatPKR(cFin.outstandingReceivable)}` : ''}
+                      </option>
+                    );
+                  })}
                 </select>
 
-                {selectedCustomer && selectedCustomer.current_balance > 0 && (
+                {selectedCustomer && availableAdvance > 0 && (
+                  <div className="mt-2 p-2.5 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-xs text-cyan-300 space-y-1.5 shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold flex items-center gap-1.5">
+                        <UserCheck className="w-4 h-4 text-cyan-400" />
+                        <span>Customer Advance Credit:</span>
+                      </span>
+                      <span className="font-mono font-black text-cyan-200 text-sm">{formatPKR(availableAdvance)}</span>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer pt-1.5 border-t border-cyan-500/20 select-none">
+                      <input
+                        type="checkbox"
+                        checked={applyCustomerAdvance}
+                        onChange={(e) => {
+                          setApplyCustomerAdvance(e.target.checked);
+                          if (e.target.checked) {
+                            setAdvanceAmountToApply(Math.min(availableAdvance, totalAmount));
+                          }
+                        }}
+                        className="rounded border-cyan-400 text-cyan-500 focus:ring-0 w-4 h-4"
+                      />
+                      <span className="text-white text-xs font-semibold">Apply advance credit against this invoice</span>
+                    </label>
+                  </div>
+                )}
+
+                {selectedCustomer && availableAdvance === 0 && selectedCustomer.current_balance > 0 && (
                   <div className="mt-1.5 p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300 flex items-center justify-between">
                     <span>Previous Outstanding Balance:</span>
                     <span className="font-bold font-mono">{formatPKR(selectedCustomer.current_balance)}</span>
@@ -885,6 +935,37 @@ export const SalesModule: React.FC = () => {
                 />
               </div>
 
+              {applyCustomerAdvance && availableAdvance > 0 && (
+                <div className="p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-xs space-y-2 mt-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-cyan-300 font-bold flex items-center gap-1">
+                      <UserCheck className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Advance Amount to Apply:</span>
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <span className="text-slate-400 font-mono text-[11px]">PKR</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max={Math.min(availableAdvance, totalAmount)}
+                        value={advanceAmountToApply || ''}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          setAdvanceAmountToApply(Math.min(val, availableAdvance, totalAmount));
+                        }}
+                        className="w-28 bg-slate-900 border border-cyan-500/40 rounded-lg px-2 py-1 text-right text-xs text-cyan-200 font-mono font-bold focus:outline-none focus:border-cyan-400"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1.5 border-t border-cyan-500/20">
+                    <span>Remaining Fresh Cash Due:</span>
+                    <span className="font-bold font-mono text-emerald-400 text-xs">
+                      {formatPKR(Math.max(0, totalAmount - Math.min(advanceAmountToApply > 0 ? advanceAmountToApply : availableAdvance, availableAdvance, totalAmount)))}
+                    </span>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-3 pt-2">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
@@ -912,6 +993,7 @@ export const SalesModule: React.FC = () => {
                   >
                     <option value="cash">Cash Counter</option>
                     <option value="bank">Bank Transfer (HBL)</option>
+                    <option value="advance">Customer Advance</option>
                     <option value="jazzcash">JazzCash</option>
                     <option value="easypaisa">EasyPaisa</option>
                     <option value="cheque">Cheque</option>

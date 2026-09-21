@@ -154,12 +154,24 @@ export const supabaseService = {
         items: p.purchase_items || []
       }));
 
-      // 5. Normalized Payments (enrich customer/supplier names)
-      const normalizedPayments = (payRes.data || []).map((p: any) => ({
-        ...p,
-        customer_name: p.customer_id ? custMap.get(p.customer_id) || '' : '',
-        supplier_name: p.supplier_id ? suppMap.get(p.supplier_id) || '' : '',
-      }));
+      // 5. Normalized Payments (enrich customer/supplier names and detect tagged categories)
+      const normalizedPayments = (payRes.data || []).map((p: any) => {
+        let related_to = p.related_to;
+        if (p.notes?.includes('[Capital Injection]')) {
+          related_to = 'capital_injection';
+        } else if (p.notes?.includes('[Owner Withdrawal]')) {
+          related_to = 'owner_withdrawal';
+        } else if (p.notes?.includes('[Customer Advance]')) {
+          related_to = 'customer_advance';
+        }
+
+        return {
+          ...p,
+          related_to,
+          customer_name: p.customer_id ? custMap.get(p.customer_id) || '' : '',
+          supplier_name: p.supplier_id ? suppMap.get(p.supplier_id) || '' : '',
+        };
+      });
 
       // 6. Normalized Stock Movements (enrich product_name & created_by_name)
       const normalizedStockMovements = (smRes.data || []).map((sm: any) => ({
@@ -769,17 +781,39 @@ export const supabaseService = {
 
     let { data, error } = await supabase.from('payments').upsert(payload).select().single();
     if (error) {
-      // Fallback: If payments_related_to_check constraint rejects 'expense', retry as 'supplier_balance' with descriptive note
-      if (error.code === '23514' && payload.related_to === 'expense') {
-        console.warn('payments_related_to_check rejected "expense". Retrying with fallback...');
-        const fallbackPayload = {
-          ...payload,
-          related_to: 'supplier_balance',
-          notes: `[Expense Outflow: ${payment.reference_no || 'Overhead'}] ${payload.notes}`
-        };
-        const retryRes = await supabase.from('payments').upsert(fallbackPayload).select().single();
-        if (!retryRes.error) {
-          return (retryRes.data as Payment) || payment;
+      // Fallback: If payments_related_to_check constraint rejects new types, retry with compatible related_to and tagged notes
+      if (error.code === '23514') {
+        let fallbackRelatedTo = '';
+        let prefix = '';
+
+        if (payload.related_to === 'expense') {
+          fallbackRelatedTo = 'supplier_balance';
+          prefix = `[Expense Outflow: ${payment.reference_no || 'Overhead'}]`;
+        } else if (payload.related_to === 'capital_injection') {
+          fallbackRelatedTo = 'customer_balance';
+          prefix = '[Capital Injection]';
+        } else if (payload.related_to === 'owner_withdrawal') {
+          fallbackRelatedTo = 'supplier_balance';
+          prefix = '[Owner Withdrawal]';
+        } else if (payload.related_to === 'customer_advance') {
+          fallbackRelatedTo = 'customer_balance';
+          prefix = '[Customer Advance]';
+        }
+
+        if (fallbackRelatedTo) {
+          console.warn(`payments_related_to_check rejected "${payload.related_to}". Retrying with fallback "${fallbackRelatedTo}"...`);
+          const fallbackPayload = {
+            ...payload,
+            related_to: fallbackRelatedTo,
+            notes: `${prefix} ${payload.notes}`.trim()
+          };
+          const retryRes = await supabase.from('payments').upsert(fallbackPayload).select().single();
+          if (!retryRes.error) {
+            return {
+              ...(retryRes.data as Payment),
+              related_to: payment.related_to // retain high-level related_to in local memory
+            };
+          }
         }
       }
       console.error('Supabase upsertPayment error:', error);

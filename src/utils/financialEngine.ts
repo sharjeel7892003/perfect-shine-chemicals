@@ -8,6 +8,7 @@ export interface CustomerFinancialSummary {
   directAccountPayments: number;
   totalPaymentsCollected: number;
   outstandingReceivable: number;
+  advanceBalance: number;
   salesCount: number;
   paymentsCount: number;
   isArchived: boolean;
@@ -36,13 +37,28 @@ export interface FinancialFilterOptions {
 
 export interface OverallFinancialMetrics {
   totalSalesRevenue: number;
-  totalCashCollected: number;
-  totalUncollectedCredit: number;
+  
+  // INFLOWS BREAKDOWN
+  salesCashCollected: number;
+  capitalInjected: number;
+  customerAdvancesReceived: number;
+  totalCashCollected: number; // Sum of all Inflows: salesCashCollected + capitalInjected + customerAdvancesReceived
+  
+  // OUTSTANDING BALANCES
+  totalUncollectedCredit: number; // Factory Receivables (money owed by customers)
+  totalOutstandingAdvances: number; // Factory Liability (customer advances not yet consumed by sales)
+  
+  // OUTFLOWS BREAKDOWN
   totalPurchasesSpend: number;
-  totalPurchaseDisbursements: number;
-  totalOperatingExpenses: number;
-  totalDisbursements: number;
-  netCashflow: number;
+  purchaseDisbursements: number;
+  operatingExpenses: number;
+  ownerWithdrawals: number;
+  totalDisbursements: number; // Sum of all Outflows: purchaseDisbursements + operatingExpenses + ownerWithdrawals
+  
+  // NET CASH POSITION
+  netCashPosition: number; // totalCashCollected - totalDisbursements
+  netCashflow: number; // alias for backwards compatibility
+  
   customerSummaries: CustomerFinancialSummary[];
   supplierSummaries: SupplierFinancialSummary[];
 }
@@ -61,7 +77,12 @@ export const isDateInBounds = (dateStr?: string, startDate?: string, endDate?: s
 
 /**
  * Calculates authoritative financial figures for a single customer.
- * Reconciles sales invoices and all payment vouchers (both checkout and account settlements).
+ * Reconciles sales invoices and all payment vouchers (checkout, collections, and advances).
+ * 
+ * Net Balance = Total Sales Invoiced - Total Payments Received:
+ * - If > 0: Customer owes the factory (Outstanding Receivable), Advance = 0
+ * - If < 0: Customer has paid in advance (Advance Balance), Receivable = 0
+ * - If = 0: Fully settled
  */
 export const calculateCustomerFinancials = (
   customer: Customer,
@@ -76,14 +97,16 @@ export const calculateCustomerFinancials = (
     custSales.reduce((acc, s) => acc + (Number(s.amount_paid) || 0), 0).toFixed(2)
   );
 
-  // Get all customer payments (both invoice-linked payments and direct account payments)
+  // Get all customer payments (invoice-linked, balance settlements, and advance deposits)
   const custPayments = payments.filter(
-    p => p.customer_id === customer.id && (p.related_to === 'sale' || p.related_to === 'customer_balance')
+    p =>
+      p.customer_id === customer.id &&
+      (p.related_to === 'sale' || p.related_to === 'customer_balance' || p.related_to === 'customer_advance')
   );
 
   const directAccountPayments = Number(
     custPayments
-      .filter(p => p.related_to === 'customer_balance')
+      .filter(p => p.related_to === 'customer_balance' || p.related_to === 'customer_advance')
       .reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
       .toFixed(2)
   );
@@ -92,12 +115,28 @@ export const calculateCustomerFinancials = (
     custPayments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0).toFixed(2)
   );
 
-  // If customer has explicit sales or payments, calculate exact balance; otherwise fallback to stored current_balance
   let outstandingReceivable = 0;
+  let advanceBalance = 0;
+
   if (custSales.length > 0 || custPayments.length > 0) {
-    outstandingReceivable = Math.max(0, Number((totalSales - totalPaymentsCollected).toFixed(2)));
+    const netDifference = Number((totalSales - totalPaymentsCollected).toFixed(2));
+    if (netDifference > 0) {
+      outstandingReceivable = netDifference;
+      advanceBalance = 0;
+    } else {
+      outstandingReceivable = 0;
+      advanceBalance = Math.abs(netDifference);
+    }
   } else {
-    outstandingReceivable = Math.max(0, Number(customer.current_balance || 0));
+    // If customer has no sales or payments, check legacy current_balance
+    const storedBal = Number(customer.current_balance || 0);
+    if (storedBal > 0) {
+      outstandingReceivable = storedBal;
+      advanceBalance = 0;
+    } else if (storedBal < 0) {
+      outstandingReceivable = 0;
+      advanceBalance = Math.abs(storedBal);
+    }
   }
 
   return {
@@ -108,6 +147,7 @@ export const calculateCustomerFinancials = (
     directAccountPayments,
     totalPaymentsCollected,
     outstandingReceivable,
+    advanceBalance,
     salesCount: custSales.length,
     paymentsCount: custPayments.length,
     isArchived: Boolean(customer.is_archived),
@@ -169,8 +209,10 @@ export const calculateSupplierFinancials = (
 
 /**
  * Authoritative global calculation source for Reports, Ledgers, and Dashboard.
- * Guarantees that Total Sales, Cash Collected, Uncollected Credit, Purchases,
- * and Disbursements reconcile across every screen.
+ * 
+ * Formula:
+ * Net Cash Position = (Capital Injected + Sales Payments Collected + Customer Advances)
+ *                   - (Purchases Paid + Operating Expenses + Owner Withdrawals)
  */
 export const calculateFinancialMetrics = (data: {
   sales: Sale[];
@@ -219,61 +261,87 @@ export const calculateFinancialMetrics = (data: {
     filteredPurchases.reduce((acc, p) => acc + (Number(p.total_amount) || 0), 0).toFixed(2)
   );
 
-  // 3. Customer Summaries & Receivables
-  // Exclude archived customers from active totals unless explicitly selected
+  // 3. Customer Summaries, Receivables & Advances
   const activeCustomers = customers.filter(c => !c.is_archived || c.id === customerId);
   const customerSummaries = activeCustomers.map(c => calculateCustomerFinancials(c, sales, payments));
 
-  // Determine Uncollected Credit & Cash Collected
+  // Inflow Breakdown
+  let capitalInjected = 0;
+  let ownerWithdrawals = 0;
+  let customerAdvancesReceived = 0;
+  let salesCashCollected = 0;
   let totalCashCollected = 0;
   let totalUncollectedCredit = 0;
+  let totalOutstandingAdvances = 0;
+
+  // Filter payments by date bounds
+  const boundedPayments = payments.filter(p => isDateInBounds(p.date, startDate, endDate));
+
+  // Owner Capital Injections (Cash In)
+  capitalInjected = Number(
+    boundedPayments
+      .filter(p => p.related_to === 'capital_injection')
+      .reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
+      .toFixed(2)
+  );
+
+  // Owner Withdrawals / Drawings (Cash Out)
+  ownerWithdrawals = Number(
+    boundedPayments
+      .filter(p => p.related_to === 'owner_withdrawal')
+      .reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
+      .toFixed(2)
+  );
 
   if (customerId && customerId !== 'all') {
     // Specific customer view
     const custSummary = customerSummaries.find(cs => cs.customerId === customerId);
-    if (startDate || endDate) {
-      // In a specific period, count payments received in that period for this customer
-      const periodPayments = payments.filter(
-        p =>
-          p.customer_id === customerId &&
-          (p.related_to === 'sale' || p.related_to === 'customer_balance') &&
-          isDateInBounds(p.date, startDate, endDate)
-      );
-      totalCashCollected = Number(
-        periodPayments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0).toFixed(2)
-      );
-      totalUncollectedCredit = Math.max(0, Number((totalSalesRevenue - totalCashCollected).toFixed(2)));
-    } else {
-      totalCashCollected = custSummary ? custSummary.totalPaymentsCollected : 0;
-      totalUncollectedCredit = custSummary ? custSummary.outstandingReceivable : 0;
-    }
+    const custBoundedPayments = boundedPayments.filter(p => p.customer_id === customerId);
+
+    customerAdvancesReceived = Number(
+      custBoundedPayments
+        .filter(p => p.related_to === 'customer_advance')
+        .reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
+        .toFixed(2)
+    );
+
+    salesCashCollected = Number(
+      custBoundedPayments
+        .filter(p => p.related_to === 'sale' || p.related_to === 'customer_balance')
+        .reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
+        .toFixed(2)
+    );
+
+    totalCashCollected = Number((salesCashCollected + customerAdvancesReceived).toFixed(2));
+    totalUncollectedCredit = custSummary ? custSummary.outstandingReceivable : 0;
+    totalOutstandingAdvances = custSummary ? custSummary.advanceBalance : 0;
   } else {
     // Global / All Customers view
-    if (startDate || endDate) {
-      // For a specific date window, sum incoming payments during that period
-      const periodPayments = payments.filter(
-        p =>
-          (p.related_to === 'sale' || p.related_to === 'customer_balance') &&
-          isDateInBounds(p.date, startDate, endDate)
-      );
-      totalCashCollected = Number(
-        periodPayments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0).toFixed(2)
-      );
-      // For the selected period's sales, uncollected portion
-      totalUncollectedCredit = Math.max(0, Number((totalSalesRevenue - totalCashCollected).toFixed(2)));
-    } else {
-      // All-time: total cash collected from all inflow payment vouchers
-      const allInflowPayments = payments.filter(
-        p => p.related_to === 'sale' || p.related_to === 'customer_balance'
-      );
-      totalCashCollected = Number(
-        allInflowPayments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0).toFixed(2)
-      );
-      // Total uncollected credit across active customers
-      totalUncollectedCredit = Number(
-        customerSummaries.reduce((acc, c) => acc + c.outstandingReceivable, 0).toFixed(2)
-      );
-    }
+    customerAdvancesReceived = Number(
+      boundedPayments
+        .filter(p => p.related_to === 'customer_advance')
+        .reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
+        .toFixed(2)
+    );
+
+    salesCashCollected = Number(
+      boundedPayments
+        .filter(p => p.related_to === 'sale' || p.related_to === 'customer_balance')
+        .reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
+        .toFixed(2)
+    );
+
+    totalCashCollected = Number(
+      (salesCashCollected + capitalInjected + customerAdvancesReceived).toFixed(2)
+    );
+
+    totalUncollectedCredit = Number(
+      customerSummaries.reduce((acc, c) => acc + c.outstandingReceivable, 0).toFixed(2)
+    );
+
+    totalOutstandingAdvances = Number(
+      customerSummaries.reduce((acc, c) => acc + c.advanceBalance, 0).toFixed(2)
+    );
   }
 
   // 4. Supplier Summaries & Payables
@@ -281,56 +349,55 @@ export const calculateFinancialMetrics = (data: {
   const supplierSummaries = activeSuppliers.map(s => calculateSupplierFinancials(s, purchases, payments));
 
   // Determine Purchase Disbursements
-  let totalPurchaseDisbursements = 0;
+  let purchaseDisbursements = 0;
   if (supplierId && supplierId !== 'all') {
-    const suppSummary = supplierSummaries.find(ss => ss.supplierId === supplierId);
-    if (startDate || endDate) {
-      const periodDisb = payments.filter(
-        p =>
-          p.supplier_id === supplierId &&
-          (p.related_to === 'purchase' || p.related_to === 'supplier_balance') &&
-          isDateInBounds(p.date, startDate, endDate)
-      );
-      totalPurchaseDisbursements = Number(
-        periodDisb.reduce((acc, p) => acc + (Number(p.amount) || 0), 0).toFixed(2)
-      );
-    } else {
-      totalPurchaseDisbursements = suppSummary ? suppSummary.totalDisbursementsPaid : 0;
-    }
-  } else {
-    const filteredDisb = payments.filter(
-      p =>
-        (p.related_to === 'purchase' || p.related_to === 'supplier_balance') &&
-        isDateInBounds(p.date, startDate, endDate)
+    const suppBounded = boundedPayments.filter(p => p.supplier_id === supplierId);
+    purchaseDisbursements = Number(
+      suppBounded
+        .filter(p => p.related_to === 'purchase' || p.related_to === 'supplier_balance')
+        .reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
+        .toFixed(2)
     );
-    totalPurchaseDisbursements = Number(
-      filteredDisb.reduce((acc, p) => acc + (Number(p.amount) || 0), 0).toFixed(2)
+  } else {
+    purchaseDisbursements = Number(
+      boundedPayments
+        .filter(p => p.related_to === 'purchase' || p.related_to === 'supplier_balance')
+        .reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
+        .toFixed(2)
     );
   }
 
   // 5. Operating Expenses
   const filteredExpenses = expenses.filter(e => isDateInBounds(e.date, startDate, endDate));
-  const totalOperatingExpenses = Number(
+  const operatingExpenses = Number(
     filteredExpenses.reduce((acc, e) => acc + (Number(e.amount) || 0), 0).toFixed(2)
   );
 
+  // Total Disbursements = Purchases Paid + Operating Expenses + Owner Withdrawals
   const totalDisbursements = Number(
-    (totalPurchaseDisbursements + totalOperatingExpenses).toFixed(2)
+    (purchaseDisbursements + operatingExpenses + ownerWithdrawals).toFixed(2)
   );
 
-  const netCashflow = Number(
+  // Net Cash Position = Total Cash Collected - Total Disbursements
+  const netCashPosition = Number(
     (totalCashCollected - totalDisbursements).toFixed(2)
   );
 
   return {
     totalSalesRevenue,
+    salesCashCollected,
+    capitalInjected,
+    customerAdvancesReceived,
     totalCashCollected,
     totalUncollectedCredit,
+    totalOutstandingAdvances,
     totalPurchasesSpend,
-    totalPurchaseDisbursements,
-    totalOperatingExpenses,
+    purchaseDisbursements,
+    operatingExpenses,
+    ownerWithdrawals,
     totalDisbursements,
-    netCashflow,
+    netCashPosition,
+    netCashflow: netCashPosition,
     customerSummaries,
     supplierSummaries,
   };
