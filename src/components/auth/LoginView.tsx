@@ -88,11 +88,16 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, availableP
         });
 
         if (authError) {
-          // If login fails, check if the error is invalid credentials
-          if (authError.message.includes('Invalid login credentials')) {
-            setErrorMessage('Invalid email or password. Please verify your credentials or run the Supabase Auth migration script.');
+          console.error('[Supabase Auth Error]:', authError);
+          const rawMsg = authError.message;
+          if (rawMsg === '{}' || authError.status === 500) {
+            setErrorMessage('Supabase Auth Error (500: Database error querying schema). GoTrue scanner found NULL token fields on auth.users.');
+          } else if (rawMsg.includes('Invalid login credentials')) {
+            setErrorMessage('Invalid email or password. Please verify your factory credentials.');
+          } else if (rawMsg.includes('Email not confirmed')) {
+            setErrorMessage('Email address has not been confirmed in Supabase Auth. Please toggle "Auto Confirm" or confirm in Supabase Dashboard.');
           } else {
-            setErrorMessage(authError.message);
+            setErrorMessage(rawMsg || `Authentication error (${authError.status || 'unknown'})`);
           }
           setIsLoading(false);
           return;
@@ -114,7 +119,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, availableP
             onLoginSuccess(matchedLocal);
             return;
           }
-          setErrorMessage('Authenticated successfully, but no staff profile was found for this account.');
+          setErrorMessage('Authenticated successfully with Supabase, but no matching staff profile was found in public.profiles.');
           setIsLoading(false);
           return;
         }
@@ -137,7 +142,11 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, availableP
         }
       }
     } catch (err: any) {
-      setErrorMessage(err?.message || 'Authentication error. Please try again.');
+      console.error('[Login Catch Exception]:', err);
+      const fallbackMsg = err?.message && err.message !== '{}' 
+        ? err.message 
+        : (err?.status ? `Authentication server error (${err.status})` : 'Authentication error. Please try again.');
+      setErrorMessage(fallbackMsg);
     } finally {
       setIsLoading(false);
     }

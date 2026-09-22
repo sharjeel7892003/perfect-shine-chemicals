@@ -80,6 +80,15 @@ BEGIN
         raw_app_meta_data,
         raw_user_meta_data,
         is_super_admin,
+        confirmation_token,
+        recovery_token,
+        email_change_token_new,
+        email_change,
+        email_change_token_current,
+        phone,
+        phone_change,
+        phone_change_token,
+        reauthentication_token,
         created_at,
         updated_at
       ) VALUES (
@@ -93,6 +102,15 @@ BEGIN
         '{"provider":"email","providers":["email"]}'::jsonb,
         jsonb_build_object('name', staff_rec.name, 'role', staff_rec.role, 'phone', staff_rec.phone),
         false,
+        '',
+        '',
+        '',
+        '',
+        '',
+        COALESCE(staff_rec.phone, ''),
+        '',
+        '',
+        '',
         now(),
         now()
       );
@@ -121,11 +139,19 @@ BEGIN
 
       RAISE NOTICE 'Created auth.users entry for % with ID %', staff_rec.email, v_user_id;
     ELSE
-      -- Update existing auth.users password and ensure confirmed
+      -- Update existing auth.users password and ensure confirmed & non-null string tokens
       UPDATE auth.users
       SET encrypted_password = v_encrypted_pw,
           email_confirmed_at = COALESCE(email_confirmed_at, now()),
           raw_user_meta_data = jsonb_build_object('name', staff_rec.name, 'role', staff_rec.role, 'phone', staff_rec.phone),
+          confirmation_token = COALESCE(confirmation_token, ''),
+          recovery_token = COALESCE(recovery_token, ''),
+          email_change_token_new = COALESCE(email_change_token_new, ''),
+          email_change = COALESCE(email_change, ''),
+          email_change_token_current = COALESCE(email_change_token_current, ''),
+          phone_change = COALESCE(phone_change, ''),
+          phone_change_token = COALESCE(phone_change_token, ''),
+          reauthentication_token = COALESCE(reauthentication_token, ''),
           updated_at = now()
       WHERE id = v_user_id;
 
@@ -163,6 +189,20 @@ BEGIN
         updated_at = now();
 
   END LOOP;
+
+  -- Heal any existing rows in auth.users that have NULL token strings (GoTrue scanner requirement)
+  UPDATE auth.users
+  SET confirmation_token = COALESCE(confirmation_token, ''),
+      recovery_token = COALESCE(recovery_token, ''),
+      email_change_token_new = COALESCE(email_change_token_new, ''),
+      email_change = COALESCE(email_change, ''),
+      email_change_token_current = COALESCE(email_change_token_current, ''),
+      phone = COALESCE(phone, ''),
+      phone_change = COALESCE(phone_change, ''),
+      phone_change_token = COALESCE(phone_change_token, ''),
+      reauthentication_token = COALESCE(reauthentication_token, '')
+  WHERE confirmation_token IS NULL OR recovery_token IS NULL;
+
 END $$;
 
 -- ------------------------------------------------------------------------------
