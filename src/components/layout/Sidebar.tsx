@@ -48,10 +48,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
     canViewReports, 
     canManagePurchases, 
     canManageUsers,
-    canManageFormulations,
-    canRecordProduction,
-    canManageRawMaterials,
-    canManageExpenses
+    canManageExpenses,
+    canAccessSales,
+    canAccessCustomers,
+    canAccessProduction,
+    canAccessFormulations,
+    canAccessRawMaterials,
   } = useAuth();
   
   const { lowStockProducts, lowStockRawMaterials, resetToDefaultData } = useApp();
@@ -60,7 +62,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
 
   const navItems = [
     { id: 'dashboard' as ActiveTab, label: 'Dashboard', icon: LayoutDashboard, visible: true },
-    { id: 'sales' as ActiveTab, label: 'Sales & POS', icon: ShoppingCart, visible: true },
+    { id: 'sales' as ActiveTab, label: 'Sales & POS', icon: ShoppingCart, visible: canAccessSales },
     { 
       id: 'inventory' as ActiveTab, 
       label: 'Finished Goods Stock', 
@@ -73,14 +75,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
       id: 'raw_materials' as ActiveTab, 
       label: 'Raw Materials', 
       icon: FlaskConical, 
-      visible: true,
+      visible: canAccessRawMaterials,
       badge: lowStockRawMaterials.length > 0 ? `${lowStockRawMaterials.length} Low` : undefined,
       badgeColor: 'amber' as const
     },
-    { id: 'formulations' as ActiveTab, label: 'Formulations (BOM)', icon: Layers, visible: true },
-    { id: 'production' as ActiveTab, label: 'Production Batches', icon: Factory, visible: true },
+    { id: 'formulations' as ActiveTab, label: 'Formulations (BOM)', icon: Layers, visible: canAccessFormulations },
+    { id: 'production' as ActiveTab, label: 'Production Batches', icon: Factory, visible: canAccessProduction },
     { id: 'purchases' as ActiveTab, label: 'Purchases (Raw/Goods)', icon: Truck, visible: canManagePurchases },
-    { id: 'customers' as ActiveTab, label: 'Customers & Ledgers', icon: Users, visible: true },
+    { id: 'customers' as ActiveTab, label: 'Customers & Ledgers', icon: Users, visible: canAccessCustomers },
     { id: 'suppliers' as ActiveTab, label: 'Suppliers & Vendors', icon: Building2, visible: canManagePurchases },
     { id: 'payments' as ActiveTab, label: 'Payments & Cashbook', icon: CreditCard, visible: canManagePurchases },
     { id: 'expenses' as ActiveTab, label: 'Expenses & Overheads', icon: DollarSign, visible: canManageExpenses || canViewReports },

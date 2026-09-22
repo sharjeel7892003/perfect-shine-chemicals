@@ -7,7 +7,9 @@ import {
   Database,
   ChevronDown,
   FlaskConical,
-  Package
+  Package,
+  LogOut,
+  ShieldCheck
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useApp } from '../../context/AppContext';
@@ -19,7 +21,7 @@ interface TopbarProps {
 }
 
 export const Topbar: React.FC<TopbarProps> = ({ onNavigate }) => {
-  const { currentUser, allUsers, switchUser } = useAuth();
+  const { currentUser, allUsers, switchUser, logout } = useAuth();
   const { lowStockProducts, lowStockRawMaterials } = useApp();
   const [showRoleMenu, setShowRoleMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -128,48 +130,75 @@ export const Topbar: React.FC<TopbarProps> = ({ onNavigate }) => {
           )}
         </div>
 
-        {/* Role Switcher */}
-        <div className="relative">
-          <button
-            onClick={() => setShowRoleMenu(!showRoleMenu)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-xs text-slate-200 transition-colors"
-          >
-            <UserCheck className="w-4 h-4 text-emerald-400" />
-            <span className="hidden sm:inline font-medium">{currentUser.name.split(' ')[0]}</span>
-            <span className="text-slate-400">({currentUser.role.replace('_', ' ')})</span>
-            <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-          </button>
-
-          {showRoleMenu && (
-            <div 
-              className="absolute right-0 mt-2 w-64 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl shadow-black/50 p-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150"
-              onClick={() => setShowRoleMenu(false)}
+        {/* Role Switcher & User Profile */}
+        {currentUser && (
+          <div className="relative flex items-center gap-2">
+            <button
+              onClick={() => setShowRoleMenu(!showRoleMenu)}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-xs text-slate-200 transition-colors"
             >
-              <div className="px-3 py-1.5 text-[11px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800 mb-1">
-                Switch Active User / Shift
+              <UserCheck className="w-4 h-4 text-emerald-400" />
+              <span className="hidden sm:inline font-medium">{currentUser.name.split(' ')[0]}</span>
+              <span className="text-slate-400 hidden md:inline">({currentUser.role.replace('_', ' ')})</span>
+              <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+            </button>
+
+            {/* Direct Logout Button */}
+            <button
+              onClick={() => {
+                if (window.confirm('Are you sure you want to end your session and log out?')) {
+                  logout();
+                }
+              }}
+              title="Secure Sign Out"
+              className="p-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 hover:text-rose-200 text-xs flex items-center gap-1.5 transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
+              <span className="hidden lg:inline text-[11px] font-semibold">Logout</span>
+            </button>
+
+            {showRoleMenu && (
+              <div 
+                className="absolute right-0 mt-2 w-64 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl shadow-black/50 p-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150"
+                onClick={() => setShowRoleMenu(false)}
+              >
+                <div className="px-3 py-1.5 text-[11px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800 mb-1 flex items-center justify-between">
+                  <span>Switch Shift / User</span>
+                  <span className="text-[10px] text-emerald-400 font-mono">ACTIVE</span>
+                </div>
+                {allUsers.map((u) => (
+                  <button
+                    key={u.id}
+                    onClick={() => switchUser(u.id)}
+                    className={`w-full text-left px-3 py-2 rounded-lg text-xs flex items-center justify-between transition-colors ${
+                      u.id === currentUser.id 
+                        ? 'bg-emerald-500/15 text-emerald-400 font-semibold' 
+                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                    }`}
+                  >
+                    <div>
+                      <p>{u.name}</p>
+                      <p className="text-[10px] text-slate-400 capitalize">{u.role.replace('_', ' ')}</p>
+                    </div>
+                    {u.id === currentUser.id && (
+                      <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                    )}
+                  </button>
+                ))}
+
+                <div className="border-t border-slate-800 mt-2 pt-2">
+                  <button
+                    onClick={() => logout()}
+                    className="w-full text-left px-3 py-2 rounded-lg text-xs flex items-center gap-2 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300 transition-colors font-medium"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>Sign Out of System</span>
+                  </button>
+                </div>
               </div>
-              {allUsers.map((u) => (
-                <button
-                  key={u.id}
-                  onClick={() => switchUser(u.id)}
-                  className={`w-full text-left px-3 py-2 rounded-lg text-xs flex items-center justify-between transition-colors ${
-                    u.id === currentUser.id 
-                      ? 'bg-emerald-500/15 text-emerald-400 font-semibold' 
-                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                  }`}
-                >
-                  <div>
-                    <p>{u.name}</p>
-                    <p className="text-[10px] text-slate-400 capitalize">{u.role.replace('_', ' ')}</p>
-                  </div>
-                  {u.id === currentUser.id && (
-                    <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
     </header>
   );

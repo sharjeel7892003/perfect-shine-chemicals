@@ -18,14 +18,20 @@ interface MobileNavProps {
 }
 
 export const MobileNav: React.FC<MobileNavProps> = ({ activeTab, setActiveTab }) => {
-  const { canViewReports, canManagePurchases, canRecordProduction, canManageRawMaterials, canManageExpenses } = useAuth();
+  const { 
+    canViewReports, 
+    canAccessSales, 
+    canAccessProduction, 
+    canAccessRawMaterials, 
+    canManageExpenses 
+  } = useAuth();
 
   const items = [
     { id: 'dashboard' as ActiveTab, label: 'Home', icon: LayoutDashboard },
-    { id: 'sales' as ActiveTab, label: 'Sales', icon: ShoppingCart },
+    ...(canAccessSales ? [{ id: 'sales' as ActiveTab, label: 'Sales', icon: ShoppingCart }] : []),
     { id: 'inventory' as ActiveTab, label: 'Finished', icon: Package },
-    { id: 'raw_materials' as ActiveTab, label: 'Raw Stock', icon: FlaskConical },
-    { id: 'production' as ActiveTab, label: 'Production', icon: Factory },
+    ...(canAccessRawMaterials ? [{ id: 'raw_materials' as ActiveTab, label: 'Raw Stock', icon: FlaskConical }] : []),
+    ...(canAccessProduction ? [{ id: 'production' as ActiveTab, label: 'Production', icon: Factory }] : []),
     ...(canManageExpenses ? [{ id: 'expenses' as ActiveTab, label: 'Expenses', icon: DollarSign }] : []),
     ...(canViewReports ? [{ id: 'reports' as ActiveTab, label: 'Reports', icon: BarChart3 }] : []),
   ];

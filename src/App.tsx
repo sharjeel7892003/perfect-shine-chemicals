@@ -18,24 +18,45 @@ import { PaymentsModule } from './components/payments/PaymentsModule';
 import { ExpensesModule } from './components/expenses/ExpensesModule';
 import { ReportsModule, ReportType } from './components/reports/ReportsModule';
 import { UsersModule } from './components/users/UsersModule';
-import { WifiOff, Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
+import { LoginView } from './components/auth/LoginView';
+import { useAuth } from './context/AuthContext';
+import { WifiOff, Loader2, AlertTriangle, RefreshCw, ShieldAlert } from 'lucide-react';
 
 const MainLayout: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [reportsInitialTab, setReportsInitialTab] = useState<ReportType>('sales');
   const [reportsInitialRMId, setReportsInitialRMId] = useState<string | undefined>();
   const { isLoadingCloudData, cloudSyncError, isOnline, refreshCloudData } = useApp();
+  const { 
+    currentUser, 
+    isAuthenticated, 
+    allUsers, 
+    login,
+    canAccessSales,
+    canAccessCustomers,
+    canAccessProduction,
+    canAccessFormulations,
+    canAccessRawMaterials,
+    canManagePurchases,
+    canManageExpenses,
+    canViewReports,
+    canManageUsers
+  } = useAuth();
+
+  if (!isAuthenticated || !currentUser) {
+    return <LoginView onLoginSuccess={login} availableProfiles={allUsers} />;
+  }
 
   const renderActiveModule = () => {
     switch (activeTab) {
       case 'dashboard':
         return <DashboardView onNavigate={setActiveTab} />;
       case 'sales':
-        return <SalesModule />;
+        return canAccessSales ? <SalesModule /> : <DashboardView onNavigate={setActiveTab} />;
       case 'inventory':
         return <InventoryModule />;
       case 'raw_materials':
-        return (
+        return canAccessRawMaterials ? (
           <RawMaterialsModule 
             onNavigateToPurchaseHistory={(rmId) => {
               setReportsInitialTab('rm_purchases');
@@ -43,32 +64,34 @@ const MainLayout: React.FC = () => {
               setActiveTab('reports');
             }} 
           />
-        );
+        ) : <DashboardView onNavigate={setActiveTab} />;
       case 'formulations':
-        return <FormulationsModule />;
+        return canAccessFormulations ? <FormulationsModule /> : <DashboardView onNavigate={setActiveTab} />;
       case 'production':
-        return (
+        return canAccessProduction ? (
           <ProductionModule 
             onNavigateToReports={() => {
               setReportsInitialTab('production');
               setActiveTab('reports');
             }} 
           />
-        );
+        ) : <DashboardView onNavigate={setActiveTab} />;
       case 'purchases':
-        return <PurchasesModule />;
+        return canManagePurchases ? <PurchasesModule /> : <DashboardView onNavigate={setActiveTab} />;
       case 'customers':
-        return <CustomersModule />;
+        return canAccessCustomers ? <CustomersModule /> : <DashboardView onNavigate={setActiveTab} />;
       case 'suppliers':
-        return <SuppliersModule />;
+        return canManagePurchases ? <SuppliersModule /> : <DashboardView onNavigate={setActiveTab} />;
       case 'payments':
-        return <PaymentsModule />;
+        return canManagePurchases ? <PaymentsModule /> : <DashboardView onNavigate={setActiveTab} />;
       case 'expenses':
-        return <ExpensesModule />;
+        return (canManageExpenses || canViewReports) ? <ExpensesModule /> : <DashboardView onNavigate={setActiveTab} />;
       case 'reports':
-        return <ReportsModule initialReport={reportsInitialTab} initialRawMaterialId={reportsInitialRMId} />;
+        return canViewReports ? (
+          <ReportsModule initialReport={reportsInitialTab} initialRawMaterialId={reportsInitialRMId} />
+        ) : <DashboardView onNavigate={setActiveTab} />;
       case 'users':
-        return <UsersModule />;
+        return canManageUsers ? <UsersModule /> : <DashboardView onNavigate={setActiveTab} />;
       default:
         return <DashboardView onNavigate={setActiveTab} />;
     }

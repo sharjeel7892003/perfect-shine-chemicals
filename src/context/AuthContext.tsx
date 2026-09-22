@@ -15,6 +15,9 @@ const LEGACY_ID_MAP: Record<string, string> = {
 interface AuthContextType {
   currentUser: Profile;
   allUsers: Profile[];
+  isAuthenticated: boolean;
+  login: (profile: Profile) => void;
+  logout: () => Promise<void>;
   switchUser: (userId: string) => void;
   updateUserRole: (userId: string, newRole: UserRole) => Promise<void>;
   updateUser: (userId: string, updates: Partial<Profile>) => Promise<void>;
@@ -33,7 +36,15 @@ interface AuthContextType {
   canRecordProduction: boolean;
   canManageRawMaterials: boolean;
   canManageExpenses: boolean;
+  canAccessSales: boolean;
+  canAccessCustomers: boolean;
+  canAccessProduction: boolean;
+  canAccessFormulations: boolean;
+  canAccessRawMaterials: boolean;
+  canDeleteData: boolean;
 }
+
+const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes idle timeout
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -43,7 +54,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [currentUserId, setCurrentUserId] = useState<string>(() => {
     const saved = typeof window !== 'undefined' ? localStorage.getItem('psc_current_user_id') : null;
     if (saved && LEGACY_ID_MAP[saved]) return LEGACY_ID_MAP[saved];
-    return saved || INITIAL_PROFILES[0].id;
+    return saved || '';
   });
 
   const loadProfiles = useCallback(async () => {
@@ -120,11 +131,91 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Save active user selection for browser session persistence
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      localStorage.setItem('psc_current_user_id', currentUserId);
+      if (currentUserId) {
+        localStorage.setItem('psc_current_user_id', currentUserId);
+      } else {
+        localStorage.removeItem('psc_current_user_id');
+      }
     }
   }, [currentUserId]);
 
-  const currentUser = allUsers.find(u => u.id === currentUserId) || allUsers[0];
+  // Synchronize with live Supabase Auth session
+  useEffect(() => {
+    if (isSupabaseConfigured && supabase) {
+      supabase.auth.getSession().then(({ data }) => {
+        if (data?.session?.user) {
+          const email = data.session.user.email?.toLowerCase();
+          const match = allUsers.find(u => u.email?.toLowerCase() === email || u.id === data.session.user.id);
+          if (match && !match.is_deactivated && match.is_active) {
+            setCurrentUserId(match.id);
+          }
+        }
+      }).catch(() => {});
+
+      const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+        if (session?.user) {
+          const email = session.user.email?.toLowerCase();
+          const match = allUsers.find(u => u.email?.toLowerCase() === email || u.id === session.user.id);
+          if (match && !match.is_deactivated && match.is_active) {
+            setCurrentUserId(match.id);
+          }
+        } else if (_event === 'SIGNED_OUT') {
+          setCurrentUserId('');
+        }
+      });
+
+      return () => {
+        authListener?.subscription?.unsubscribe();
+      };
+    }
+  }, [allUsers]);
+
+  // 30-Minute Inactivity Session Expiry
+  useEffect(() => {
+    if (!currentUserId) return;
+
+    let timeoutId: any = null;
+
+    const resetTimer = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        alert('Your session has expired due to 30 minutes of inactivity. Please sign in again.');
+        logout();
+      }, INACTIVITY_TIMEOUT_MS);
+    };
+
+    const activityEvents = ['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart', 'click'];
+    activityEvents.forEach(evt => window.addEventListener(evt, resetTimer, { passive: true }));
+    resetTimer();
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      activityEvents.forEach(evt => window.removeEventListener(evt, resetTimer));
+    };
+  }, [currentUserId]);
+
+  const currentUser = allUsers.find(u => u.id === currentUserId) || allUsers[0] || INITIAL_PROFILES[0];
+  const isAuthenticated = Boolean(currentUserId && allUsers.some(u => u.id === currentUserId && !u.is_deactivated && u.is_active));
+
+  const login = (profile: Profile) => {
+    setCurrentUserId(profile.id);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('psc_current_user_id', profile.id);
+    }
+  };
+
+  const logout = async (): Promise<void> => {
+    if (isSupabaseConfigured && supabase) {
+      await supabase.auth.signOut().catch(() => {});
+    }
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('psc_current_user_id');
+      localStorage.removeItem('sb-yvltxrilzhoisljjgyrh-auth-token');
+      sessionStorage.clear();
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+    setCurrentUserId('');
+  };
 
   const switchUser = (userId: string) => {
     const target = allUsers.find(u => u.id === userId);
@@ -187,7 +278,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await supabaseService.deleteProfile(userId);
   };
 
-  const role = currentUser.role;
+  const role = currentUser?.role;
   const isOwner = role === 'owner';
   const canManageProducts = role === 'owner' || role === 'accounts_staff' || role === 'general_staff';
   const canCreateSale = role === 'owner' || role === 'sales_staff';
@@ -199,12 +290,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const canRecordProduction = role === 'owner' || role === 'general_staff' || role === 'accounts_staff';
   const canManageRawMaterials = role === 'owner' || role === 'accounts_staff' || role === 'general_staff';
   const canManageExpenses = role === 'owner' || role === 'accounts_staff';
+  const canAccessSales = role === 'owner' || role === 'sales_staff' || role === 'accounts_staff';
+  const canAccessCustomers = role === 'owner' || role === 'sales_staff' || role === 'accounts_staff';
+  const canAccessProduction = role === 'owner' || role === 'general_staff' || role === 'accounts_staff';
+  const canAccessFormulations = role === 'owner' || role === 'general_staff';
+  const canAccessRawMaterials = role === 'owner' || role === 'general_staff' || role === 'accounts_staff';
+  const canDeleteData = role === 'owner';
 
   return (
     <AuthContext.Provider
       value={{
         currentUser,
         allUsers,
+        isAuthenticated,
+        login,
+        logout,
         switchUser,
         updateUserRole,
         updateUser,
@@ -223,6 +323,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         canRecordProduction,
         canManageRawMaterials,
         canManageExpenses,
+        canAccessSales,
+        canAccessCustomers,
+        canAccessProduction,
+        canAccessFormulations,
+        canAccessRawMaterials,
+        canDeleteData,
       }}
     >
       {children}
