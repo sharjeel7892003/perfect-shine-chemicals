@@ -43,16 +43,16 @@ const MainLayout: React.FC = () => {
     canManageUsers
   } = useAuth();
 
-  if (!isAuthenticated || !currentUser) {
-    return <LoginView onLoginSuccess={login} availableProfiles={allUsers} />;
-  }
-
   // Re-fetch cloud data whenever authenticated user mounts
   useEffect(() => {
     if (isAuthenticated && currentUser) {
       refreshCloudData();
     }
   }, [isAuthenticated, currentUser?.id]);
+
+  if (!isAuthenticated || !currentUser) {
+    return <LoginView onLoginSuccess={login} availableProfiles={allUsers} />;
+  }
 
   const renderActiveModule = () => {
     switch (activeTab) {
