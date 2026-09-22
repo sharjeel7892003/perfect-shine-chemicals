@@ -319,7 +319,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, availableP
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="e.g. owner@perfectshine.pk"
+                placeholder="e.g. sharjeel.ahmad41@gmail.com"
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
               />
             </div>
@@ -424,7 +424,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, availableP
 
           <div className="grid grid-cols-2 gap-1.5">
             {[
-              { label: 'Admin (Owner)', email: 'owner@perfectshine.pk', color: 'text-emerald-400' },
+              { label: 'Admin (Sharjeel)', email: 'sharjeel.ahmad41@gmail.com', color: 'text-emerald-400' },
               { label: 'Accounts Lead', email: 'accounts@perfectshine.pk', color: 'text-blue-400' },
               { label: 'Sales Lead', email: 'sales@perfectshine.pk', color: 'text-purple-400' },
               { label: 'Plant Supervisor', email: 'plant@perfectshine.pk', color: 'text-amber-400' },

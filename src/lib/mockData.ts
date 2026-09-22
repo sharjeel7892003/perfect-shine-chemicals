@@ -54,8 +54,8 @@ export const INITIAL_SUPPLIERS: Supplier[] = [];
 export const INITIAL_PROFILES: Profile[] = [
   {
     id: 'a1b2c3d4-e5f6-4a7b-8c9d-000000000001',
-    name: 'Haji Muhammad Sharjeel (Owner)',
-    email: 'owner@perfectshine.pk',
+    name: 'Sharjeel Ahmad (Owner)',
+    email: 'sharjeel.ahmad41@gmail.com',
     role: 'owner',
     phone: '0300-8400001',
     is_active: true,

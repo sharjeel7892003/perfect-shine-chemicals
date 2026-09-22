@@ -22,10 +22,10 @@ DECLARE
   -- Pre-configured staff accounts for factory management:
   staff_accounts CONSTANT JSONB := '[
     {
-      "name": "Haji Muhammad Sharjeel (Owner)",
-      "email": "owner@perfectshine.pk",
+      "name": "Sharjeel Ahmad",
+      "email": "sharjeel.ahmad41@gmail.com",
       "role": "owner",
-      "password": "PscAdmin2026!",
+      "password": "SharjeelPSC2026!",
       "phone": "0300-8400001"
     },
     {
