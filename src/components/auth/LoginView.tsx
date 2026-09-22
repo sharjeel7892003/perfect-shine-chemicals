@@ -90,7 +90,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, availableP
         if (authError) {
           // If login fails, check if the error is invalid credentials
           if (authError.message.includes('Invalid login credentials')) {
-            setErrorMessage('Invalid email or password. Please verify your factory credentials.');
+            setErrorMessage('Invalid email or password. Please verify your credentials or run the Supabase Auth migration script.');
           } else {
             setErrorMessage(authError.message);
           }
@@ -98,12 +98,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, availableP
           return;
         }
 
-        // 2. Fetch associated user profile
-        const { data: profileData, error: profileError } = await supabase
+        // 2. Fetch associated user profile safely
+        const { data: profiles, error: profileError } = await supabase
           .from('profiles')
           .select('*')
           .or(`id.eq.${authData.user.id},email.ilike.${trimmedEmail}`)
-          .single();
+          .limit(1);
+
+        const profileData = profiles && profiles.length > 0 ? profiles[0] : null;
 
         if (profileError || !profileData) {
           // Fallback matching against local profiles
