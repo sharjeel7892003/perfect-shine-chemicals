@@ -24,7 +24,8 @@ import { generateInvoiceNumber, formatPKR } from '../utils/formatters';
 import { getNextBatchNumberForProduct } from '../utils/batchNumber';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { supabaseService } from '../lib/supabaseService';
-import { generateId } from '../utils/uuid';
+import { generateId, ensureUUID, isValidUUID } from '../utils/uuid';
+import { useAuth } from './AuthContext';
 import { calculateCustomerFinancials, calculateSupplierFinancials } from '../utils/financialEngine';
 
 interface AppContextType {
@@ -314,6 +315,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return () => {
       isMounted = false;
+    };
+  }, [loadCloudData]);
+
+  const { currentUser, isAuthenticated } = useAuth();
+
+  // Re-fetch cloud data as soon as an authenticated session is active or user switches
+  useEffect(() => {
+    if (isAuthenticated && currentUser) {
+      console.log('[AppContext] Active session detected for:', currentUser.email, '- loading live factory records...');
+      loadCloudData();
+    }
+  }, [isAuthenticated, currentUser?.id, loadCloudData]);
+
+  // Listen for Supabase Auth events (sign in, token refresh, sign out)
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) return;
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session?.user && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED')) {
+        console.log('[AppContext] Auth state event:', event, '- refreshing factory data...');
+        loadCloudData();
+      } else if (event === 'SIGNED_OUT') {
+        setProducts([]);
+        setRawMaterials([]);
+        setFormulations([]);
+        setProductionBatches([]);
+        setRawMaterialMovements([]);
+        setCustomers([]);
+        setSuppliers([]);
+        setSales([]);
+        setPurchases([]);
+        setStockMovements([]);
+        setPayments([]);
+        setExpenses([]);
+        setRecurringExpenses([]);
+        setDeletionLogs([]);
+      }
+    });
+
+    return () => {
+      authListener?.subscription?.unsubscribe();
     };
   }, [loadCloudData]);
 

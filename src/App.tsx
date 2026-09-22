@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AuthProvider } from './context/AuthContext';
 import { AppProvider, useApp } from './context/AppContext';
 import { Sidebar, ActiveTab } from './components/layout/Sidebar';
@@ -46,6 +46,13 @@ const MainLayout: React.FC = () => {
   if (!isAuthenticated || !currentUser) {
     return <LoginView onLoginSuccess={login} availableProfiles={allUsers} />;
   }
+
+  // Re-fetch cloud data whenever authenticated user mounts
+  useEffect(() => {
+    if (isAuthenticated && currentUser) {
+      refreshCloudData();
+    }
+  }, [isAuthenticated, currentUser?.id]);
 
   const renderActiveModule = () => {
     switch (activeTab) {
