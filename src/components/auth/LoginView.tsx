@@ -422,7 +422,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, availableP
           </form>
         )}
 
-        {/* Quick Staff Credentials Helper (For seamless switching & testing) */}
+        {/* Quick Staff Credentials Helper (Real Factory Accounts) */}
         <div className="mt-6 pt-5 border-t border-slate-800/80">
           <div className="flex items-center justify-between mb-2.5">
             <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
@@ -431,23 +431,33 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, availableP
             <span className="text-[10px] text-slate-500">Auto-fill email</span>
           </div>
 
-          <div className="grid grid-cols-2 gap-1.5">
-            {[
-              { label: 'Admin (Sharjeel)', email: 'sharjeel.ahmad41@gmail.com', color: 'text-emerald-400' },
-              { label: 'Accounts Lead', email: 'accounts@perfectshine.pk', color: 'text-blue-400' },
-              { label: 'Sales Lead', email: 'sales@perfectshine.pk', color: 'text-purple-400' },
-              { label: 'Plant Supervisor', email: 'plant@perfectshine.pk', color: 'text-amber-400' },
-            ].map(staff => (
-              <button
-                key={staff.email}
-                type="button"
-                onClick={() => handleQuickFill(staff.email)}
-                className="p-2 rounded-lg bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 text-left text-xs transition-colors"
-              >
-                <div className={`font-bold ${staff.color} truncate`}>{staff.label}</div>
-                <div className="text-[10px] text-slate-400 font-mono truncate">{staff.email}</div>
-              </button>
-            ))}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            {(availableProfiles && availableProfiles.length > 0 
+              ? availableProfiles.filter(p => p.is_active && !p.is_deactivated)
+              : [
+                  { name: 'Sharjeel Ahmad (Owner)', email: 'sharjeel.ahmad41@gmail.com', role: 'owner' },
+                  { name: 'Aqeel Arshad (Plant Supervisor)', email: 'perfectshinechemicals@gmail.com', role: 'general_staff' }
+                ]
+            ).map((staff: any) => {
+              const roleColors: Record<string, string> = {
+                owner: 'text-emerald-400',
+                general_staff: 'text-amber-400',
+                sales_staff: 'text-purple-400',
+                accounts_staff: 'text-blue-400',
+              };
+              const color = roleColors[staff.role] || 'text-slate-300';
+              return (
+                <button
+                  key={staff.email}
+                  type="button"
+                  onClick={() => handleQuickFill(staff.email)}
+                  className="p-2 rounded-lg bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 text-left text-xs transition-colors"
+                >
+                  <div className={`font-bold ${color} truncate`}>{staff.name}</div>
+                  <div className="text-[10px] text-slate-400 font-mono truncate">{staff.email}</div>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>

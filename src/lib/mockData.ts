@@ -53,7 +53,7 @@ export const INITIAL_SUPPLIERS: Supplier[] = [];
 // ==============================================================================
 export const INITIAL_PROFILES: Profile[] = [
   {
-    id: 'a1b2c3d4-e5f6-4a7b-8c9d-000000000001',
+    id: '97cbfd02-27d3-4e21-822c-406525158ede',
     name: 'Sharjeel Ahmad (Owner)',
     email: 'sharjeel.ahmad41@gmail.com',
     role: 'owner',
@@ -62,27 +62,9 @@ export const INITIAL_PROFILES: Profile[] = [
     created_at: '2026-01-01',
   },
   {
-    id: 'a1b2c3d4-e5f6-4a7b-8c9d-000000000002',
-    name: 'Usman Tariq (Sales Lead)',
-    email: 'sales@perfectshine.pk',
-    role: 'sales_staff',
-    phone: '0321-4500002',
-    is_active: true,
-    created_at: '2026-01-15',
-  },
-  {
-    id: 'a1b2c3d4-e5f6-4a7b-8c9d-000000000003',
-    name: 'Farhan Sheikh (Accounts & Ledger)',
-    email: 'accounts@perfectshine.pk',
-    role: 'accounts_staff',
-    phone: '0333-6700003',
-    is_active: true,
-    created_at: '2026-02-01',
-  },
-  {
-    id: 'a1b2c3d4-e5f6-4a7b-8c9d-000000000004',
-    name: 'Bilal Ahmed (Plant Supervisor)',
-    email: 'plant@perfectshine.pk',
+    id: '983a5cac-038b-4545-872d-5621224c5d6e',
+    name: 'Aqeel Arshad (Plant Supervisor)',
+    email: 'perfectshinechemicals@gmail.com',
     role: 'general_staff',
     phone: '0315-9900004',
     is_active: true,
