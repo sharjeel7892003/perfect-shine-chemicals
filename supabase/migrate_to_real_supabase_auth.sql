@@ -97,7 +97,7 @@ BEGIN
         now()
       );
 
-      -- 2. Insert into auth.identities
+      -- 2. Insert into auth.identities (id is of type UUID)
       INSERT INTO auth.identities (
         id,
         user_id,
@@ -108,7 +108,7 @@ BEGIN
         created_at,
         updated_at
       ) VALUES (
-        v_user_id::text,
+        v_user_id,
         v_user_id,
         jsonb_build_object('sub', v_user_id::text, 'email', LOWER(TRIM(staff_rec.email))),
         'email',
@@ -116,7 +116,8 @@ BEGIN
         now(),
         now(),
         now()
-      );
+      )
+      ON CONFLICT DO NOTHING;
 
       RAISE NOTICE 'Created auth.users entry for % with ID %', staff_rec.email, v_user_id;
     ELSE
