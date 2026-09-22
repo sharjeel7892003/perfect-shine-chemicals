@@ -457,17 +457,23 @@ export const supabaseService = {
     const validId = ensureUUID(formulation.id);
     formulation.id = validId;
 
-    const payload = {
+    const payload: any = {
       id: validId,
       product_id: isValidUUID(formulation.product_id) ? formulation.product_id : null,
       product_name: formulation.product_name,
       base_unit: formulation.base_unit || 'liter',
       yield_quantity: Number(formulation.yield_quantity || 1.0),
       instructions: formulation.instructions || '',
+      is_archived: Boolean(formulation.is_archived),
       updated_at: new Date().toISOString()
     };
 
-    const { error: formError } = await supabase.from('product_formulations').upsert(payload);
+    let { error: formError } = await supabase.from('product_formulations').upsert(payload);
+    if (formError && formError.message?.includes('is_archived')) {
+      delete payload.is_archived;
+      const retry = await supabase.from('product_formulations').upsert(payload);
+      formError = retry.error;
+    }
     if (formError) {
       console.error('Supabase upsertFormulation error:', formError);
       throw new Error(`Formulation database write failed: ${formError.message}`);

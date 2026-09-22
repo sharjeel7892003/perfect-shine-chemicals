@@ -56,6 +56,9 @@ ALTER TABLE public.formulation_items DROP CONSTRAINT IF EXISTS formulation_items
 ALTER TABLE public.formulation_items ADD CONSTRAINT formulation_items_unit_check 
   CHECK (unit IN ('kg', 'liter', 'pcs'));
 
+-- Ensure formulations table supports safe archiving
+ALTER TABLE public.product_formulations ADD COLUMN IF NOT EXISTS is_archived BOOLEAN NOT NULL DEFAULT false;
+
 -- Add sellable raw material resale fields
 ALTER TABLE public.raw_materials ADD COLUMN IF NOT EXISTS is_sellable BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE public.raw_materials ADD COLUMN IF NOT EXISTS selling_price NUMERIC(12, 2) DEFAULT 0.00;
