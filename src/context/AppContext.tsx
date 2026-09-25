@@ -74,6 +74,7 @@ interface AppContextType {
   // Production Module Actions
   recordProductionBatch: (params: {
     productId: string;
+    formulationBatchSize?: number;
     quantityProduced: number;
     batchNumber: string;
     date: string;
@@ -588,6 +589,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // ==============================================================================
   const recordProductionBatch = async (params: {
     productId: string;
+    formulationBatchSize?: number;
     quantityProduced: number;
     batchNumber: string;
     date: string;
@@ -600,7 +602,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const formulation = formulations.find(f => f.product_id === targetProduct.id && !f.is_archived);
     if (!formulation) return { success: false, message: `No active formulation (BOM) found for ${targetProduct.name}` };
 
-    const multiplier = params.quantityProduced / formulation.yield_quantity;
+    const actualProduced = Number(params.quantityProduced);
+    if (actualProduced <= 0) {
+      return { success: false, message: 'Actual quantity produced must be greater than 0' };
+    }
+
+    // Formulation / recipe scale determines raw material consumption ratios
+    const nominalScale = Number(
+      params.formulationBatchSize !== undefined && params.formulationBatchSize > 0
+        ? params.formulationBatchSize
+        : params.quantityProduced
+    );
+
+    const yieldQty = formulation.yield_quantity > 0 ? formulation.yield_quantity : 1.0;
+    const multiplier = nominalScale / yieldQty;
     const stockErrors: string[] = [];
 
     const requirements = formulation.items.map(item => {
@@ -685,7 +700,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           previous_stock: prevStk,
           new_stock: nextStk,
           reference_id: finalBatchNumber,
-          notes: `Consumed in Batch ${finalBatchNumber} (${targetProduct.name} - ${params.quantityProduced} ${targetProduct.base_unit || targetProduct.unit})`,
+          notes: `Consumed in Batch ${finalBatchNumber} (${targetProduct.name} - Recipe Scale: ${nominalScale} ${targetProduct.base_unit || targetProduct.unit}, Actual Yield: ${actualProduced} ${targetProduct.base_unit || targetProduct.unit})`,
           date: effectiveDate,
           created_by_name: params.supervisorName,
         };
@@ -697,10 +712,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setRawMaterials(updatedRawMaterials);
     setRawMaterialMovements(prev => [...newRawMovements, ...prev]);
 
-    // Update finished product stock
+    // CRITICAL FIX: Cost Per Unit = Total Raw Material Cost Consumed ÷ ACTUAL Quantity Produced
+    // (the real physical measured output entered by the user, NOT divided by theoretical recipe scale)
+    const calculatedCostPerUnit = Number((totalBatchCost / actualProduced).toFixed(2));
+
+    // Update finished product stock with ACTUAL quantity produced
     const prevProdStock = Number(targetProduct.current_stock);
-    const nextProdStock = Number((prevProdStock + Number(params.quantityProduced)).toFixed(4));
-    const calculatedCostPerUnit = Number((totalBatchCost / Number(params.quantityProduced)).toFixed(2));
+    const nextProdStock = Number((prevProdStock + actualProduced).toFixed(4));
 
     const updatedTargetProd: Product = {
       ...targetProduct,
@@ -711,17 +729,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await supabaseService.upsertProduct(updatedTargetProd);
     setProducts(prev => prev.map(p => p.id === targetProduct.id ? updatedTargetProd : p));
 
-    // Log finished product movement
+    // Log finished product movement with actual quantity produced
     const prodStockMovement: StockMovement = {
       id: generateId(),
       product_id: targetProduct.id,
       product_name: targetProduct.name,
       movement_type: 'production',
-      quantity: Number(params.quantityProduced),
+      quantity: actualProduced,
       previous_stock: prevProdStock,
       new_stock: nextProdStock,
       reference_id: finalBatchNumber,
-      notes: `Manufactured in Batch ${finalBatchNumber}`,
+      notes: `Manufactured in Batch ${finalBatchNumber} (Recipe Scale: ${nominalScale} ${targetProduct.base_unit || targetProduct.unit}, Actual Yield: ${actualProduced} ${targetProduct.base_unit || targetProduct.unit})`,
       date: effectiveDate,
       created_by_name: params.supervisorName,
     };
@@ -734,7 +752,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       batch_number: finalBatchNumber,
       product_id: targetProduct.id,
       product_name: targetProduct.name,
-      quantity_produced: Number(params.quantityProduced),
+      formulation_batch_size: nominalScale,
+      quantity_produced: actualProduced,
       base_unit: (targetProduct.base_unit || 'liter') as any,
       date: effectiveDate,
       supervisor_name: params.supervisorName,
@@ -749,7 +768,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return {
       success: true,
-      message: `Production Batch ${finalBatchNumber} recorded successfully. Produced ${params.quantityProduced} ${targetProduct.base_unit || targetProduct.unit} of ${targetProduct.name}.`,
+      message: `Production Batch ${finalBatchNumber} recorded successfully. Produced ${actualProduced} ${targetProduct.base_unit || targetProduct.unit} of ${targetProduct.name} at PKR ${calculatedCostPerUnit}/${targetProduct.base_unit || targetProduct.unit}.`,
       batch: savedBatch,
     };
   };

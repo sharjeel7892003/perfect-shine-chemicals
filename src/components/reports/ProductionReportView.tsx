@@ -232,7 +232,8 @@ export const ProductionReportView: React.FC<ProductionReportViewProps> = ({ embe
         'Batch Number',
         'Date',
         'Chemical Product',
-        'Quantity Produced',
+        'Recipe Scale',
+        'Actual Output Produced',
         'Base Unit',
         'Total Batch Cost (PKR)',
         'Cost Per Unit (PKR)',
@@ -244,6 +245,7 @@ export const ProductionReportView: React.FC<ProductionReportViewProps> = ({ embe
         b.batch_number,
         b.date.slice(0, 10),
         b.product_name,
+        b.formulation_batch_size !== undefined ? b.formulation_batch_size : b.quantity_produced,
         b.quantity_produced,
         b.base_unit,
         b.total_batch_cost,
@@ -570,6 +572,11 @@ export const ProductionReportView: React.FC<ProductionReportViewProps> = ({ embe
                           </td>
                           <td className="py-3 px-3 text-right font-mono font-bold text-white">
                             {batch.quantity_produced} <span className="text-[11px] font-normal text-slate-400">{batch.base_unit}</span>
+                            {batch.formulation_batch_size !== undefined && Number(batch.formulation_batch_size) !== Number(batch.quantity_produced) && (
+                              <div className="text-[10px] font-normal text-slate-400 font-mono">
+                                Recipe: {batch.formulation_batch_size} {batch.base_unit}
+                              </div>
+                            )}
                           </td>
                           <td className="py-3 px-3 text-right font-mono font-semibold text-slate-200">
                             {formatPKR(batch.total_batch_cost)}

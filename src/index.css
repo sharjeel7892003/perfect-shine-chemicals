@@ -28,27 +28,56 @@
   background: rgba(71, 85, 105, 1);
 }
 
-/* Print specific styles for invoices and reports */
+/* Print specific styles for invoices, reports, and ledger statements */
 @media print {
+  @page {
+    size: auto;
+    margin: 12mm 10mm;
+  }
+  html, body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    overflow: visible !important;
+    height: auto !important;
+  }
   body * {
     visibility: hidden;
   }
   #printable-invoice, #printable-invoice *,
-  #printable-report, #printable-report * {
+  #printable-report, #printable-report *,
+  #printable-ledger, #printable-ledger *,
+  #printable-statement, #printable-statement * {
     visibility: visible;
   }
   #printable-invoice,
-  #printable-report {
+  #printable-report,
+  #printable-ledger,
+  #printable-statement {
+    visibility: visible !important;
     position: absolute;
     left: 0;
     top: 0;
     width: 100%;
     margin: 0;
-    padding: 1.25rem;
+    padding: 0 !important;
     background: white !important;
     color: #0f172a !important;
+    overflow: visible !important;
+    max-height: none !important;
+    box-shadow: none !important;
+    border: none !important;
   }
   .no-print {
     display: none !important;
+  }
+  tr {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  thead {
+    display: table-header-group;
+  }
+  tfoot {
+    display: table-footer-group;
   }
 }

@@ -57,7 +57,8 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
 
   // Form State
   const [selectedProductId, setSelectedProductId] = useState('');
-  const [quantityProduced, setQuantityProduced] = useState<number>(100);
+  const [formulationBatchSize, setFormulationBatchSize] = useState<number>(1);
+  const [quantityProduced, setQuantityProduced] = useState<number>(1);
   const [batchNumber, setBatchNumber] = useState('');
   const [productionDate, setProductionDate] = useState(getTodayDateString());
   const [notes, setNotes] = useState('');
@@ -66,16 +67,23 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
   useEffect(() => {
     if (!selectedProductId && products.length > 0) {
       setSelectedProductId(products[0].id);
+      const form = formulations.find(f => f.product_id === products[0].id);
+      const initialYield = form?.yield_quantity && form.yield_quantity > 0 ? form.yield_quantity : 1;
+      setFormulationBatchSize(initialYield);
+      setQuantityProduced(initialYield);
       const nextBatch = getNextBatchNumberForProduct(products[0].id, productionBatches, products[0]);
       setBatchNumber(nextBatch);
     }
-  }, [products, selectedProductId, productionBatches]);
+  }, [products, selectedProductId, productionBatches, formulations]);
 
   const openRecordModal = () => {
     const prodId = selectedProductId || (products[0] ? products[0].id : '');
     const prod = products.find(p => p.id === prodId) || products[0];
+    const form = formulations.find(f => f.product_id === prodId);
     setSelectedProductId(prodId);
-    setQuantityProduced(100);
+    const initialYield = form?.yield_quantity && form.yield_quantity > 0 ? form.yield_quantity : 1;
+    setFormulationBatchSize(initialYield);
+    setQuantityProduced(initialYield);
     const initialBatchNum = prod
       ? getNextBatchNumberForProduct(prod.id, productionBatches, prod)
       : 'DW-D1-Batch1';
@@ -89,6 +97,10 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
   const handleProductChange = (newProductId: string) => {
     setSelectedProductId(newProductId);
     const targetProd = products.find(p => p.id === newProductId);
+    const form = formulations.find(f => f.product_id === newProductId);
+    const initialYield = form?.yield_quantity && form.yield_quantity > 0 ? form.yield_quantity : 1;
+    setFormulationBatchSize(initialYield);
+    setQuantityProduced(initialYield);
     if (targetProd) {
       const nextBatchNum = getNextBatchNumberForProduct(newProductId, productionBatches, targetProd);
       setBatchNumber(nextBatchNum);
@@ -99,11 +111,11 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
   const selectedFormulation = formulations.find(f => f.product_id === selectedProductId);
   const baseUnit = selectedProduct?.base_unit || selectedProduct?.unit || 'liter';
 
-  // Calculate live raw materials needed for current input quantity with exact decimal precision
+  // Calculate live raw materials needed for recipe run scale with exact decimal precision
   const requiredMaterialsCalculations = selectedFormulation?.items.map(item => {
     const rm = rawMaterials.find(m => m.id === item.raw_material_id);
     const yieldQty = selectedFormulation.yield_quantity > 0 ? selectedFormulation.yield_quantity : 1.0;
-    const multiplier = quantityProduced / yieldQty;
+    const multiplier = (formulationBatchSize > 0 ? formulationBatchSize : 0) / yieldQty;
     const totalNeeded = Number((item.quantity * multiplier).toFixed(4));
     const availableStock = rm ? Number(rm.current_stock) : 0;
     const isSufficient = availableStock >= totalNeeded;
@@ -122,14 +134,16 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
   }) || [];
 
   const hasAnyShortage = requiredMaterialsCalculations.some(r => !r.isSufficient);
+  // Total Batch Cost is fixed by the raw materials consumed in the formulation scale
   const totalEstimatedBatchCost = Number(requiredMaterialsCalculations.reduce((acc, r) => acc + r.estimatedCost, 0).toFixed(2));
+  // CRITICAL: Cost per unit is calculated by dividing total batch cost by ACTUAL quantity produced (real output)
   const estimatedCostPerUnit = quantityProduced > 0 ? Number((totalEstimatedBatchCost / quantityProduced).toFixed(2)) : 0;
 
   const handleRecordProductionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!selectedProductId || quantityProduced <= 0) {
-      alert('Please enter a valid product and quantity to manufacture.');
+    if (!selectedProductId || quantityProduced <= 0 || formulationBatchSize <= 0) {
+      alert('Please enter a valid product, formulation recipe scale, and actual output quantity to manufacture.');
       return;
     }
 
@@ -148,6 +162,7 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
     try {
       const result = await recordProductionBatch({
         productId: selectedProductId,
+        formulationBatchSize: Number(formulationBatchSize),
         quantityProduced: Number(quantityProduced),
         batchNumber,
         date: formatSelectedDateToIso(productionDate),
@@ -298,6 +313,11 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
                     <td className="py-3 px-3 font-bold text-white">{batch.product_name}</td>
                     <td className="py-3 px-3 text-right font-mono font-bold text-white">
                       +{formatQuantity(batch.quantity_produced)} <span className="text-[11px] font-normal text-slate-400">{batch.base_unit}</span>
+                      {batch.formulation_batch_size !== undefined && Number(batch.formulation_batch_size) !== Number(batch.quantity_produced) && (
+                        <div className="text-[10px] font-normal text-slate-400 font-mono">
+                          Recipe: {formatQuantity(batch.formulation_batch_size)} {batch.base_unit}
+                        </div>
+                      )}
                     </td>
                     <td className="py-3 px-3 text-right font-mono text-slate-300">
                       {formatPKR(batch.total_batch_cost)}
@@ -378,30 +398,6 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
-                Batch Output Quantity ({baseUnit}) *
-              </label>
-              <input
-                type="number"
-                min="0.001"
-                step="any"
-                required
-                value={quantityProduced === 0 ? '' : quantityProduced}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (val === '') {
-                    setQuantityProduced(0);
-                    return;
-                  }
-                  const parsed = parseFloat(val);
-                  setQuantityProduced(isNaN(parsed) ? 0 : parsed);
-                }}
-                placeholder="e.g. 51.500"
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono font-bold text-emerald-400 focus:outline-none focus:border-emerald-500"
-              />
-            </div>
-
-            <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-xs font-bold text-slate-400 uppercase">
                   Batch Identification Code *
@@ -430,7 +426,7 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-emerald-500"
               />
               <p className="text-[10px] text-slate-500 mt-1">
-                Sequential for this product: count of existing batches + 1 (Format: [SKU]-Batch[N])
+                Format: [SKU]-Batch[N]
               </p>
             </div>
 
@@ -451,11 +447,122 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
               />
               <p className="text-[10px] text-slate-500 mt-1">
-                Select any date (past, today, or future); exact date will be saved to Supabase.
+                Select run date to record in database.
               </p>
             </div>
 
-            <div>
+            {/* SEPARATED BATCH SIZING & ACTUAL PHYSICAL YIELD */}
+            <div className="col-span-2 p-3.5 bg-slate-900/90 rounded-2xl border border-slate-700/80 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-white uppercase tracking-wider">
+                  <Sparkles className="w-4 h-4 text-emerald-400" />
+                  <span>Separated Formulation Scale & Actual Physical Output</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setQuantityProduced(formulationBatchSize)}
+                  className="text-[11px] text-emerald-400 hover:text-emerald-300 font-medium transition-colors flex items-center gap-1"
+                  title="Copy Recipe Scale to Output Quantity (1:1 yield)"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  <span>Set Output = Recipe Scale</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                {/* 1. Recipe / Formulation Run Scale */}
+                <div className="p-3 bg-slate-800/80 rounded-xl border border-slate-700 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-200 uppercase">
+                      1. Formulation Recipe Scale ({baseUnit}) *
+                    </label>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 font-medium">
+                      Controls Raw Materials
+                    </span>
+                  </div>
+                  <input
+                    type="number"
+                    min="0.0001"
+                    step="any"
+                    required
+                    value={formulationBatchSize === 0 ? '' : formulationBatchSize}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === '') {
+                        setFormulationBatchSize(0);
+                        return;
+                      }
+                      const parsed = parseFloat(val);
+                      setFormulationBatchSize(isNaN(parsed) ? 0 : parsed);
+                    }}
+                    placeholder="e.g. 1.000"
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-mono font-bold focus:outline-none focus:border-blue-500"
+                  />
+                  <p className="text-[11px] text-slate-400 leading-tight">
+                    Theoretical mix size from formulation. Deducts raw materials & fixes <strong>Total Batch Cost</strong>.
+                  </p>
+                </div>
+
+                {/* 2. Actual Physical Output Produced */}
+                <div className="p-3 bg-slate-800/80 rounded-xl border border-slate-700 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-emerald-300 uppercase">
+                      2. Actual Quantity Produced ({baseUnit}) *
+                    </label>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
+                      Cost Divisor & Stock
+                    </span>
+                  </div>
+                  <input
+                    type="number"
+                    min="0.0001"
+                    step="any"
+                    required
+                    value={quantityProduced === 0 ? '' : quantityProduced}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === '') {
+                        setQuantityProduced(0);
+                        return;
+                      }
+                      const parsed = parseFloat(val);
+                      setQuantityProduced(isNaN(parsed) ? 0 : parsed);
+                    }}
+                    placeholder="e.g. 1.500"
+                    className="w-full bg-slate-900 border border-emerald-500/50 rounded-lg px-3 py-2 text-sm text-emerald-400 font-mono font-bold focus:outline-none focus:border-emerald-500"
+                  />
+                  <p className="text-[11px] text-slate-400 leading-tight">
+                    Real physical measured output (water added, dilution, process yield). Adds to <strong>Stock</strong> & acts as <strong>Cost Divisor</strong>.
+                  </p>
+                </div>
+              </div>
+
+              {/* Live Formula Callout Banner */}
+              <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="text-[11px] text-slate-400">
+                    Cost Formula: <span className="font-mono text-white font-semibold">{formatPKR(totalEstimatedBatchCost)} (Total Raw Material Cost) ÷ {formatQuantity(quantityProduced)} {baseUnit} (Actual Output)</span>
+                  </div>
+                  {quantityProduced > 0 && formulationBatchSize > 0 && quantityProduced !== formulationBatchSize && (
+                    <div className="text-[11px] text-amber-300 font-medium flex items-center gap-1.5">
+                      <Info className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+                      <span>
+                        Yield Effect: {((quantityProduced / formulationBatchSize) * 100).toFixed(1)}% yield ({quantityProduced > formulationBatchSize ? '+' : ''}{(quantityProduced - formulationBatchSize).toFixed(3)} {baseUnit}). Unit cost is divided by actual real output ({formatQuantity(quantityProduced)} {baseUnit}), not nominal scale ({formatQuantity(formulationBatchSize)} {baseUnit}).
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="text-right sm:border-l sm:border-slate-800 sm:pl-4">
+                  <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">Calculated Cost Per Unit</span>
+                  <span className="text-lg font-black font-mono text-emerald-400">
+                    {formatPKR(estimatedCostPerUnit)}<span className="text-xs font-normal text-slate-400">/{baseUnit}</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="col-span-2">
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
                 Supervisor / Logged By
               </label>
@@ -473,14 +580,14 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs font-bold text-slate-400 uppercase flex items-center gap-1.5">
                 <Layers className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Raw Materials Required for {formatQuantity(quantityProduced)} {baseUnit}</span>
+                <span>Raw Materials Required (Recipe Scale: {formatQuantity(formulationBatchSize)} {baseUnit})</span>
               </label>
               <div className="flex items-center gap-2 text-[11px] font-mono">
                 <span className="text-slate-400">
-                  Est. Cost: <strong className="text-emerald-400">{formatPKR(totalEstimatedBatchCost)}</strong>
+                  Fixed Batch Cost: <strong className="text-emerald-400">{formatPKR(totalEstimatedBatchCost)}</strong>
                 </span>
                 {quantityProduced > 0 && (
-                  <span className="text-slate-400">
+                  <span className="text-emerald-400 font-semibold">
                     ({formatPKR(estimatedCostPerUnit)}/{baseUnit})
                   </span>
                 )}
@@ -592,26 +699,40 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
           <div className="space-y-4 text-xs">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950/60 p-3 rounded-xl border border-slate-800">
               <div>
-                <span className="text-slate-400 text-[10px] uppercase">Product</span>
+                <span className="text-slate-400 text-[10px] uppercase font-semibold">Product</span>
                 <p className="font-bold text-white">{selectedBatchDetails.product_name}</p>
+                {selectedBatchDetails.formulation_batch_size !== undefined && (
+                  <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+                    Recipe Scale: {formatQuantity(selectedBatchDetails.formulation_batch_size)} {selectedBatchDetails.base_unit}
+                  </p>
+                )}
               </div>
               <div>
-                <span className="text-slate-400 text-[10px] uppercase">Output Qty</span>
+                <span className="text-slate-400 text-[10px] uppercase font-semibold">Output Qty (Yield)</span>
                 <p className="font-bold font-mono text-emerald-400 text-sm">
                   +{formatQuantity(selectedBatchDetails.quantity_produced)} {selectedBatchDetails.base_unit}
                 </p>
+                {selectedBatchDetails.formulation_batch_size !== undefined && Number(selectedBatchDetails.formulation_batch_size) !== Number(selectedBatchDetails.quantity_produced) && (
+                  <p className="text-[10px] text-amber-300 font-mono">
+                    Yield: {((selectedBatchDetails.quantity_produced / selectedBatchDetails.formulation_batch_size) * 100).toFixed(1)}%
+                  </p>
+                )}
               </div>
               <div>
-                <span className="text-slate-400 text-[10px] uppercase">Batch Total Cost</span>
+                <span className="text-slate-400 text-[10px] uppercase font-semibold">Batch Total Cost</span>
                 <p className="font-bold font-mono text-white text-sm">
                   {formatPKR(selectedBatchDetails.total_batch_cost)}
                 </p>
+                <span className="text-[9px] text-slate-500 font-mono block">Raw Materials Consumed</span>
               </div>
               <div>
-                <span className="text-slate-400 text-[10px] uppercase">Cost / Unit</span>
+                <span className="text-slate-400 text-[10px] uppercase font-semibold">Cost / Unit</span>
                 <p className="font-bold font-mono text-emerald-400 text-sm">
                   {formatPKR(selectedBatchDetails.cost_per_base_unit)}/{selectedBatchDetails.base_unit}
                 </p>
+                <span className="text-[9px] text-slate-400 font-mono block">
+                  Total Cost ÷ Actual Qty
+                </span>
               </div>
             </div>
 

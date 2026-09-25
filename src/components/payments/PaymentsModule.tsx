@@ -25,6 +25,8 @@ import { formatPKR, formatDate, formatDateTime, getTodayDateString, formatSelect
 import { calculateFinancialMetrics, calculateCustomerFinancials, calculateSupplierFinancials } from '../../utils/financialEngine';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { CustomerStatementModal } from '../customers/CustomerStatementModal';
+import { SupplierStatementModal } from '../suppliers/SupplierStatementModal';
 
 export const PaymentsModule: React.FC = () => {
   const { 
@@ -98,6 +100,8 @@ export const PaymentsModule: React.FC = () => {
   const [ledgerSupplierId, setLedgerSupplierId] = useState<string>(suppliers[0]?.id || '');
   const [ledgerStartDate, setLedgerStartDate] = useState<string>('');
   const [ledgerEndDate, setLedgerEndDate] = useState<string>('');
+  const [isCustStatementOpen, setIsCustStatementOpen] = useState<boolean>(false);
+  const [isSuppStatementOpen, setIsSuppStatementOpen] = useState<boolean>(false);
 
   // Authoritative cashflow calculations from central financialEngine
   const financialMetrics = calculateFinancialMetrics({
@@ -877,6 +881,15 @@ export const PaymentsModule: React.FC = () => {
               </div>
 
               <div className="flex items-center gap-4 text-right">
+                <button
+                  type="button"
+                  onClick={() => setIsCustStatementOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 text-xs font-bold transition-all active:scale-95"
+                  title="Print Customer Statement or Save as PDF"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print Statement</span>
+                </button>
                 <div>
                   <span className="text-[10px] font-bold text-slate-400 uppercase">Credit Limit</span>
                   <p className="text-sm font-mono text-slate-300">{formatPKR(selectedLedgerCustomer.credit_limit)}</p>
@@ -993,11 +1006,22 @@ export const PaymentsModule: React.FC = () => {
                 </p>
               </div>
 
-              <div className="text-right">
-                <span className="text-[10px] font-bold text-slate-400 uppercase">Factory Total Payable</span>
-                <p className={`text-xl font-black font-mono ${selectedLedgerSupplier.current_balance > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
-                  {formatPKR(selectedLedgerSupplier.current_balance)}
-                </p>
+              <div className="flex items-center gap-4 text-right">
+                <button
+                  type="button"
+                  onClick={() => setIsSuppStatementOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs font-bold transition-all active:scale-95"
+                  title="Print Supplier Statement or Save as PDF"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print Statement</span>
+                </button>
+                <div className="pl-4 border-l border-slate-800 text-right">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase">Factory Total Payable</span>
+                  <p className={`text-xl font-black font-mono ${selectedLedgerSupplier.current_balance > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                    {formatPKR(selectedLedgerSupplier.current_balance)}
+                  </p>
+                </div>
               </div>
             </div>
           )}
@@ -1702,6 +1726,26 @@ export const PaymentsModule: React.FC = () => {
           </div>
         </form>
       </Modal>
+
+      {/* Printable Customer Ledger Statement Modal */}
+      <CustomerStatementModal
+        isOpen={isCustStatementOpen}
+        onClose={() => setIsCustStatementOpen(false)}
+        customer={selectedLedgerCustomer || null}
+        sales={sales}
+        payments={payments}
+        isOwner={isOwner}
+      />
+
+      {/* Printable Supplier Ledger Statement Modal */}
+      <SupplierStatementModal
+        isOpen={isSuppStatementOpen}
+        onClose={() => setIsSuppStatementOpen(false)}
+        supplier={selectedLedgerSupplier || null}
+        purchases={purchases}
+        payments={payments}
+        isOwner={isOwner}
+      />
     </div>
   );
 };

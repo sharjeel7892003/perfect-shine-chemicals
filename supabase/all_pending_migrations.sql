@@ -106,3 +106,10 @@ BEGIN
     NULL;
   END;
 END $$;
+
+-- ==============================================================================
+-- 6. PRODUCTION BATCHES: SEPARATE RECIPE SCALE FROM ACTUAL OUTPUT YIELD
+-- ==============================================================================
+ALTER TABLE public.production_batches 
+  ADD COLUMN IF NOT EXISTS formulation_batch_size NUMERIC(12, 4) DEFAULT 1.0;
+

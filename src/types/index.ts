@@ -102,7 +102,8 @@ export interface ProductionBatch {
   batch_number: string; // e.g. "BATCH-202609-001"
   product_id: string;
   product_name: string;
-  quantity_produced: number; // In base unit (kg or liter)
+  formulation_batch_size?: number; // Theoretical recipe scale (e.g. 1.000 kg) determining raw material consumption
+  quantity_produced: number; // Actual physical output produced (e.g. 1.500 kg)
   base_unit: BaseUnit;
   date: string;
   supervisor_name: string;

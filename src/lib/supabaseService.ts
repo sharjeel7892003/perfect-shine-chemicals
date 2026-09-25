@@ -539,7 +539,7 @@ export const supabaseService = {
     batch.id = validId;
     const consumed = batch.raw_materials_consumed || (batch as any).consumed_materials || [];
 
-    const payload = {
+    const basePayload = {
       id: validId,
       batch_number: batch.batch_number,
       product_id: isValidUUID(batch.product_id) ? batch.product_id : null,
@@ -554,7 +554,18 @@ export const supabaseService = {
       notes: batch.notes || ''
     };
 
-    const { data, error } = await supabase.from('production_batches').upsert(payload).select().single();
+    const payloadWithFormulationSize = {
+      ...basePayload,
+      formulation_batch_size: Number(batch.formulation_batch_size || batch.quantity_produced || 0)
+    };
+
+    let { data, error } = await supabase.from('production_batches').upsert(payloadWithFormulationSize).select().single();
+    if (error && (error.message?.includes('formulation_batch_size') || error.code === '42703')) {
+      const retry = await supabase.from('production_batches').upsert(basePayload).select().single();
+      data = retry.data;
+      error = retry.error;
+    }
+
     if (error) {
       console.error('Supabase upsertProductionBatch error:', error);
       throw new Error(`Production batch database write failed: ${error.message}`);

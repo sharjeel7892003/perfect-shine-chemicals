@@ -22,6 +22,7 @@ import { Supplier, PaymentMethod } from '../../types';
 import { formatPKR, formatDate, getTodayDateString, formatSelectedDateToIso } from '../../utils/formatters';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
+import { SupplierStatementModal } from './SupplierStatementModal';
 
 export const SuppliersModule: React.FC = () => {
   const { 
@@ -190,69 +191,6 @@ export const SuppliersModule: React.FC = () => {
     return isArchivedMatch && matchesSearch;
   });
 
-  // Calculate chronological supplier ledger
-  const getSupplierLedgerRows = () => {
-    if (!selectedSupplier) return [];
-
-    const rows: {
-      date: string;
-      ref: string;
-      description: string;
-      method?: string;
-      debit: number;
-      credit: number;
-      balance: number;
-    }[] = [];
-
-    const suppPurchases = purchases.filter(p => p.supplier_id === selectedSupplier.id);
-    suppPurchases.forEach(po => {
-      rows.push({
-        date: po.date,
-        ref: po.invoice_number,
-        description: `Purchase Order (${po.items.map(i => i.product_or_material_name).join(', ')})`,
-        debit: 0,
-        credit: po.total_amount,
-        balance: 0,
-      });
-
-      if (po.amount_paid > 0) {
-        rows.push({
-          date: po.date,
-          ref: `${po.invoice_number} (Paid)`,
-          description: `Disbursement at purchase order entry`,
-          method: po.payment_method,
-          debit: po.amount_paid,
-          credit: 0,
-          balance: 0,
-        });
-      }
-    });
-
-    const suppPayments = payments.filter(p => p.supplier_id === selectedSupplier.id && p.related_to === 'supplier_balance');
-    suppPayments.forEach(pay => {
-      rows.push({
-        date: pay.date,
-        ref: pay.transaction_ref || pay.reference_no || 'DISB',
-        description: pay.notes || 'Supplier settlement payment',
-        method: pay.payment_method,
-        debit: pay.amount,
-        credit: 0,
-        balance: 0,
-      });
-    });
-
-    rows.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-    let running = 0;
-    rows.forEach(r => {
-      running = running + r.credit - r.debit;
-      r.balance = running;
-    });
-
-    return rows;
-  };
-
-  const supplierLedgerRows = getSupplierLedgerRows();
   const supplierUnpaidPurchases = selectedSupplier ? purchases.filter(p => p.supplier_id === selectedSupplier.id && p.payment_status !== 'paid') : [];
 
   return (
@@ -502,120 +440,22 @@ export const SuppliersModule: React.FC = () => {
         </form>
       </Modal>
 
-      {/* Supplier Ledger Modal */}
-      <Modal
+      {/* Supplier Ledger Statement Modal with printable sheet */}
+      <SupplierStatementModal
         isOpen={isLedgerModalOpen}
         onClose={() => setIsLedgerModalOpen(false)}
-        title={`Supplier Account: ${selectedSupplier?.name || ''}`}
-        subtitle={`Current Factory Payable: ${formatPKR(selectedSupplier?.current_balance || 0)}`}
-        maxWidth="4xl"
-      >
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3 p-3 bg-slate-950/40 rounded-xl border border-slate-800 text-xs">
-            <div>
-              <p className="text-slate-500">Raw Material Supplied</p>
-              <p className="font-semibold text-white">{selectedSupplier?.raw_material_type || '-'}</p>
-            </div>
-            <div>
-              <p className="text-slate-500">Phone</p>
-              <p className="font-semibold text-white font-mono">{selectedSupplier?.phone || '-'}</p>
-            </div>
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                Full Purchase & Payment Transaction Statement
-              </h4>
-              <button
-                onClick={() => window.print()}
-                className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1"
-              >
-                <Printer className="w-3.5 h-3.5" /> Print Statement
-              </button>
-            </div>
-
-            <div className="max-h-72 overflow-y-auto overflow-x-auto border border-slate-800 rounded-xl">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
-                    <th className="py-2.5 px-3">Date</th>
-                    <th className="py-2.5 px-3">Ref #</th>
-                    <th className="py-2.5 px-3">Description</th>
-                    <th className="py-2.5 px-3 text-right">Debit (-) / Paid</th>
-                    <th className="py-2.5 px-3 text-right">Credit (+) / Billed</th>
-                    <th className="py-2.5 px-3 text-right">Payable Balance</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/60">
-                  {supplierLedgerRows.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="py-6 text-center text-slate-500">No purchase or payment history found</td>
-                    </tr>
-                  ) : (
-                    supplierLedgerRows.map((row, idx) => (
-                      <tr key={idx} className="hover:bg-slate-800/30">
-                        <td className="py-2.5 px-3 text-slate-400 font-mono">{formatDate(row.date)}</td>
-                        <td className="py-2.5 px-3 font-mono font-bold text-white">{row.ref}</td>
-                        <td className="py-2.5 px-3 text-slate-300">
-                          {row.description}
-                          {row.method && <span className="ml-1.5 text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 uppercase">{row.method}</span>}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono font-semibold text-rose-400">
-                          {row.debit > 0 ? formatPKR(row.debit) : '-'}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono font-semibold text-slate-200">
-                          {row.credit > 0 ? formatPKR(row.credit) : '-'}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono font-black">
-                          <span className={row.balance > 0 ? 'text-rose-400' : 'text-emerald-400'}>
-                            {formatPKR(row.balance)}
-                          </span>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {selectedSupplier && isOwner && (
-            <div className="pt-3 border-t border-slate-800 flex justify-between items-center">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsLedgerModalOpen(false);
-                  setDeleteConfirmSupplier(selectedSupplier);
-                }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors ${
-                  checkSupplierHasHistory(selectedSupplier.id)
-                    ? 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 border border-amber-500/30'
-                    : 'bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30'
-                }`}
-              >
-                {checkSupplierHasHistory(selectedSupplier.id) ? (
-                  <>
-                    <Archive className="w-3.5 h-3.5" />
-                    <span>Archive Supplier</span>
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Delete Supplier</span>
-                  </>
-                )}
-              </button>
-              <button
-                onClick={() => setIsLedgerModalOpen(false)}
-                className="px-4 py-1.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
-              >
-                Close Statement
-              </button>
-            </div>
-          )}
-        </div>
-      </Modal>
+        supplier={selectedSupplier}
+        purchases={purchases}
+        payments={payments}
+        isOwner={isOwner}
+        hasHistory={selectedSupplier ? checkSupplierHasHistory(selectedSupplier.id) : false}
+        onArchive={() => {
+          if (selectedSupplier) {
+            setIsLedgerModalOpen(false);
+            setDeleteConfirmSupplier(selectedSupplier);
+          }
+        }}
+      />
 
       {/* Direct Payment to Supplier Modal */}
       <Modal
