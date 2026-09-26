@@ -50,7 +50,7 @@ export const formatDateTime = (dateString?: string): string => {
 /**
  * Generate sequential-like invoice numbers with prefix
  */
-export const generateInvoiceNumber = (prefix: 'INV' | 'PO' | 'PAY' | 'ADJ' = 'INV'): string => {
+export const generateInvoiceNumber = (prefix: 'INV' | 'PO' | 'PAY' | 'ADJ' | 'TRIP' = 'INV'): string => {
   const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '');
   const rand = Math.floor(1000 + Math.random() * 9000);
   return `${prefix}-${dateStr}-${rand}`;

@@ -216,6 +216,10 @@ export interface PurchaseItem {
   quantity: number;
   unit_cost: number;
   subtotal: number;
+  allocated_freight?: number; // Allocated freight share in PKR
+  landed_cost?: number; // Unit landed cost = unit_cost + (allocated_freight / quantity)
+  trip_id?: string;
+  trip_number?: string;
 }
 
 export interface Purchase {
@@ -230,6 +234,48 @@ export interface Purchase {
   payment_status: 'paid' | 'partial' | 'unpaid';
   payment_method: PaymentMethod;
   notes?: string;
+  freight_cost?: number; // Freight or additional transport cost for single purchase
+  trip_id?: string; // Associated PurchaseTrip ID if created via trip
+  trip_number?: string;
+  created_at?: string;
+}
+
+// ==============================================================================
+// 3B. PURCHASE TRIPS (MULTI-VENDOR SHARED TRANSPORT RUNS)
+// ==============================================================================
+export interface PurchaseTripItem {
+  id: string;
+  trip_id?: string;
+  supplier_id: string;
+  supplier_name: string;
+  raw_material_id: string;
+  raw_material_name: string;
+  unit: RawMaterialUnit;
+  quantity: number;
+  unit_cost: number;
+  subtotal: number;
+  is_weight_allocated: boolean;
+  allocation_percentage: number;
+  allocated_freight: number;
+  landed_cost: number;
+  total_landed_cost: number;
+  purchase_id?: string;
+}
+
+export interface PurchaseTrip {
+  id: string;
+  trip_number: string; // e.g. "TRIP-260925-1042"
+  date: string;
+  total_transport_cost: number;
+  transport_payment_method: PaymentMethod;
+  transport_notes?: string;
+  vehicle_or_driver?: string;
+  include_pcs_in_weight_allocation?: boolean;
+  total_material_cost: number;
+  total_weight_kg_liter: number;
+  grand_total: number;
+  items: PurchaseTripItem[];
+  created_by?: string;
   created_at?: string;
 }
 

@@ -14,7 +14,9 @@ import {
   DeletionAuditLog, 
   Profile,
   Expense,
-  RecurringExpense
+  RecurringExpense,
+  PurchaseTrip,
+  PurchaseTripItem
 } from '../types';
 import { ensureUUID, isValidUUID } from '../utils/uuid';
 
@@ -49,7 +51,8 @@ export const supabaseService = {
         logsRes,
         profRes,
         expRes,
-        recExpRes
+        recExpRes,
+        tripRes
       ] = await Promise.all([
         supabase.from('products').select('*').order('created_at', { ascending: false }),
         supabase.from('customers').select('*').order('created_at', { ascending: false }),
@@ -65,7 +68,8 @@ export const supabaseService = {
         supabase.from('deletion_audit_logs').select('*').order('date', { ascending: false }),
         supabase.from('profiles').select('*').order('created_at', { ascending: false }),
         Promise.resolve(supabase.from('expenses').select('*').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
-        Promise.resolve(supabase.from('recurring_expenses').select('*').order('created_at', { ascending: false })).catch(() => ({ data: [], error: null } as any))
+        Promise.resolve(supabase.from('recurring_expenses').select('*').order('created_at', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
+        Promise.resolve(supabase.from('purchase_trips').select('*, purchase_trip_items(*)').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any))
       ]);
 
 
@@ -148,10 +152,36 @@ export const supabaseService = {
         salesperson_name: s.salesperson_id ? (profMap.get(s.salesperson_id) || 'Staff') : 'Staff'
       }));
 
-      // 4. Normalized Purchases (extract purchase_items into .items)
+      // 4. Normalized Purchases (extract purchase_items into .items, preserve freight/landed cost)
       const normalizedPurchases = (purchRes.data || []).map((p: any) => ({
         ...p,
-        items: p.purchase_items || []
+        freight_cost: Number(p.freight_cost || 0),
+        trip_id: p.trip_id || undefined,
+        trip_number: p.trip_number || undefined,
+        items: (p.purchase_items || []).map((pi: any) => {
+          const qty = Number(pi.quantity || 0);
+          const uCost = Number(pi.unit_cost || 0);
+          const allocFreight = Number(pi.allocated_freight || 0);
+          const landedCost = Number(pi.landed_cost || (qty > 0 ? (uCost + (allocFreight / qty)) : uCost));
+          return {
+            ...pi,
+            allocated_freight: allocFreight,
+            landed_cost: Number(landedCost.toFixed(2)),
+            trip_id: pi.trip_id || p.trip_id || undefined,
+            trip_number: pi.trip_number || p.trip_number || undefined,
+          };
+        })
+      }));
+
+      // 4B. Normalized Purchase Trips
+      const normalizedPurchaseTrips: PurchaseTrip[] = (tripRes?.data || []).map((t: any) => ({
+        ...t,
+        items: (t.purchase_trip_items || t.items || []).map((ti: any) => ({
+          ...ti,
+          allocated_freight: Number(ti.allocated_freight || 0),
+          landed_cost: Number(ti.landed_cost || 0),
+          total_landed_cost: Number(ti.total_landed_cost || 0),
+        }))
       }));
 
       // 5. Normalized Payments (enrich customer/supplier names and detect tagged categories)
@@ -210,6 +240,7 @@ export const supabaseService = {
         profiles: (profRes.data as Profile[]) || [],
         expenses: (expRes?.data as Expense[]) || [],
         recurringExpenses: (recExpRes?.data as RecurringExpense[]) || [],
+        purchaseTrips: normalizedPurchaseTrips,
       };
     } catch (err: any) {
       console.error('Failed to fetch from Supabase:', err);
@@ -712,7 +743,7 @@ export const supabaseService = {
     purchase.id = validId;
 
     // 1. Insert parent purchase
-    const payload = {
+    const payload: any = {
       id: validId,
       invoice_number: purchase.invoice_number,
       supplier_id: isValidUUID(purchase.supplier_id) ? purchase.supplier_id : null,
@@ -725,7 +756,20 @@ export const supabaseService = {
       notes: purchase.notes || ''
     };
 
-    const { error: purchError } = await supabase.from('purchases').upsert(payload);
+    if (purchase.freight_cost) payload.freight_cost = Number(purchase.freight_cost);
+    if (purchase.trip_id && isValidUUID(purchase.trip_id)) payload.trip_id = purchase.trip_id;
+    if (purchase.trip_number) payload.trip_number = purchase.trip_number;
+
+    let { error: purchError } = await supabase.from('purchases').upsert(payload);
+    if (purchError && (purchError.message?.includes('freight_cost') || purchError.message?.includes('trip_id') || purchError.code === '42703')) {
+      // Fallback if trip/freight columns not yet added to purchases table
+      delete payload.freight_cost;
+      delete payload.trip_id;
+      delete payload.trip_number;
+      const retry = await supabase.from('purchases').upsert(payload);
+      purchError = retry.error;
+    }
+
     if (purchError) {
       console.error('Supabase upsertPurchase error:', purchError);
       throw new Error(`Purchase database write failed: ${purchError.message}`);
@@ -735,7 +779,7 @@ export const supabaseService = {
     await supabase.from('purchase_items').delete().eq('purchase_id', validId);
 
     if (purchase.items && purchase.items.length > 0) {
-      const itemsToInsert = purchase.items.map(item => ({
+      const itemsToInsertWithFreight = purchase.items.map(item => ({
         id: ensureUUID(item.id),
         purchase_id: validId,
         item_type: item.item_type || 'raw_material',
@@ -744,11 +788,22 @@ export const supabaseService = {
         product_or_material_name: item.product_or_material_name || '',
         quantity: Number(item.quantity || 0),
         unit_cost: Number(item.unit_cost || 0),
-        subtotal: Number(item.subtotal || 0)
+        subtotal: Number(item.subtotal || 0),
+        allocated_freight: Number(item.allocated_freight || 0),
+        landed_cost: Number(item.landed_cost || item.unit_cost || 0),
+        trip_id: isValidUUID(item.trip_id) ? item.trip_id : null,
       }));
 
-      const { error: itemsError } = await supabase.from('purchase_items').insert(itemsToInsert);
-      if (itemsError) {
+      const { error: itemsError } = await supabase.from('purchase_items').insert(itemsToInsertWithFreight);
+      if (itemsError && (itemsError.message?.includes('allocated_freight') || itemsError.message?.includes('landed_cost') || itemsError.code === '42703')) {
+        // Fallback for unmigrated purchase_items table without freight columns
+        const fallbackItems = itemsToInsertWithFreight.map(({ allocated_freight, landed_cost, trip_id, ...rest }) => rest);
+        const retryRes = await supabase.from('purchase_items').insert(fallbackItems);
+        if (retryRes.error) {
+          console.error('Supabase purchase_items fallback insert error:', retryRes.error);
+          throw new Error(`Purchase items write failed: ${retryRes.error.message}`);
+        }
+      } else if (itemsError) {
         console.error('Supabase purchase_items insert error:', itemsError);
         throw new Error(`Purchase items write failed: ${itemsError.message}`);
       }
@@ -769,6 +824,88 @@ export const supabaseService = {
     if (error) {
       console.error('Supabase deletePurchase error:', error);
       throw new Error(`Purchase deletion failed: ${error.message}`);
+    }
+  },
+
+  // ============================================================================
+  // PURCHASE TRIPS (MULTI-VENDOR SHARED TRANSPORT RUNS)
+  // ============================================================================
+  async upsertPurchaseTrip(trip: PurchaseTrip): Promise<PurchaseTrip> {
+    if (!isSupabaseConfigured || !supabase) return trip;
+    assertOnline();
+
+    const validId = ensureUUID(trip.id);
+    trip.id = validId;
+
+    const payload = {
+      id: validId,
+      trip_number: trip.trip_number,
+      date: trip.date || new Date().toISOString(),
+      total_transport_cost: Number(trip.total_transport_cost || 0),
+      transport_payment_method: trip.transport_payment_method || 'cash',
+      transport_notes: trip.transport_notes || '',
+      vehicle_or_driver: trip.vehicle_or_driver || '',
+      include_pcs_in_weight_allocation: Boolean(trip.include_pcs_in_weight_allocation),
+      total_material_cost: Number(trip.total_material_cost || 0),
+      total_weight_kg_liter: Number(trip.total_weight_kg_liter || 0),
+      grand_total: Number(trip.grand_total || 0),
+      created_by: trip.created_by || null,
+      created_at: trip.created_at || new Date().toISOString()
+    };
+
+    try {
+      const { error: tripError } = await supabase.from('purchase_trips').upsert(payload);
+      if (tripError) {
+        console.warn('Supabase upsertPurchaseTrip notice (table may need migration):', tripError.message);
+        return trip;
+      }
+
+      await supabase.from('purchase_trip_items').delete().eq('trip_id', validId);
+
+      if (trip.items && trip.items.length > 0) {
+        const itemsToInsert = trip.items.map(item => ({
+          id: ensureUUID(item.id),
+          trip_id: validId,
+          supplier_id: isValidUUID(item.supplier_id) ? item.supplier_id : null,
+          supplier_name: item.supplier_name || '',
+          raw_material_id: isValidUUID(item.raw_material_id) ? item.raw_material_id : null,
+          raw_material_name: item.raw_material_name || '',
+          unit: item.unit || 'kg',
+          quantity: Number(item.quantity || 0),
+          unit_cost: Number(item.unit_cost || 0),
+          subtotal: Number(item.subtotal || 0),
+          is_weight_allocated: Boolean(item.is_weight_allocated),
+          allocation_percentage: Number(item.allocation_percentage || 0),
+          allocated_freight: Number(item.allocated_freight || 0),
+          landed_cost: Number(item.landed_cost || 0),
+          total_landed_cost: Number(item.total_landed_cost || 0),
+          purchase_id: isValidUUID(item.purchase_id) ? item.purchase_id : null
+        }));
+
+        const { error: itemsError } = await supabase.from('purchase_trip_items').insert(itemsToInsert);
+        if (itemsError) {
+          console.warn('Supabase purchase_trip_items insert warning:', itemsError.message);
+        }
+      }
+    } catch (e: any) {
+      console.warn('Supabase purchase trip write error:', e?.message || e);
+    }
+
+    return trip;
+  },
+
+  async deletePurchaseTrip(id: string): Promise<void> {
+    if (!isSupabaseConfigured || !supabase || !isValidUUID(id)) return;
+    assertOnline();
+
+    try {
+      await supabase.from('purchase_trip_items').delete().eq('trip_id', id);
+      const { error } = await supabase.from('purchase_trips').delete().eq('id', id);
+      if (error) {
+        console.warn('Supabase deletePurchaseTrip notice:', error.message);
+      }
+    } catch (e: any) {
+      console.warn('Supabase deletePurchaseTrip error:', e?.message || e);
     }
   },
 

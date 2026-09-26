@@ -18,9 +18,13 @@ import {
   Profile,
   Expense,
   RecurringExpense,
-  PaymentMethod
+  PaymentMethod,
+  PurchaseTrip,
+  PurchaseTripItem,
+  PurchaseItem
 } from '../types';
 import { generateInvoiceNumber, formatPKR } from '../utils/formatters';
+import { allocateTripFreight, calculateWeightedAverageLandedCost } from '../utils/freightAllocation';
 import { getNextBatchNumberForProduct } from '../utils/batchNumber';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { supabaseService } from '../lib/supabaseService';
@@ -39,6 +43,7 @@ interface AppContextType {
   suppliers: Supplier[];
   sales: Sale[];
   purchases: Purchase[];
+  purchaseTrips: PurchaseTrip[];
   stockMovements: StockMovement[];
   payments: Payment[];
   expenses: Expense[];
@@ -135,6 +140,13 @@ interface AppContextType {
     warningDetails?: string[]; 
     message: string 
   }>;
+  createPurchaseTrip: (tripData: Omit<PurchaseTrip, 'id' | 'trip_number' | 'created_at'>) => Promise<PurchaseTrip>;
+  deletePurchaseTripRecord: (tripId: string, user: Profile, forceAllowNegativeStock?: boolean) => Promise<{ 
+    success: boolean; 
+    hasNegativeStockWarning?: boolean; 
+    warningDetails?: string[]; 
+    message: string 
+  }>;
   
   recordPayment: (paymentData: Omit<Payment, 'id' | 'created_at'>) => Promise<Payment>;
   deletePayment: (paymentId: string) => Promise<void>;
@@ -181,6 +193,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
   const [purchases, setPurchases] = useState<Purchase[]>([]);
+  const [purchaseTrips, setPurchaseTrips] = useState<PurchaseTrip[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('psc_local_purchase_trips');
+        if (cached) return JSON.parse(cached);
+      } catch {}
+    }
+    return [];
+  });
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -278,6 +299,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setSuppliers(reconciledSuppliers);
         setSales(cloudData.sales || []);
         setPurchases(cloudData.purchases || []);
+        const syncedTrips = (cloudData as any).purchaseTrips || [];
+        setPurchaseTrips(syncedTrips);
+        if (typeof window !== 'undefined' && syncedTrips.length > 0) {
+          try {
+            localStorage.setItem('psc_local_purchase_trips', JSON.stringify(syncedTrips));
+          } catch {}
+        }
         setStockMovements(cloudData.stockMovements || []);
         setPayments(sanitizedPayments);
         setExpenses(cloudData.expenses || []);
@@ -347,6 +375,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setSuppliers([]);
         setSales([]);
         setPurchases([]);
+        setPurchaseTrips([]);
         setStockMovements([]);
         setPayments([]);
         setExpenses([]);
@@ -1425,26 +1454,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // ==============================================================================
   const createPurchase = async (purchaseData: Omit<Purchase, 'id' | 'invoice_number' | 'created_at'>): Promise<Purchase> => {
     const invoiceNum = generateInvoiceNumber('PO');
+    
+    // Allocate freight across items if freight_cost was provided on single purchase
+    let processedItems = [...purchaseData.items];
+    const singleFreight = Number(purchaseData.freight_cost || 0);
+
+    if (singleFreight > 0) {
+      const { allocatedItems } = allocateTripFreight(
+        processedItems.map(it => ({
+          ...it,
+          raw_material_name: it.product_or_material_name || '',
+          unit: it.unit || 'kg',
+        })),
+        singleFreight,
+        false
+      );
+      processedItems = allocatedItems.map((alloc, idx) => ({
+        ...processedItems[idx],
+        allocated_freight: alloc.allocated_freight,
+        landed_cost: alloc.landed_cost,
+      }));
+    }
+
     const newPurchase: Purchase = {
       ...purchaseData,
       id: generateId(),
       invoice_number: invoiceNum,
+      items: processedItems,
       created_at: new Date().toISOString(),
     };
 
     const savedPurchase = await supabaseService.upsertPurchase(newPurchase);
     setPurchases(prev => [savedPurchase, ...prev]);
 
-    // Raw Materials addition
+    // Raw Materials addition with weighted average landed cost
+    const updatedRawMaterials = [...rawMaterials];
+    const rawMovementsToAdd: RawMaterialMovement[] = [];
+
     for (const item of savedPurchase.items) {
       if (item.raw_material_id) {
-        const rm = rawMaterials.find(r => r.id === item.raw_material_id);
-        if (rm) {
-          const prevStk = Number(rm.current_stock);
+        const rmIdx = updatedRawMaterials.findIndex(r => r.id === item.raw_material_id);
+        if (rmIdx !== -1) {
+          const rm = updatedRawMaterials[rmIdx];
+          const prevStk = Number(rm.current_stock || 0);
           const nextStk = prevStk + Number(item.quantity);
-          const updatedRm = { ...rm, current_stock: nextStk, cost_per_unit: item.unit_cost || rm.cost_per_unit, updated_at: new Date().toISOString() };
+          const itemLandedCost = item.landed_cost || (item.quantity > 0 ? Number((Number(item.unit_cost) + (Number(item.allocated_freight || 0) / Number(item.quantity))).toFixed(2)) : item.unit_cost);
+          
+          const newAvgCost = calculateWeightedAverageLandedCost(
+            prevStk,
+            Number(rm.cost_per_unit || 0),
+            Number(item.quantity),
+            itemLandedCost
+          );
+
+          const updatedRm = { 
+            ...rm, 
+            current_stock: nextStk, 
+            cost_per_unit: newAvgCost, 
+            updated_at: new Date().toISOString() 
+          };
+          updatedRawMaterials[rmIdx] = updatedRm;
           await supabaseService.upsertRawMaterial(updatedRm);
 
+          const hasFreight = item.allocated_freight && item.allocated_freight > 0;
           const rmMvt: RawMaterialMovement = {
             id: generateId(),
             raw_material_id: rm.id,
@@ -1454,10 +1526,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             previous_stock: prevStk,
             new_stock: nextStk,
             reference_id: savedPurchase.invoice_number,
-            notes: `Received from PO ${invoiceNum} (${savedPurchase.supplier_name})`,
+            notes: hasFreight 
+              ? `Received from PO ${invoiceNum} (${savedPurchase.supplier_name}) - Base: PKR ${item.unit_cost}, Freight: PKR ${item.allocated_freight} (Landed: PKR ${itemLandedCost}/${rm.unit})`
+              : `Received from PO ${invoiceNum} (${savedPurchase.supplier_name})`,
             date: savedPurchase.date,
           };
           await supabaseService.upsertRawMaterialMovement(rmMvt);
+          rawMovementsToAdd.push(rmMvt);
         }
       }
 
@@ -1485,6 +1560,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           await supabaseService.upsertStockMovement(prodMvt);
         }
       }
+    }
+
+    if (rawMovementsToAdd.length > 0) {
+      setRawMaterials(updatedRawMaterials);
+      setRawMaterialMovements(prev => [...rawMovementsToAdd, ...prev]);
     }
 
     // Update supplier balance if unpaid
@@ -1658,6 +1738,322 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {
       success: true,
       message: `Purchase order ${targetPurchase.invoice_number} successfully deleted. Inventory and supplier ledger adjusted.`
+    };
+  };
+
+  // ==============================================================================
+  // TRANSACTIONS: PURCHASE TRIP (MULTI-VENDOR SHARED TRANSPORT RUN)
+  // ==============================================================================
+  const createPurchaseTrip = async (tripData: Omit<PurchaseTrip, 'id' | 'trip_number' | 'created_at'>): Promise<PurchaseTrip> => {
+    const tripNumber = generateInvoiceNumber('TRIP');
+    const tripId = generateId();
+    const now = new Date().toISOString();
+    const tripDate = tripData.date || now;
+
+    // 1. Group items by supplier to generate individual POs
+    const itemsBySupplier = new Map<string, typeof tripData.items>();
+    for (const item of tripData.items) {
+      const sId = item.supplier_id || 'unknown';
+      if (!itemsBySupplier.has(sId)) {
+        itemsBySupplier.set(sId, []);
+      }
+      itemsBySupplier.get(sId)!.push(item);
+    }
+
+    const createdPOs: Purchase[] = [];
+    const updatedTripItems = [...tripData.items];
+
+    for (const [sId, sItems] of itemsBySupplier.entries()) {
+      const supp = suppliers.find(s => s.id === sId);
+      const supplierName = supp ? supp.name : (sItems[0]?.supplier_name || 'Vendor');
+      const poTotal = sItems.reduce((sum, it) => sum + it.subtotal, 0);
+      const poFreight = sItems.reduce((sum, it) => sum + it.allocated_freight, 0);
+      const poInvoiceNumber = generateInvoiceNumber('PO');
+      const poId = generateId();
+
+      const purchaseItems: PurchaseItem[] = sItems.map(it => ({
+        id: generateId(),
+        item_type: 'raw_material',
+        raw_material_id: it.raw_material_id,
+        product_or_material_name: it.raw_material_name,
+        unit: it.unit,
+        quantity: it.quantity,
+        unit_cost: it.unit_cost,
+        subtotal: it.subtotal,
+        allocated_freight: it.allocated_freight,
+        landed_cost: it.landed_cost,
+        trip_id: tripId,
+        trip_number: tripNumber,
+      }));
+
+      // Set purchase_id and trip_id on corresponding updatedTripItems
+      for (const it of updatedTripItems) {
+        if (it.supplier_id === sId) {
+          it.purchase_id = poId;
+          it.trip_id = tripId;
+        }
+      }
+
+      const po: Purchase = {
+        id: poId,
+        invoice_number: poInvoiceNumber,
+        supplier_id: sId !== 'unknown' ? sId : undefined,
+        supplier_name: supplierName,
+        date: tripDate,
+        items: purchaseItems,
+        total_amount: poTotal,
+        amount_paid: 0,
+        payment_status: 'unpaid',
+        payment_method: 'bank',
+        freight_cost: poFreight,
+        trip_id: tripId,
+        trip_number: tripNumber,
+        notes: `Procured via Purchase Trip ${tripNumber}. Allocated Transport: PKR ${poFreight}`,
+        created_at: now,
+      };
+
+      const savedPO = await supabaseService.upsertPurchase(po);
+      createdPOs.push(savedPO);
+
+      // Update supplier balance
+      if (supp && poTotal > 0) {
+        const nextBal = (supp.current_balance || 0) + poTotal;
+        const updatedSupp = { ...supp, current_balance: nextBal, updated_at: now };
+        await supabaseService.upsertSupplier(updatedSupp);
+        setSuppliers(prev => prev.map(s => s.id === supp.id ? updatedSupp : s));
+      }
+    }
+
+    setPurchases(prev => [...createdPOs, ...prev]);
+
+    // 2. Aggregate and update Raw Materials inventory and Weighted Average Landed Cost
+    let currentRMs = [...rawMaterials];
+    const newMovements: RawMaterialMovement[] = [];
+
+    // Group trip items by raw material to calculate single consolidated weighted average
+    const itemsByRM = new Map<string, typeof tripData.items>();
+    for (const item of updatedTripItems) {
+      if (!itemsByRM.has(item.raw_material_id)) {
+        itemsByRM.set(item.raw_material_id, []);
+      }
+      itemsByRM.get(item.raw_material_id)!.push(item);
+    }
+
+    for (const [rmId, rmItems] of itemsByRM.entries()) {
+      const rmIdx = currentRMs.findIndex(m => m.id === rmId);
+      if (rmIdx !== -1) {
+        const rm = currentRMs[rmIdx];
+        const prevStk = Number(rm.current_stock || 0);
+        const prevRate = Number(rm.cost_per_unit || 0);
+
+        const totalBatchQty = rmItems.reduce((sum, it) => sum + it.quantity, 0);
+        const totalBatchLandedValuation = rmItems.reduce((sum, it) => sum + (it.subtotal + it.allocated_freight), 0);
+        const batchLandedRate = totalBatchQty > 0 ? (totalBatchLandedValuation / totalBatchQty) : prevRate;
+
+        const nextStk = prevStk + totalBatchQty;
+        const newWeightedRate = calculateWeightedAverageLandedCost(
+          prevStk,
+          prevRate,
+          totalBatchQty,
+          batchLandedRate
+        );
+
+        const updatedRm: RawMaterial = {
+          ...rm,
+          current_stock: nextStk,
+          cost_per_unit: newWeightedRate,
+          updated_at: now,
+        };
+        currentRMs[rmIdx] = updatedRm;
+        await supabaseService.upsertRawMaterial(updatedRm);
+
+        // Record stock movements for each item
+        for (const item of rmItems) {
+          const mvt: RawMaterialMovement = {
+            id: generateId(),
+            raw_material_id: rm.id,
+            raw_material_name: rm.name,
+            movement_type: 'purchase_in',
+            quantity: item.quantity,
+            previous_stock: prevStk,
+            new_stock: nextStk,
+            reference_id: tripNumber,
+            notes: `Trip ${tripNumber} (${item.supplier_name}) - Base: PKR ${item.unit_cost}, Freight: PKR ${item.allocated_freight} (Landed: PKR ${item.landed_cost}/${rm.unit})`,
+            date: tripDate,
+          };
+          await supabaseService.upsertRawMaterialMovement(mvt);
+          newMovements.push(mvt);
+        }
+      }
+    }
+
+    setRawMaterials(currentRMs);
+    setRawMaterialMovements(prev => [...newMovements, ...prev]);
+
+    // 3. Automatically record Transportation Expense in Cash Book / Expenses
+    if (tripData.total_transport_cost > 0) {
+      try {
+        const transportExpense: Expense = {
+          id: generateId(),
+          date: tripDate,
+          category: 'Transport',
+          description: `Transportation for Purchase Trip ${tripNumber}${tripData.vehicle_or_driver ? ` (${tripData.vehicle_or_driver})` : ''} - Shared across ${updatedTripItems.length} materials`,
+          amount: tripData.total_transport_cost,
+          payment_method: tripData.transport_payment_method || 'cash',
+          recorded_by_name: tripData.created_by || 'Purchase Manager',
+          created_at: now,
+        };
+        await supabaseService.upsertExpense(transportExpense);
+        setExpenses(prev => [transportExpense, ...prev]);
+      } catch (expErr) {
+        console.warn('Could not auto-record trip transport expense:', expErr);
+      }
+    }
+
+    // 4. Save the Purchase Trip record
+    const newTrip: PurchaseTrip = {
+      ...tripData,
+      id: tripId,
+      trip_number: tripNumber,
+      items: updatedTripItems,
+      created_at: now,
+    };
+
+    const savedTrip = await supabaseService.upsertPurchaseTrip(newTrip);
+    setPurchaseTrips(prev => {
+      const nextList = [savedTrip, ...prev];
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('psc_local_purchase_trips', JSON.stringify(nextList));
+        } catch {}
+      }
+      return nextList;
+    });
+
+    return savedTrip;
+  };
+
+  const deletePurchaseTripRecord = async (
+    tripId: string, 
+    user: Profile, 
+    forceAllowNegativeStock: boolean = false
+  ): Promise<{ success: boolean; hasNegativeStockWarning?: boolean; warningDetails?: string[]; message: string }> => {
+    const targetTrip = purchaseTrips.find(t => t.id === tripId);
+    if (!targetTrip) return { success: false, message: 'Purchase trip record not found.' };
+
+    const warningDetails: string[] = [];
+
+    // Verify negative stock risks for all items in the trip
+    for (const item of targetTrip.items) {
+      const rm = rawMaterials.find(r => r.id === item.raw_material_id);
+      const currentStk = rm ? Number(rm.current_stock) : 0;
+      const wouldBeStk = currentStk - Number(item.quantity);
+      if (wouldBeStk < 0) {
+        warningDetails.push(`Raw Material "${item.raw_material_name}": Current stock is ${currentStk} ${item.unit}, Trip received ${item.quantity}. Stock would become negative (${wouldBeStk}).`);
+      }
+    }
+
+    if (warningDetails.length > 0 && !forceAllowNegativeStock) {
+      return {
+        success: false,
+        hasNegativeStockWarning: true,
+        warningDetails,
+        message: 'Cannot delete trip: some raw materials have already been consumed in production.'
+      };
+    }
+
+    const now = new Date().toISOString();
+
+    // 1. Reverse raw material inventory
+    let updatedRMs = [...rawMaterials];
+    for (const item of targetTrip.items) {
+      const rmIdx = updatedRMs.findIndex(r => r.id === item.raw_material_id);
+      if (rmIdx !== -1) {
+        const rm = updatedRMs[rmIdx];
+        const prevStk = Number(rm.current_stock);
+        const nextStk = Math.max(0, Number((prevStk - Number(item.quantity)).toFixed(4)));
+        const updated = { ...rm, current_stock: nextStk, updated_at: now };
+        updatedRMs[rmIdx] = updated;
+        await supabaseService.upsertRawMaterial(updated);
+
+        const rmMvt: RawMaterialMovement = {
+          id: generateId(),
+          raw_material_id: rm.id,
+          raw_material_name: rm.name,
+          movement_type: 'wastage',
+          quantity: -Number(item.quantity),
+          previous_stock: prevStk,
+          new_stock: nextStk,
+          reference_id: targetTrip.trip_number,
+          notes: `Reversed from deleted Purchase Trip ${targetTrip.trip_number}`,
+          date: now,
+          created_by_name: user.name,
+        };
+        await supabaseService.upsertRawMaterialMovement(rmMvt);
+      }
+    }
+    setRawMaterials(updatedRMs);
+
+    // 2. Find and delete linked POs & reverse supplier balances
+    const linkedPOs = purchases.filter(p => p.trip_id === tripId || p.trip_number === targetTrip.trip_number);
+    for (const po of linkedPOs) {
+      const unpaid = po.total_amount - po.amount_paid;
+      if (po.supplier_id && unpaid > 0) {
+        const supp = suppliers.find(s => s.id === po.supplier_id);
+        if (supp) {
+          const updatedSupp = {
+            ...supp,
+            current_balance: Math.max(0, (supp.current_balance || 0) - unpaid),
+            updated_at: now,
+          };
+          await supabaseService.upsertSupplier(updatedSupp);
+          setSuppliers(prev => prev.map(s => s.id === po.supplier_id ? updatedSupp : s));
+        }
+      }
+      try {
+        await supabaseService.deletePurchase(po.id);
+      } catch (poErr) {
+        console.warn('Could not delete linked PO:', poErr);
+      }
+    }
+    setPurchases(prev => prev.filter(p => p.trip_id !== tripId && p.trip_number !== targetTrip.trip_number));
+
+    // 3. Delete associated transport expense if logged
+    const tripExpenses = expenses.filter(e => e.description?.includes(targetTrip.trip_number));
+    for (const exp of tripExpenses) {
+      try {
+        await supabaseService.deleteExpense(exp.id);
+      } catch {}
+    }
+    if (tripExpenses.length > 0) {
+      setExpenses(prev => prev.filter(e => !tripExpenses.some(te => te.id === e.id)));
+    }
+
+    // 4. Delete the trip itself
+    await supabaseService.deletePurchaseTrip(tripId);
+    setPurchaseTrips(prev => {
+      const remaining = prev.filter(t => t.id !== tripId);
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('psc_local_purchase_trips', JSON.stringify(remaining));
+        } catch {}
+      }
+      return remaining;
+    });
+
+    await addDeletionLogEntry({
+      entity_type: 'purchase',
+      entity_id: tripId,
+      entity_title: `Purchase Trip ${targetTrip.trip_number}`,
+      action_type: 'reversed_and_deleted',
+      impact_summary: `Deleted Purchase Trip ${targetTrip.trip_number}: Reversed inventory for ${targetTrip.items.length} materials and deleted ${linkedPOs.length} vendor POs.`,
+      performed_by: user.name,
+      performed_by_role: user.role,
+    });
+
+    return {
+      success: true,
+      message: `Purchase trip ${targetTrip.trip_number} successfully deleted and inventory reversed.`
     };
   };
 
@@ -2104,6 +2500,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteSaleInvoice,
         createPurchase,
         deletePurchaseInvoice,
+        purchaseTrips,
+        createPurchaseTrip,
+        deletePurchaseTripRecord,
         recordPayment,
         deletePayment,
         recordCapitalInjection,

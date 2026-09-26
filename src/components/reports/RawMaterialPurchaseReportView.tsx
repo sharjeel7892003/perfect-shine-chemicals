@@ -19,7 +19,8 @@ import {
   ChevronRight,
   RefreshCw,
   Info,
-  DollarSign
+  DollarSign,
+  Truck
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { formatPKR, formatDate, formatQuantity } from '../../utils/formatters';
@@ -45,7 +46,9 @@ export interface ItemizedPurchaseRow {
   quantity: number;
   unitCost: number;
   subtotal: number;
+  allocatedFreight?: number;
   landedCost: number;
+  tripNumber?: string;
   paymentStatus: 'paid' | 'partial' | 'unpaid';
   paymentMethod: string;
   notes?: string;
@@ -132,7 +135,8 @@ export const RawMaterialPurchaseReportView: React.FC<RawMaterialPurchaseReportVi
           
           // Landed cost calculation (including allocated freight if available, or base purchase unit cost)
           const allocatedFreight = Number((item as any).allocated_freight || 0);
-          const landedCost = qty > 0 ? Number((unitCost + (allocatedFreight / qty)).toFixed(2)) : unitCost;
+          const landedCost = Number((item as any).landed_cost || (qty > 0 ? Number((unitCost + (allocatedFreight / qty)).toFixed(2)) : unitCost));
+          const tripNumber = p.trip_number || (item as any).trip_number || undefined;
 
           rows.push({
             purchaseId: p.id,
@@ -146,7 +150,9 @@ export const RawMaterialPurchaseReportView: React.FC<RawMaterialPurchaseReportVi
             quantity: qty,
             unitCost,
             subtotal,
+            allocatedFreight,
             landedCost,
+            tripNumber,
             paymentStatus: p.payment_status || 'unpaid',
             paymentMethod: p.payment_method || 'cash',
             notes: p.notes,
@@ -409,15 +415,17 @@ export const RawMaterialPurchaseReportView: React.FC<RawMaterialPurchaseReportVi
       ]);
       exportToCSV(`PSC_Chemical_Procurement_Summary_${dateLabel}`, headers, rows);
     } else {
-      const headers = ['Date', 'PO / Invoice #', 'Supplier / Vendor', 'Raw Material Name', 'Quantity', 'Unit', 'Price per Unit (PKR)', 'Landed Cost (PKR)', 'Total Amount (PKR)', 'Payment Status', 'Payment Method', 'Notes'];
+      const headers = ['Date', 'PO / Invoice #', 'Trip #', 'Supplier / Vendor', 'Raw Material Name', 'Quantity', 'Unit', 'Price per Unit (PKR)', 'Allocated Freight (PKR)', 'Landed Cost / Unit (PKR)', 'Total Amount (PKR)', 'Payment Status', 'Payment Method', 'Notes'];
       const rows = filteredRows.map(r => [
         r.date.slice(0, 10),
         r.invoiceNumber,
+        r.tripNumber || '',
         r.supplierName,
         r.rawMaterialName,
         r.quantity,
         r.unit,
         r.unitCost,
+        r.allocatedFreight || 0,
         r.landedCost,
         r.subtotal,
         r.paymentStatus,
@@ -850,8 +858,14 @@ export const RawMaterialPurchaseReportView: React.FC<RawMaterialPurchaseReportVi
                       <td className="py-2.5 px-3 text-slate-400 font-mono whitespace-nowrap">
                         {formatDate(row.date)}
                       </td>
-                      <td className="py-2.5 px-3 font-mono font-bold text-white whitespace-nowrap">
-                        {row.invoiceNumber}
+                      <td className="py-2.5 px-3 font-mono whitespace-nowrap">
+                        <div className="font-bold text-white">{row.invoiceNumber}</div>
+                        {row.tripNumber && (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-800/80 mt-0.5 font-sans font-medium">
+                            <Truck className="w-2.5 h-2.5" />
+                            <span>{row.tripNumber}</span>
+                          </span>
+                        )}
                       </td>
                       <td className="py-2.5 px-3 text-slate-200 whitespace-nowrap">
                         {row.supplierName}
@@ -868,8 +882,15 @@ export const RawMaterialPurchaseReportView: React.FC<RawMaterialPurchaseReportVi
                       <td className="py-2.5 px-3 text-right font-mono font-semibold text-emerald-400 whitespace-nowrap">
                         {formatPKR(row.unitCost)} <span className="text-[10px] text-slate-500">/{row.unit}</span>
                       </td>
-                      <td className="py-2.5 px-3 text-right font-mono text-cyan-300 whitespace-nowrap">
-                        {formatPKR(row.landedCost)} <span className="text-[10px] text-slate-500">/{row.unit}</span>
+                      <td className="py-2.5 px-3 text-right font-mono whitespace-nowrap">
+                        <div className="font-bold text-cyan-300">
+                          {formatPKR(row.landedCost)} <span className="text-[10px] text-slate-500">/{row.unit}</span>
+                        </div>
+                        {row.allocatedFreight && row.allocatedFreight > 0 ? (
+                          <div className="text-[10px] text-amber-400/90 font-sans font-medium">
+                            +{formatPKR(Number((row.allocatedFreight / (row.quantity || 1)).toFixed(2)))} freight
+                          </div>
+                        ) : null}
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono font-bold text-white whitespace-nowrap">
                         {formatPKR(row.subtotal)}
