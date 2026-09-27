@@ -1,15 +1,17 @@
-import { Sale, Purchase, Payment, Expense, Customer, Supplier } from '../types';
+import { Sale, Purchase, Payment, Expense, Customer, Supplier, SalesReturn } from '../types';
 
 export interface CustomerFinancialSummary {
   customerId: string;
   customerName: string;
   totalSales: number;
+  totalReturns: number;
   salesPaidOnInvoice: number;
   directAccountPayments: number;
   totalPaymentsCollected: number;
   outstandingReceivable: number;
   advanceBalance: number;
   salesCount: number;
+  returnsCount: number;
   paymentsCount: number;
   isArchived: boolean;
 }
@@ -37,6 +39,8 @@ export interface FinancialFilterOptions {
 
 export interface OverallFinancialMetrics {
   totalSalesRevenue: number;
+  grossSalesRevenue?: number;
+  totalSalesReturns?: number;
   
   // INFLOWS BREAKDOWN
   salesCashCollected: number;
@@ -53,7 +57,8 @@ export interface OverallFinancialMetrics {
   purchaseDisbursements: number;
   operatingExpenses: number;
   ownerWithdrawals: number;
-  totalDisbursements: number; // Sum of all Outflows: purchaseDisbursements + operatingExpenses + ownerWithdrawals
+  salesReturnRefunds?: number;
+  totalDisbursements: number; // Sum of all Outflows: purchaseDisbursements + operatingExpenses + ownerWithdrawals + salesReturnRefunds
   
   // NET CASH POSITION
   netCashPosition: number; // totalCashCollected - totalDisbursements
@@ -87,7 +92,8 @@ export const isDateInBounds = (dateStr?: string, startDate?: string, endDate?: s
 export const calculateCustomerFinancials = (
   customer: Customer,
   sales: Sale[],
-  payments: Payment[]
+  payments: Payment[],
+  salesReturns: SalesReturn[] = []
 ): CustomerFinancialSummary => {
   const custSales = sales.filter(s => s.customer_id === customer.id);
   const totalSales = Number(
@@ -97,11 +103,25 @@ export const calculateCustomerFinancials = (
     custSales.reduce((acc, s) => acc + (Number(s.amount_paid) || 0), 0).toFixed(2)
   );
 
+  // Sales Returns for this customer
+  const custReturns = (salesReturns || []).filter(r => r.customer_id === customer.id);
+  const totalReturns = Number(
+    custReturns.reduce((acc, r) => acc + (Number(r.total_amount) || 0), 0).toFixed(2)
+  );
+
+  // Net Invoiced = Total Sales - Total Returns
+  const netInvoiced = Math.max(0, Number((totalSales - totalReturns).toFixed(2)));
+
   // Get all customer payments (invoice-linked, balance settlements, and advance deposits)
   const custPayments = payments.filter(
     p =>
       p.customer_id === customer.id &&
       (p.related_to === 'sale' || p.related_to === 'customer_balance' || p.related_to === 'customer_advance')
+  );
+
+  // Cash refunds paid out to customer for returns (outflows)
+  const custCashRefunds = payments.filter(
+    p => p.customer_id === customer.id && p.related_to === 'sales_return_refund'
   );
 
   const directAccountPayments = Number(
@@ -115,11 +135,18 @@ export const calculateCustomerFinancials = (
     custPayments.reduce((acc, p) => acc + (Number(p.amount) || 0), 0).toFixed(2)
   );
 
+  const totalCashRefunds = Number(
+    custCashRefunds.reduce((acc, p) => acc + (Number(p.amount) || 0), 0).toFixed(2)
+  );
+
+  // Net payments retained by factory from this customer
+  const netPaymentsRetained = Math.max(0, Number((totalPaymentsCollected - totalCashRefunds).toFixed(2)));
+
   let outstandingReceivable = 0;
   let advanceBalance = 0;
 
-  if (custSales.length > 0 || custPayments.length > 0) {
-    const netDifference = Number((totalSales - totalPaymentsCollected).toFixed(2));
+  if (custSales.length > 0 || custPayments.length > 0 || custReturns.length > 0) {
+    const netDifference = Number((netInvoiced - netPaymentsRetained).toFixed(2));
     if (netDifference > 0) {
       outstandingReceivable = netDifference;
       advanceBalance = 0;
@@ -143,12 +170,14 @@ export const calculateCustomerFinancials = (
     customerId: customer.id,
     customerName: customer.name,
     totalSales,
+    totalReturns,
     salesPaidOnInvoice,
     directAccountPayments,
     totalPaymentsCollected,
     outstandingReceivable,
     advanceBalance,
     salesCount: custSales.length,
+    returnsCount: custReturns.length,
     paymentsCount: custPayments.length,
     isArchived: Boolean(customer.is_archived),
   };
@@ -221,6 +250,7 @@ export const calculateFinancialMetrics = (data: {
   expenses: Expense[];
   customers: Customer[];
   suppliers: Supplier[];
+  salesReturns?: SalesReturn[];
   filters?: FinancialFilterOptions;
 }): OverallFinancialMetrics => {
   const {
@@ -230,6 +260,7 @@ export const calculateFinancialMetrics = (data: {
     expenses,
     customers,
     suppliers,
+    salesReturns = [],
     filters = {},
   } = data;
 
@@ -246,9 +277,27 @@ export const calculateFinancialMetrics = (data: {
     return dateMatch && custMatch && prodMatch;
   });
 
-  const totalSalesRevenue = Number(
+  const grossSalesRevenue = Number(
     filteredSales.reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0).toFixed(2)
   );
+
+  // 1B. Filter Sales Returns
+  const filteredReturns = salesReturns.filter(r => {
+    const dateMatch = isDateInBounds(r.date, startDate, endDate);
+    const custMatch = !customerId || customerId === 'all' || r.customer_id === customerId;
+    const prodMatch =
+      !productId ||
+      productId === 'all' ||
+      r.items.some(i => i.product_id === productId || i.raw_material_id === productId);
+    return dateMatch && custMatch && prodMatch;
+  });
+
+  const totalSalesReturns = Number(
+    filteredReturns.reduce((acc, r) => acc + (Number(r.total_amount) || 0), 0).toFixed(2)
+  );
+
+  // Net Sales Revenue after returns
+  const totalSalesRevenue = Math.max(0, Number((grossSalesRevenue - totalSalesReturns).toFixed(2)));
 
   // 2. Filter Purchases
   const filteredPurchases = purchases.filter(p => {
@@ -263,7 +312,7 @@ export const calculateFinancialMetrics = (data: {
 
   // 3. Customer Summaries, Receivables & Advances
   const activeCustomers = customers.filter(c => !c.is_archived || c.id === customerId);
-  const customerSummaries = activeCustomers.map(c => calculateCustomerFinancials(c, sales, payments));
+  const customerSummaries = activeCustomers.map(c => calculateCustomerFinancials(c, sales, payments, salesReturns));
 
   // Inflow Breakdown
   let capitalInjected = 0;
@@ -289,6 +338,14 @@ export const calculateFinancialMetrics = (data: {
   ownerWithdrawals = Number(
     boundedPayments
       .filter(p => p.related_to === 'owner_withdrawal')
+      .reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
+      .toFixed(2)
+  );
+
+  // Sales Return Cash Refunds (Cash Out)
+  const salesReturnRefunds = Number(
+    boundedPayments
+      .filter(p => p.related_to === 'sales_return_refund' && (!customerId || customerId === 'all' || p.customer_id === customerId))
       .reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
       .toFixed(2)
   );
@@ -373,9 +430,9 @@ export const calculateFinancialMetrics = (data: {
     filteredExpenses.reduce((acc, e) => acc + (Number(e.amount) || 0), 0).toFixed(2)
   );
 
-  // Total Disbursements = Purchases Paid + Operating Expenses + Owner Withdrawals
+  // Total Disbursements = Purchases Paid + Operating Expenses + Owner Withdrawals + Sales Return Cash Refunds
   const totalDisbursements = Number(
-    (purchaseDisbursements + operatingExpenses + ownerWithdrawals).toFixed(2)
+    (purchaseDisbursements + operatingExpenses + ownerWithdrawals + salesReturnRefunds).toFixed(2)
   );
 
   // Net Cash Position = Total Cash Collected - Total Disbursements
@@ -385,6 +442,8 @@ export const calculateFinancialMetrics = (data: {
 
   return {
     totalSalesRevenue,
+    grossSalesRevenue,
+    totalSalesReturns,
     salesCashCollected,
     capitalInjected,
     customerAdvancesReceived,
@@ -395,6 +454,7 @@ export const calculateFinancialMetrics = (data: {
     purchaseDisbursements,
     operatingExpenses,
     ownerWithdrawals,
+    salesReturnRefunds,
     totalDisbursements,
     netCashPosition,
     netCashflow: netCashPosition,

@@ -206,6 +206,50 @@ export interface Sale {
   created_at?: string;
 }
 
+// ==============================================================================
+// 2B. SALES RETURNS & CREDIT NOTES ENTITY
+// ==============================================================================
+export type SalesReturnRefundOption = 'reduce_receivable' | 'cash_refund' | 'customer_advance';
+
+export interface SalesReturnItem {
+  id?: string;
+  return_id?: string;
+  sale_item_id?: string;
+  item_type?: 'finished_product' | 'raw_material';
+  product_id?: string;
+  raw_material_id?: string;
+  product_name: string;
+  unit?: string;
+  pack_size_id?: string;
+  pack_size_name?: string;
+  size_in_base_unit?: number;
+  quantity: number; // returned display count (e.g. 2 cans, or 10 kg)
+  base_quantity: number; // base unit qty to return to inventory (e.g. 10 L)
+  unit_cost: number; // original unit cost for reversing COGS
+  unit_price: number; // unit selling price at which it was invoiced
+  subtotal: number; // quantity * unit_price
+}
+
+export interface SalesReturn {
+  id: string;
+  credit_note_number: string; // e.g. "CRN-202609-001"
+  sale_id: string; // linked original invoice ID
+  invoice_number: string; // original invoice number e.g. "INV-..."
+  customer_id?: string;
+  customer_name: string;
+  date: string;
+  items: SalesReturnItem[];
+  total_amount: number; // total value of returned items
+  reason?: string; // e.g. "Damaged Goods", "Wrong Item Delivered", "Quality Defect", "Customer Changed Mind", "Other"
+  notes?: string;
+  refund_method: SalesReturnRefundOption; // 'reduce_receivable' | 'cash_refund' | 'customer_advance'
+  payment_method?: PaymentMethod; // applicable if cash_refund
+  refund_payment_id?: string; // ID of the cash refund payment voucher if cash_refund
+  created_by?: string;
+  created_by_name?: string;
+  created_at?: string;
+}
+
 export interface PurchaseItem {
   id?: string;
   item_type?: 'raw_material' | 'finished_product' | 'general';
@@ -334,7 +378,7 @@ export interface RecurringExpense {
 
 export interface Payment {
   id: string;
-  related_to: 'sale' | 'purchase' | 'customer_balance' | 'supplier_balance' | 'expense' | 'capital_injection' | 'owner_withdrawal' | 'customer_advance';
+  related_to: 'sale' | 'purchase' | 'customer_balance' | 'supplier_balance' | 'expense' | 'capital_injection' | 'owner_withdrawal' | 'customer_advance' | 'sales_return_refund';
   reference_id?: string;
   reference_no?: string;
   customer_id?: string;
@@ -355,7 +399,7 @@ export interface Payment {
 // ==============================================================================
 export interface DeletionAuditLog {
   id: string;
-  entity_type: 'customer' | 'supplier' | 'product' | 'raw_material' | 'sale' | 'purchase' | 'formulation' | 'staff' | 'production_batch' | 'expense';
+  entity_type: 'customer' | 'supplier' | 'product' | 'raw_material' | 'sale' | 'purchase' | 'formulation' | 'staff' | 'production_batch' | 'expense' | 'sales_return';
   entity_id: string;
   entity_title: string;
   action_type: 'deleted' | 'archived' | 'reversed_and_deleted' | 'deactivated';

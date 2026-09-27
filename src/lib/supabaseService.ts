@@ -16,7 +16,9 @@ import {
   Expense,
   RecurringExpense,
   PurchaseTrip,
-  PurchaseTripItem
+  PurchaseTripItem,
+  SalesReturn,
+  SalesReturnItem
 } from '../types';
 import { ensureUUID, isValidUUID } from '../utils/uuid';
 
@@ -52,7 +54,8 @@ export const supabaseService = {
         profRes,
         expRes,
         recExpRes,
-        tripRes
+        tripRes,
+        returnsRes
       ] = await Promise.all([
         supabase.from('products').select('*').order('created_at', { ascending: false }),
         supabase.from('customers').select('*').order('created_at', { ascending: false }),
@@ -69,7 +72,8 @@ export const supabaseService = {
         supabase.from('profiles').select('*').order('created_at', { ascending: false }),
         Promise.resolve(supabase.from('expenses').select('*').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
         Promise.resolve(supabase.from('recurring_expenses').select('*').order('created_at', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
-        Promise.resolve(supabase.from('purchase_trips').select('*, purchase_trip_items(*)').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any))
+        Promise.resolve(supabase.from('purchase_trips').select('*, purchase_trip_items(*)').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
+        Promise.resolve(supabase.from('sales_returns').select('*, sales_return_items(*)').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any))
       ]);
 
 
@@ -224,6 +228,44 @@ export const supabaseService = {
         };
       });
 
+      // 7B. Normalized Sales Returns
+      const normalizedSalesReturns: SalesReturn[] = ((returnsRes as any)?.data || []).map((ret: any) => ({
+        id: ret.id,
+        credit_note_number: ret.credit_note_number,
+        sale_id: ret.sale_id,
+        invoice_number: ret.invoice_number,
+        customer_id: ret.customer_id,
+        customer_name: ret.customer_name || (ret.customer_id ? custMap.get(ret.customer_id) || 'Customer' : 'Customer'),
+        date: ret.date,
+        total_amount: Number(ret.total_amount || 0),
+        reason: ret.reason || '',
+        notes: ret.notes || '',
+        refund_method: ret.refund_method || 'reduce_receivable',
+        payment_method: ret.payment_method,
+        refund_payment_id: ret.refund_payment_id,
+        created_by: ret.created_by,
+        created_by_name: ret.created_by_name,
+        created_at: ret.created_at,
+        items: ((ret.sales_return_items || []) as any[]).map((item: any) => ({
+          id: item.id,
+          return_id: item.return_id,
+          sale_item_id: item.sale_item_id,
+          item_type: item.item_type || 'finished_product',
+          product_id: item.product_id,
+          raw_material_id: item.raw_material_id,
+          product_name: item.product_name,
+          unit: item.unit,
+          pack_size_id: item.pack_size_id,
+          pack_size_name: item.pack_size_name,
+          size_in_base_unit: Number(item.size_in_base_unit || 1),
+          quantity: Number(item.quantity || 1),
+          base_quantity: Number(item.base_quantity || item.quantity || 1),
+          unit_cost: Number(item.unit_cost || 0),
+          unit_price: Number(item.unit_price || 0),
+          subtotal: Number(item.subtotal || 0),
+        }))
+      }));
+
       return {
         products: (prodRes.data as Product[]) || [],
         customers: (custRes.data as Customer[]) || [],
@@ -232,6 +274,7 @@ export const supabaseService = {
         formulations: (normalizedFormulations as ProductFormulation[]) || [],
         productionBatches: (normalizedBatches as ProductionBatch[]) || [],
         sales: (normalizedSales as Sale[]) || [],
+        salesReturns: normalizedSalesReturns,
         purchases: (normalizedPurchases as Purchase[]) || [],
         payments: (normalizedPayments as Payment[]) || [],
         stockMovements: (normalizedStockMovements as StockMovement[]) || [],
@@ -729,6 +772,83 @@ export const supabaseService = {
     if (error) {
       console.error('Supabase deleteSale error:', error);
       throw new Error(`Sale deletion failed: ${error.message}`);
+    }
+  },
+
+  // ============================================================================
+  // SALES RETURNS & CREDIT NOTES
+  // ============================================================================
+  async upsertSalesReturn(salesReturn: SalesReturn): Promise<SalesReturn> {
+    if (!isSupabaseConfigured || !supabase) return salesReturn;
+    assertOnline();
+
+    const validId = ensureUUID(salesReturn.id);
+    salesReturn.id = validId;
+
+    const payload = {
+      id: validId,
+      credit_note_number: salesReturn.credit_note_number,
+      sale_id: ensureUUID(salesReturn.sale_id),
+      invoice_number: salesReturn.invoice_number,
+      customer_id: isValidUUID(salesReturn.customer_id) ? salesReturn.customer_id : null,
+      customer_name: salesReturn.customer_name,
+      date: salesReturn.date || new Date().toISOString(),
+      total_amount: Number(salesReturn.total_amount || 0),
+      reason: salesReturn.reason || '',
+      notes: salesReturn.notes || '',
+      refund_method: salesReturn.refund_method,
+      payment_method: salesReturn.payment_method || null,
+      refund_payment_id: isValidUUID(salesReturn.refund_payment_id) ? salesReturn.refund_payment_id : null,
+      created_by: isValidUUID(salesReturn.created_by) ? salesReturn.created_by : null,
+      created_by_name: salesReturn.created_by_name || null,
+      created_at: salesReturn.created_at || new Date().toISOString()
+    };
+
+    try {
+      const { error: retError } = await supabase.from('sales_returns').upsert(payload);
+      if (retError) {
+        console.warn('Supabase upsertSalesReturn warning (falling back gracefully):', retError);
+      } else if (salesReturn.items && salesReturn.items.length > 0) {
+        await supabase.from('sales_return_items').delete().eq('return_id', validId);
+        const itemsToInsert = salesReturn.items.map(item => ({
+          id: ensureUUID(item.id),
+          return_id: validId,
+          sale_item_id: isValidUUID(item.sale_item_id) ? item.sale_item_id : null,
+          item_type: item.item_type || 'finished_product',
+          product_id: (!item.raw_material_id && isValidUUID(item.product_id)) ? item.product_id : null,
+          raw_material_id: isValidUUID(item.raw_material_id) ? item.raw_material_id : null,
+          product_name: item.product_name,
+          unit: item.unit || 'L',
+          pack_size_id: isValidUUID(item.pack_size_id) ? item.pack_size_id : null,
+          pack_size_name: item.pack_size_name || null,
+          size_in_base_unit: Number(item.size_in_base_unit || 1),
+          quantity: Number(item.quantity || 1),
+          base_quantity: Number(item.base_quantity || item.quantity || 1),
+          unit_cost: Number(item.unit_cost || 0),
+          unit_price: Number(item.unit_price || 0),
+          subtotal: Number(item.subtotal || 0)
+        }));
+        await supabase.from('sales_return_items').insert(itemsToInsert);
+      }
+    } catch (err) {
+      console.warn('upsertSalesReturn error:', err);
+    }
+
+    return salesReturn;
+  },
+
+  async deleteSalesReturn(id: string): Promise<void> {
+    if (!isSupabaseConfigured || !supabase || !isValidUUID(id)) return;
+    assertOnline();
+
+    try {
+      await supabase.from('sales_return_items').delete().eq('return_id', id);
+      const { error } = await supabase.from('sales_returns').delete().eq('id', id);
+      if (error) {
+        console.warn('Supabase deleteSalesReturn warning:', error);
+      }
+    } catch (err) {
+      console.warn('deleteSalesReturn error:', err);
     }
   },
 

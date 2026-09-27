@@ -36,6 +36,7 @@ export const PaymentsModule: React.FC = () => {
     sales, 
     purchases, 
     expenses, 
+    salesReturns,
     recordPayment,
     recordCapitalInjection,
     recordOwnerWithdrawal,
@@ -339,7 +340,7 @@ export const PaymentsModule: React.FC = () => {
     const matchesType = 
       typeFilter === 'all' || 
       (typeFilter === 'inflow' && (p.related_to === 'sale' || p.related_to === 'customer_balance' || p.related_to === 'capital_injection' || p.related_to === 'customer_advance')) ||
-      (typeFilter === 'outflow' && (p.related_to === 'purchase' || p.related_to === 'supplier_balance' || p.related_to === 'expense' || p.related_to === 'owner_withdrawal')) ||
+      (typeFilter === 'outflow' && (p.related_to === 'purchase' || p.related_to === 'supplier_balance' || p.related_to === 'expense' || p.related_to === 'owner_withdrawal' || p.related_to === 'sales_return_refund')) ||
       (typeFilter === 'capital' && p.related_to === 'capital_injection') ||
       (typeFilter === 'drawings' && p.related_to === 'owner_withdrawal') ||
       (typeFilter === 'advance' && p.related_to === 'customer_advance') ||
@@ -401,6 +402,33 @@ export const PaymentsModule: React.FC = () => {
         credit: pay.amount,
         balance: 0,
       });
+    });
+
+    // Get all sales returns for this customer
+    const custReturns = (salesReturns || []).filter(r => r.customer_id === ledgerCustomerId);
+    custReturns.forEach(ret => {
+      const itemsSummary = ret.items.map(i => `${i.quantity}x ${i.product_name}`).join(', ');
+      rows.push({
+        date: ret.date,
+        ref: ret.credit_note_number,
+        description: `Sales Return — Invoice #${ret.invoice_number} (${itemsSummary || 'Items Returned'})${ret.reason ? ` [${ret.reason}]` : ''} -PKR ${formatPKR(ret.total_amount)}`,
+        method: ret.refund_method === 'cash_refund' ? (ret.payment_method || 'Cash Refund') : (ret.refund_method === 'customer_advance' ? 'Advance Credit' : 'Credit Note'),
+        debit: 0,
+        credit: ret.total_amount,
+        balance: 0,
+      });
+
+      if (ret.refund_method === 'cash_refund') {
+        rows.push({
+          date: ret.date,
+          ref: `${ret.credit_note_number} (Refund)`,
+          description: `Cash refund paid out to customer for ${ret.credit_note_number}`,
+          method: ret.payment_method || 'cash',
+          debit: ret.total_amount,
+          credit: 0,
+          balance: 0,
+        });
+      }
     });
 
     // Sort chronologically ascending to calculate running balance
@@ -754,6 +782,7 @@ export const PaymentsModule: React.FC = () => {
                       const isCapital = p.related_to === 'capital_injection';
                       const isWithdrawal = p.related_to === 'owner_withdrawal';
                       const isAdvance = p.related_to === 'customer_advance';
+                      const isReturnRefund = p.related_to === 'sales_return_refund';
                       const isInflow = p.related_to === 'sale' || p.related_to === 'customer_balance' || isCapital || isAdvance;
                       const isExpense = p.related_to === 'expense';
 
@@ -763,6 +792,8 @@ export const PaymentsModule: React.FC = () => {
                         ? 'Owner Drawings (Personal Withdrawal)'
                         : isAdvance
                         ? `${p.customer_name || 'Customer'} (Advance Deposit)`
+                        : isReturnRefund
+                        ? `${p.customer_name || 'Customer'} (Sales Return Cash Refund)`
                         : isExpense 
                         ? `Overhead: ${p.reference_no || 'Expense'}` 
                         : (p.customer_name || p.supplier_name || 'Walk-in Retail');
@@ -773,6 +804,8 @@ export const PaymentsModule: React.FC = () => {
                         ? 'amber' 
                         : isAdvance 
                         ? 'blue' 
+                        : isReturnRefund
+                        ? 'rose'
                         : isExpense 
                         ? 'amber' 
                         : (isInflow ? 'emerald' : 'rose');
@@ -783,6 +816,8 @@ export const PaymentsModule: React.FC = () => {
                         ? 'Drawings (-)' 
                         : isAdvance 
                         ? 'Advance (+)' 
+                        : isReturnRefund
+                        ? 'Return Refund (-)'
                         : isExpense 
                         ? 'Expense (-)' 
                         : (isInflow ? 'Receipt (+)' : 'Disbursement (-)');

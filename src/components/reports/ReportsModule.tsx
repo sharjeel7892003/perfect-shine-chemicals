@@ -52,7 +52,8 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
     payments,
     expenses,
     productionBatches,
-    rawMaterials
+    rawMaterials,
+    salesReturns = []
   } = useApp();
   const { isOwner, allUsers } = useAuth();
 
@@ -132,6 +133,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
     expenses,
     customers,
     suppliers,
+    salesReturns,
     filters: {
       startDate,
       endDate,
@@ -178,6 +180,49 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
     });
   });
 
+  // Filter Sales Returns for selected period, customer, and product
+  const filteredReturns = (salesReturns || []).filter(r => {
+    const dateMatch = isDateInRange(r.date);
+    const customerMatch = selectedCustomerFilter === 'all' || r.customer_id === selectedCustomerFilter;
+    const productMatch = selectedProductFilter === 'all' || r.items.some(i => i.product_id === selectedProductFilter || i.raw_material_id === selectedProductFilter);
+    return dateMatch && customerMatch && productMatch;
+  });
+
+  const totalReturnsAmount = filteredReturns.reduce((acc, r) => acc + (Number(r.total_amount) || 0), 0);
+  const totalReturnedUnits = filteredReturns.reduce((acc, r) => acc + r.items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0), 0);
+
+  const returnsItemizedRows: {
+    creditNoteNo: string;
+    date: string;
+    originalInvoiceNo: string;
+    customer: string;
+    productName: string;
+    quantity: number;
+    unitPrice: number;
+    subtotal: number;
+    reason?: string;
+    refundOption: string;
+  }[] = [];
+
+  filteredReturns.forEach(r => {
+    r.items.forEach(item => {
+      if (selectedProductFilter === 'all' || item.product_id === selectedProductFilter || item.raw_material_id === selectedProductFilter) {
+        returnsItemizedRows.push({
+          creditNoteNo: r.credit_note_number,
+          date: r.date,
+          originalInvoiceNo: r.invoice_number,
+          customer: r.customer_name,
+          productName: item.product_name,
+          quantity: item.quantity,
+          unitPrice: item.unit_price,
+          subtotal: item.subtotal,
+          reason: r.reason,
+          refundOption: r.refund_method,
+        });
+      }
+    });
+  });
+
   // ================= 2. PURCHASE REPORT DATA =================
   const filteredPurchases = purchases.filter(p => {
     const dateMatch = isDateInRange(p.date);
@@ -189,12 +234,12 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
   const totalPurchasePaid = filteredPurchases.reduce((acc, p) => acc + p.amount_paid, 0);
 
   // ================= 3. PROFIT & LOSS REPORT DATA =================
-  let profitRevenue = 0;
-  let profitCOGS = 0;
+  let grossBilledSales = 0;
+  let grossCOGS = 0;
   const productProfitMap: { [key: string]: { name: string; qtySold: number; revenue: number; cost: number; profit: number } } = {};
 
   filteredSales.forEach(sale => {
-    profitRevenue += sale.total_amount;
+    grossBilledSales += sale.total_amount;
     sale.items.forEach(item => {
       let unitCost = Number(item.unit_cost) || 0;
       if (unitCost <= 0) {
@@ -207,7 +252,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
         }
       }
       const itemCost = unitCost * item.quantity;
-      profitCOGS += itemCost;
+      grossCOGS += itemCost;
 
       if (!productProfitMap[item.product_name]) {
         productProfitMap[item.product_name] = {
@@ -226,6 +271,37 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
     });
   });
 
+  // Reversal of revenue and cost for sales returns
+  let returnRevenue = 0;
+  let returnCOGS = 0;
+
+  filteredReturns.forEach(r => {
+    r.items.forEach(item => {
+      returnRevenue += item.subtotal;
+      let unitCost = Number(item.unit_cost) || 0;
+      if (unitCost <= 0) {
+        if (item.raw_material_id) {
+          const rm = rawMaterials.find(m => m.id === item.raw_material_id);
+          unitCost = rm ? Number(rm.cost_per_unit || 0) : 0;
+        } else {
+          const prod = products.find(p => p.id === item.product_id);
+          unitCost = prod ? Number(prod.cost_price || 0) * (item.size_in_base_unit || 1) : 0;
+        }
+      }
+      const itemCost = unitCost * (item.base_quantity || item.quantity);
+      returnCOGS += itemCost;
+
+      if (productProfitMap[item.product_name]) {
+        productProfitMap[item.product_name].qtySold -= item.quantity;
+        productProfitMap[item.product_name].revenue -= item.subtotal;
+        productProfitMap[item.product_name].cost -= itemCost;
+        productProfitMap[item.product_name].profit -= (item.subtotal - itemCost);
+      }
+    });
+  });
+
+  const profitRevenue = Math.max(0, grossBilledSales - returnRevenue);
+  const profitCOGS = Math.max(0, grossCOGS - returnCOGS);
   const estimatedGrossProfit = profitRevenue - profitCOGS;
   const grossMarginPercent = profitRevenue > 0 ? ((estimatedGrossProfit / profitRevenue) * 100).toFixed(1) : '0';
 
@@ -506,9 +582,10 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
         exportToCSV(`PSC_Raw_Material_Consumption_${dateRangeLabel}`, headers, rows);
       }
     } else if (activeReport === 'sales') {
-      const headers = ['Invoice No', 'Date', 'Customer', 'Sold By', 'Product', 'Quantity', 'Unit Price (PKR)', 'Subtotal (PKR)'];
-      const rows = salesItemizedRows.map(r => [r.invoiceNo, r.date.slice(0, 10), r.customer, r.soldBy, r.productName, r.quantity, r.unitPrice, r.subtotal]);
-      exportToCSV(`PSC_Sales_Report_${dateRangeLabel}`, headers, rows);
+      const headers = ['Record Type', 'Doc Number', 'Date', 'Ref Invoice', 'Customer', 'Sold By / Reason', 'Product', 'Quantity', 'Unit Rate (PKR)', 'Net Subtotal (PKR)', 'Settlement'];
+      const salesRows = salesItemizedRows.map(r => ['Sale Invoice', r.invoiceNo, r.date.slice(0, 10), '-', r.customer, r.soldBy, r.productName, r.quantity, r.unitPrice, r.subtotal, 'Standard']);
+      const returnRows = returnsItemizedRows.map(r => ['Credit Note', r.creditNoteNo, r.date.slice(0, 10), r.originalInvoiceNo, r.customer, r.reason || 'Return', r.productName, -r.quantity, r.unitPrice, -r.subtotal, r.refundOption]);
+      exportToCSV(`PSC_Sales_Report_${dateRangeLabel}`, headers, [...salesRows, ...returnRows]);
     } else if (activeReport === 'purchases') {
       const headers = ['PO / Invoice No', 'Date', 'Supplier', 'Payment Status', 'Payment Method', 'Total Amount (PKR)', 'Amount Paid (PKR)'];
       const rows = filteredPurchases.map(p => [p.invoice_number, p.date.slice(0, 10), p.supplier_name, p.payment_status, p.payment_method, p.total_amount, p.amount_paid]);
@@ -922,15 +999,30 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
         <div className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
             <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
-              <span className="text-xs font-semibold text-slate-400 uppercase">Total Sales Revenue</span>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-400 uppercase">Net Sales Revenue</span>
+                {totalReturnsAmount > 0 && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                    Returns Deducted
+                  </span>
+                )}
+              </div>
               <p className="text-xl font-black text-emerald-400 mt-1 font-mono">{formatPKR(totalSalesRevenue)}</p>
-              <p className="text-[11px] text-slate-500 mt-0.5">{filteredSales.length} Orders Invoiced</p>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                {totalReturnsAmount > 0 ? (
+                  <span>Gross {formatPKR(grossBilledSales)} &bull; Returns -{formatPKR(totalReturnsAmount)}</span>
+                ) : (
+                  <span>{filteredSales.length} Orders Invoiced</span>
+                )}
+              </p>
             </div>
 
             <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
-              <span className="text-xs font-semibold text-slate-400 uppercase">Total Quantity Sold</span>
-              <p className="text-xl font-black text-white mt-1 font-mono">{totalSalesUnits} Units</p>
-              <p className="text-[11px] text-slate-500 mt-0.5">Across chemical catalog</p>
+              <span className="text-xs font-semibold text-slate-400 uppercase">Net Quantity Sold</span>
+              <p className="text-xl font-black text-white mt-1 font-mono">{totalSalesUnits - totalReturnedUnits} Units</p>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                {totalReturnedUnits > 0 ? `${totalSalesUnits} sold &bull; ${totalReturnedUnits} returned` : 'Across chemical catalog'}
+              </p>
             </div>
 
             <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
@@ -1001,6 +1093,70 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
               </table>
             </div>
           </div>
+
+          {/* Sales Returns & Credit Notes Deductions Table */}
+          {returnsItemizedRows.length > 0 && (
+            <div className="rounded-2xl bg-slate-900 border border-amber-500/20 p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-amber-400 uppercase tracking-wider flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                    Sales Returns & Credit Notes Deductions
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Customer returns deducted from gross revenue and restored into warehouse inventory
+                  </p>
+                </div>
+                <div className="text-right">
+                  <span className="text-xs font-mono font-bold text-amber-400">
+                    Total Returns: -{formatPKR(totalReturnsAmount)}
+                  </span>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+                      <th className="py-2.5 px-3">Date</th>
+                      <th className="py-2.5 px-3">Credit Note #</th>
+                      <th className="py-2.5 px-3">Original Invoice</th>
+                      <th className="py-2.5 px-3">Customer</th>
+                      <th className="py-2.5 px-3">Returned Product</th>
+                      <th className="py-2.5 px-3 text-center">Qty Returned</th>
+                      <th className="py-2.5 px-3 text-right">Unit Rate</th>
+                      <th className="py-2.5 px-3 text-right">Deduction (PKR)</th>
+                      <th className="py-2.5 px-3 text-center">Settlement</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60">
+                    {returnsItemizedRows.map((ret, idx) => (
+                      <tr key={idx} className="hover:bg-slate-800/40">
+                        <td className="py-2.5 px-3 text-slate-400 font-mono">{formatDate(ret.date)}</td>
+                        <td className="py-2.5 px-3 font-mono font-bold text-amber-400">{ret.creditNoteNo}</td>
+                        <td className="py-2.5 px-3 font-mono text-slate-300">{ret.originalInvoiceNo}</td>
+                        <td className="py-2.5 px-3 text-slate-200">{ret.customer}</td>
+                        <td className="py-2.5 px-3 font-medium text-white">{ret.productName}</td>
+                        <td className="py-2.5 px-3 text-center font-mono font-bold text-amber-300">+{ret.quantity}</td>
+                        <td className="py-2.5 px-3 text-right font-mono text-slate-400">{formatPKR(ret.unitPrice)}</td>
+                        <td className="py-2.5 px-3 text-right font-mono font-bold text-rose-400">-{formatPKR(ret.subtotal)}</td>
+                        <td className="py-2.5 px-3 text-center">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border ${
+                            ret.refundOption === 'reduce_receivable'
+                              ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                              : ret.refundOption === 'cash_refund'
+                              ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                              : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                          }`}>
+                            {ret.refundOption === 'reduce_receivable' ? 'Balance Reduced' : ret.refundOption === 'cash_refund' ? 'Cash Refund' : 'Store Advance'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1083,16 +1239,20 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
             {/* 1. Revenue */}
             <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">1. Total Revenue</span>
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">1. Net Revenue</span>
               <p className="text-xl font-black text-white mt-1.5 font-mono">{formatPKR(profitRevenue)}</p>
-              <p className="text-[11px] text-slate-500 mt-0.5">{filteredSales.length} Sales Invoices</p>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                {returnRevenue > 0 ? `Gross ${formatPKR(grossBilledSales)} (-${formatPKR(returnRevenue)} returns)` : `${filteredSales.length} Sales Invoices`}
+              </p>
             </div>
 
             {/* 2. COGS */}
             <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">2. Less: COGS</span>
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">2. Less: COGS (Net)</span>
               <p className="text-xl font-black text-slate-300 mt-1.5 font-mono">- {formatPKR(profitCOGS)}</p>
-              <p className="text-[11px] text-slate-500 mt-0.5">Raw chemicals & bottles</p>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                {returnCOGS > 0 ? `Gross cost -${formatPKR(grossCOGS)} (+${formatPKR(returnCOGS)} restocked)` : 'Raw chemicals & bottles'}
+              </p>
             </div>
 
             {/* 3. Gross Profit */}
@@ -1157,25 +1317,37 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
               {/* SECTION A: REVENUE */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between font-bold text-white uppercase tracking-wider text-[11px] bg-slate-800/60 p-2.5 rounded-xl">
-                  <span>A. Operating Revenue (Sales Turnover)</span>
+                  <span>A. Operating Revenue (Net Sales Turnover)</span>
                   <span className="font-mono text-emerald-400 font-black">{formatPKR(profitRevenue)}</span>
                 </div>
                 <div className="px-4 py-1.5 flex items-center justify-between text-slate-400">
                   <span className="pl-3">• Gross Invoiced Billed Sales ({filteredSales.length} invoices)</span>
-                  <span className="font-mono text-slate-300">{formatPKR(profitRevenue)}</span>
+                  <span className="font-mono text-slate-300">{formatPKR(grossBilledSales)}</span>
                 </div>
+                {returnRevenue > 0 && (
+                  <div className="px-4 py-1.5 flex items-center justify-between text-amber-400">
+                    <span className="pl-3">• Less: Sales Returns & Credit Notes ({filteredReturns.length} credit notes)</span>
+                    <span className="font-mono text-amber-400">- {formatPKR(returnRevenue)}</span>
+                  </div>
+                )}
               </div>
 
               {/* SECTION B: COST OF GOODS SOLD */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between font-bold text-white uppercase tracking-wider text-[11px] bg-slate-800/60 p-2.5 rounded-xl">
-                  <span>B. Cost of Goods Sold (COGS)</span>
+                  <span>B. Cost of Goods Sold (COGS - Net of Returns)</span>
                   <span className="font-mono text-rose-400 font-black">- {formatPKR(profitCOGS)}</span>
                 </div>
                 <div className="px-4 py-1.5 flex items-center justify-between text-slate-400">
                   <span className="pl-3">• Direct Chemical Raw Materials & Packaging Consumed</span>
-                  <span className="font-mono text-slate-300">- {formatPKR(profitCOGS)}</span>
+                  <span className="font-mono text-slate-300">- {formatPKR(grossCOGS)}</span>
                 </div>
+                {returnCOGS > 0 && (
+                  <div className="px-4 py-1.5 flex items-center justify-between text-emerald-400">
+                    <span className="pl-3">• Less: Reversal of Cost for Returned Finished Goods / Raw Materials</span>
+                    <span className="font-mono text-emerald-400">+ {formatPKR(returnCOGS)}</span>
+                  </div>
+                )}
               </div>
 
               {/* GROSS PROFIT SUB-TOTAL */}

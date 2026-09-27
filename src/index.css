@@ -44,12 +44,14 @@
     visibility: hidden;
   }
   #printable-invoice, #printable-invoice *,
+  #printable-credit-note, #printable-credit-note *,
   #printable-report, #printable-report *,
   #printable-ledger, #printable-ledger *,
   #printable-statement, #printable-statement * {
     visibility: visible;
   }
   #printable-invoice,
+  #printable-credit-note,
   #printable-report,
   #printable-ledger,
   #printable-statement {

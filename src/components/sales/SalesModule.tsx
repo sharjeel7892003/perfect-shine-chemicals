@@ -18,20 +18,23 @@ import {
   ChevronDown,
   AlertTriangle,
   Loader2,
-  UserCheck
+  UserCheck,
+  RotateCcw
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
-import { Sale, SaleItem, PaymentMethod, PaymentStatus, Product, PackSize } from '../../types';
-import { formatPKR, formatDate, getTodayDateString, formatSelectedDateToIso } from '../../utils/formatters';
+import { Sale, SaleItem, PaymentMethod, PaymentStatus, Product, PackSize, SalesReturn } from '../../types';
+import { formatPKR, formatDate, formatDateTime, getTodayDateString, formatSelectedDateToIso } from '../../utils/formatters';
 import { getRateDifferenceInfo, saleHasCustomRates } from '../../utils/pricing';
 import { calculateCustomerFinancials } from '../../utils/financialEngine';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { InvoiceModal } from './InvoiceModal';
+import { CreditNoteModal } from './CreditNoteModal';
+import { ProcessReturnModal } from './ProcessReturnModal';
 
 export const SalesModule: React.FC = () => {
-  const { products, rawMaterials, customers, sales, payments, createSale, deleteSaleInvoice } = useApp();
+  const { products, rawMaterials, customers, sales, salesReturns, payments, createSale, deleteSaleInvoice, deleteSalesReturnRecord } = useApp();
   const { currentUser, allUsers, isOwner, canCreateSale } = useAuth();
 
   // Dynamically resolve staff member name by looking up salesperson_id in profiles
@@ -43,9 +46,14 @@ export const SalesModule: React.FC = () => {
     return sale.salesperson_name || 'Staff';
   };
 
-  const [activeSubTab, setActiveSubTab] = useState<'pos' | 'history'>('pos');
+  const [activeSubTab, setActiveSubTab] = useState<'pos' | 'history' | 'returns'>('pos');
   const [selectedInvoice, setSelectedInvoice] = useState<Sale | null>(null);
   const [deleteConfirmSale, setDeleteConfirmSale] = useState<Sale | null>(null);
+  const [isReturnModalOpen, setIsReturnModalOpen] = useState(false);
+  const [returnTargetSale, setReturnTargetSale] = useState<Sale | null>(null);
+  const [selectedCreditNote, setSelectedCreditNote] = useState<SalesReturn | null>(null);
+  const [deleteConfirmReturn, setDeleteConfirmReturn] = useState<SalesReturn | null>(null);
+  const [returnsSearch, setReturnsSearch] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -380,6 +388,20 @@ export const SalesModule: React.FC = () => {
     }
   };
 
+  const handleConfirmDeleteReturn = async () => {
+    if (!deleteConfirmReturn) return;
+    setIsDeleting(true);
+    try {
+      const res = await deleteSalesReturnRecord(deleteConfirmReturn.id, currentUser || { id: 'admin', name: 'Admin', role: 'owner' } as any);
+      alert(res.message);
+      setDeleteConfirmReturn(null);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to reverse sales return');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   // Filter products in POS (Only active & non-archived)
   const filteredProducts = products.filter(p =>
     p.is_active && !p.is_archived &&
@@ -410,28 +432,59 @@ export const SalesModule: React.FC = () => {
           </p>
         </div>
 
-        {/* Tab Switcher */}
-        <div className="flex items-center p-1 rounded-xl bg-slate-900 border border-slate-800">
+        {/* Tab Switcher & Quick Process Return Button */}
+        <div className="flex flex-wrap items-center gap-2.5">
           <button
-            onClick={() => setActiveSubTab('pos')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${
-              activeSubTab === 'pos'
-                ? 'bg-emerald-500 text-slate-950 shadow-md'
-                : 'text-slate-400 hover:text-white'
-            }`}
+            onClick={() => {
+              setReturnTargetSale(null);
+              setIsReturnModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white text-xs font-bold shadow-md shadow-rose-500/20 transition-all active:scale-95"
+            title="Record Sales Return & Issue Credit Note"
           >
-            New POS Billing
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span>Process Return</span>
           </button>
-          <button
-            onClick={() => setActiveSubTab('history')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${
-              activeSubTab === 'history'
-                ? 'bg-emerald-500 text-slate-950 shadow-md'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            Invoice History ({sales.length})
-          </button>
+
+          <div className="flex items-center p-1 rounded-xl bg-slate-900 border border-slate-800">
+            <button
+              onClick={() => setActiveSubTab('pos')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                activeSubTab === 'pos'
+                  ? 'bg-emerald-500 text-slate-950 shadow-md'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              New POS Billing
+            </button>
+            <button
+              onClick={() => setActiveSubTab('history')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                activeSubTab === 'history'
+                  ? 'bg-emerald-500 text-slate-950 shadow-md'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Invoices ({sales.length})
+            </button>
+            <button
+              onClick={() => setActiveSubTab('returns')}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                activeSubTab === 'returns'
+                  ? 'bg-rose-500 text-white shadow-md'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <span>Returns & Credit Notes</span>
+              {salesReturns.length > 0 && (
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-black ${
+                  activeSubTab === 'returns' ? 'bg-rose-700 text-white' : 'bg-rose-500/20 text-rose-400'
+                }`}>
+                  {salesReturns.length}
+                </span>
+              )}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1045,7 +1098,7 @@ export const SalesModule: React.FC = () => {
             </form>
           </div>
         </div>
-      ) : (
+      ) : activeSubTab === 'history' ? (
         /* =================== INVOICES HISTORY VIEW =================== */
         <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
@@ -1139,6 +1192,18 @@ export const SalesModule: React.FC = () => {
                       <td className="py-3 px-3 text-right">
                         <div className="flex items-center justify-end gap-1.5">
                           <button
+                            onClick={() => {
+                              setReturnTargetSale(sale);
+                              setIsReturnModalOpen(true);
+                            }}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs font-semibold transition-colors"
+                            title="Process Sales Return & Credit Note for this invoice"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Return</span>
+                          </button>
+
+                          <button
                             onClick={() => setSelectedInvoice(sale)}
                             className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 text-xs font-semibold transition-colors"
                             title="Print or Download PDF Invoice"
@@ -1175,6 +1240,191 @@ export const SalesModule: React.FC = () => {
             </table>
           </div>
         </div>
+      ) : (
+        /* =================== RETURNS & CREDIT NOTES VIEW =================== */
+        <div className="space-y-4">
+          {/* Quick Metrics Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
+                Total Credit Notes
+              </span>
+              <p className="text-2xl font-black text-rose-400 mt-1 font-mono">
+                {salesReturns.length}
+              </p>
+              <p className="text-xs text-slate-500 mt-0.5">Processed return records</p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
+                Total Value Credited
+              </span>
+              <p className="text-2xl font-black text-white mt-1 font-mono">
+                {formatPKR(salesReturns.reduce((acc, r) => acc + (Number(r.total_amount) || 0), 0))}
+              </p>
+              <p className="text-xs text-slate-500 mt-0.5">Inventory stock restored</p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
+                Cash Refunds Disbursed
+              </span>
+              <p className="text-2xl font-black text-amber-400 mt-1 font-mono">
+                {formatPKR(
+                  salesReturns
+                    .filter(r => r.refund_method === 'cash_refund')
+                    .reduce((acc, r) => acc + (Number(r.total_amount) || 0), 0)
+                )}
+              </p>
+              <p className="text-xs text-slate-500 mt-0.5">Cash outflow payments</p>
+            </div>
+          </div>
+
+          {/* Returns Table */}
+          <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <RotateCcw className="w-4 h-4 text-rose-400" />
+                  <span>Sales Returns & Credit Notes Register</span>
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Audit trail of all returned customer goods, restocked warehouse inventory, and ledger adjustments
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 w-full sm:w-auto">
+                <div className="relative flex-1 sm:w-64">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search CRN #, invoice, customer..."
+                    value={returnsSearch}
+                    onChange={(e) => setReturnsSearch(e.target.value)}
+                    className="w-full bg-slate-800/80 border border-slate-700 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500"
+                  />
+                </div>
+
+                <button
+                  onClick={() => {
+                    setReturnTargetSale(null);
+                    setIsReturnModalOpen(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-bold text-xs shadow-md transition-colors whitespace-nowrap"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Process Return</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400 font-bold uppercase text-[10px]">
+                    <th className="py-3 px-3">Date</th>
+                    <th className="py-3 px-3">Credit Note #</th>
+                    <th className="py-3 px-3">Original Invoice #</th>
+                    <th className="py-3 px-3">Customer</th>
+                    <th className="py-3 px-3">Items Returned</th>
+                    <th className="py-3 px-3 text-right">Credit Value</th>
+                    <th className="py-3 px-3 text-center">Settlement Method</th>
+                    <th className="py-3 px-3">Reason</th>
+                    <th className="py-3 px-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {salesReturns.filter(ret => {
+                    if (!returnsSearch) return true;
+                    const q = returnsSearch.toLowerCase();
+                    return (
+                      ret.credit_note_number.toLowerCase().includes(q) ||
+                      ret.invoice_number.toLowerCase().includes(q) ||
+                      ret.customer_name.toLowerCase().includes(q) ||
+                      (ret.reason && ret.reason.toLowerCase().includes(q))
+                    );
+                  }).length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="py-10 text-center text-slate-500">
+                        No sales returns or credit notes recorded yet.
+                      </td>
+                    </tr>
+                  ) : (
+                    salesReturns
+                      .filter(ret => {
+                        if (!returnsSearch) return true;
+                        const q = returnsSearch.toLowerCase();
+                        return (
+                          ret.credit_note_number.toLowerCase().includes(q) ||
+                          ret.invoice_number.toLowerCase().includes(q) ||
+                          ret.customer_name.toLowerCase().includes(q) ||
+                          (ret.reason && ret.reason.toLowerCase().includes(q))
+                        );
+                      })
+                      .map((ret) => {
+                        const itemsSummary = ret.items.map(i => `${i.quantity}x ${i.product_name}`).join(', ');
+                        const methodVariant = ret.refund_method === 'cash_refund' ? 'amber' : ret.refund_method === 'customer_advance' ? 'blue' : 'emerald';
+                        const methodText = ret.refund_method === 'cash_refund' ? 'Cash Refund' : ret.refund_method === 'customer_advance' ? 'Store Credit' : 'Balance Reduced';
+
+                        return (
+                          <tr key={ret.id} className="hover:bg-slate-800/30 transition-colors">
+                            <td className="py-3 px-3 font-mono text-slate-400 whitespace-nowrap">
+                              {formatDate(ret.date)}
+                            </td>
+                            <td className="py-3 px-3 font-mono font-bold text-rose-400 whitespace-nowrap">
+                              {ret.credit_note_number}
+                            </td>
+                            <td className="py-3 px-3 font-mono text-slate-300 whitespace-nowrap">
+                              {ret.invoice_number}
+                            </td>
+                            <td className="py-3 px-3 font-bold text-white">
+                              {ret.customer_name}
+                            </td>
+                            <td className="py-3 px-3 text-slate-300 max-w-xs truncate" title={itemsSummary}>
+                              {itemsSummary}
+                            </td>
+                            <td className="py-3 px-3 text-right font-mono font-black text-rose-400 whitespace-nowrap">
+                              {formatPKR(ret.total_amount)}
+                            </td>
+                            <td className="py-3 px-3 text-center whitespace-nowrap">
+                              <Badge variant={methodVariant}>
+                                {methodText}
+                              </Badge>
+                            </td>
+                            <td className="py-3 px-3 text-slate-400 text-[11px] max-w-xs truncate">
+                              {ret.reason || 'General Return'}
+                            </td>
+                            <td className="py-3 px-3 text-right whitespace-nowrap">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={() => setSelectedCreditNote(ret)}
+                                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs font-semibold transition-colors"
+                                  title="View and Print Credit Note Document"
+                                >
+                                  <Printer className="w-3.5 h-3.5" />
+                                  <span>Print / PDF</span>
+                                </button>
+
+                                {isOwner && (
+                                  <button
+                                    onClick={() => setDeleteConfirmReturn(ret)}
+                                    className="p-1 rounded-lg hover:bg-slate-800 text-slate-500 hover:text-rose-400 transition-colors"
+                                    title="Reverse & Delete Credit Note"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Printable Invoice Modal */}
@@ -1189,6 +1439,32 @@ export const SalesModule: React.FC = () => {
           } : undefined}
         />
       )}
+
+      {/* Printable Credit Note Modal */}
+      {selectedCreditNote && (
+        <CreditNoteModal
+          creditNote={selectedCreditNote}
+          onClose={() => setSelectedCreditNote(null)}
+          onDelete={isOwner ? () => {
+            const target = selectedCreditNote;
+            setSelectedCreditNote(null);
+            setDeleteConfirmReturn(target);
+          } : undefined}
+        />
+      )}
+
+      {/* Process Sales Return Modal */}
+      <ProcessReturnModal
+        isOpen={isReturnModalOpen}
+        onClose={() => {
+          setIsReturnModalOpen(false);
+          setReturnTargetSale(null);
+        }}
+        initialSale={returnTargetSale}
+        onSuccess={(creditNote) => {
+          setSelectedCreditNote(creditNote);
+        }}
+      />
 
       {/* Delete Sale Invoice & Reversal Confirmation Modal */}
       {deleteConfirmSale && (
@@ -1245,6 +1521,65 @@ export const SalesModule: React.FC = () => {
               >
                 {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 <span>{isDeleting ? 'Reversing...' : 'Confirm Deletion & Execute Reversals'}</span>
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Delete / Reverse Credit Note Confirmation Modal */}
+      {deleteConfirmReturn && (
+        <Modal
+          isOpen={!!deleteConfirmReturn}
+          onClose={() => setDeleteConfirmReturn(null)}
+          title={`Reverse Credit Note: ${deleteConfirmReturn.credit_note_number}`}
+          subtitle="Admin Automated Stock & Ledger Reversal"
+        >
+          <div className="space-y-4 text-xs">
+            <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 space-y-2">
+              <div className="flex items-center gap-1.5 font-bold text-rose-400">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>Reversal Impact Details:</span>
+              </div>
+              <ul className="space-y-1.5 text-slate-200 text-[11px] list-disc pl-5">
+                <li>
+                  <strong>Stock Deduction:</strong> Returned items will be deducted back out of stock:
+                  <div className="mt-1 font-mono text-rose-400">
+                    {deleteConfirmReturn.items.map(i => `• ${i.product_name}: -${i.base_quantity || i.quantity} ${i.unit || 'L'}`).join(', ')}
+                  </div>
+                </li>
+                <li>
+                  <strong>Customer Ledger:</strong> Customer <em>"{deleteConfirmReturn.customer_name}"</em> balance will be adjusted back by <strong>{formatPKR(deleteConfirmReturn.total_amount)}</strong>.
+                </li>
+                {deleteConfirmReturn.refund_payment_id && (
+                  <li>
+                    <strong>Cash Refund Reversal:</strong> Linked cash refund outflow payment will be permanently deleted from cashbook.
+                  </li>
+                )}
+              </ul>
+            </div>
+
+            <p className="text-slate-300">
+              Are you sure you want to reverse credit note <strong>{deleteConfirmReturn.credit_note_number}</strong>? An audit log entry will be saved.
+            </p>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setDeleteConfirmReturn(null)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={handleConfirmDeleteReturn}
+                className="px-5 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60"
+              >
+                {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>{isDeleting ? 'Reversing...' : 'Confirm Reversal & Adjust Records'}</span>
               </button>
             </div>
           </div>

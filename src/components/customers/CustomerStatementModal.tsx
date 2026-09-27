@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { Customer, Sale, Payment } from '../../types';
+import { Customer, Sale, Payment, SalesReturn } from '../../types';
+import { useApp } from '../../context/AppContext';
 import { formatPKR, formatDate, formatDateTime, getTodayDateString } from '../../utils/formatters';
 import { 
   Printer, 
@@ -21,6 +22,7 @@ interface CustomerStatementModalProps {
   customer: Customer | null;
   sales: Sale[];
   payments: Payment[];
+  salesReturns?: SalesReturn[];
   onArchive?: () => void;
   onDelete?: () => void;
   hasHistory?: boolean;
@@ -44,11 +46,15 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = ({
   customer,
   sales,
   payments,
+  salesReturns: propSalesReturns,
   onArchive,
   onDelete,
   hasHistory,
   isOwner,
 }) => {
+  const { salesReturns: appSalesReturns } = useApp();
+  const effectiveSalesReturns = propSalesReturns || appSalesReturns || [];
+
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [isPrinting, setIsPrinting] = useState<boolean>(false);
@@ -93,6 +99,32 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = ({
           method: sale.payment_method,
           debit: 0,
           credit: Number(sale.amount_paid || 0),
+        });
+      }
+    });
+
+    // Filter sales returns & credit notes for this customer
+    const custReturns = effectiveSalesReturns.filter(r => r.customer_id === customer.id);
+    custReturns.forEach(ret => {
+      const itemsSummary = ret.items.map(i => `${i.quantity}x ${i.product_name}`).join(', ');
+      rawRows.push({
+        date: ret.date,
+        ref: ret.credit_note_number,
+        description: `Sales Return — Invoice #${ret.invoice_number} (${itemsSummary || 'Items Returned'})${ret.reason ? ` [${ret.reason}]` : ''} -PKR ${formatPKR(ret.total_amount)}`,
+        method: ret.refund_method === 'cash_refund' ? (ret.payment_method || 'Cash Refund') : (ret.refund_method === 'customer_advance' ? 'Advance Credit' : 'Credit Note'),
+        debit: 0,
+        credit: Number(ret.total_amount || 0),
+      });
+
+      // If physical cash was refunded back to customer, record the cash disbursement outflow in ledger
+      if (ret.refund_method === 'cash_refund') {
+        rawRows.push({
+          date: ret.date,
+          ref: `${ret.credit_note_number} (Refund)`,
+          description: `Cash refund paid out to customer for ${ret.credit_note_number}`,
+          method: ret.payment_method || 'cash',
+          debit: Number(ret.total_amount || 0),
+          credit: 0,
         });
       }
     });
@@ -192,7 +224,7 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = ({
         closingBalance,
       },
     };
-  }, [customer, sales, payments, startDate, endDate]);
+  }, [customer, sales, payments, effectiveSalesReturns, startDate, endDate]);
 
   if (!isOpen || !customer) return null;
 

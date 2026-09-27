@@ -21,7 +21,10 @@ import {
   PaymentMethod,
   PurchaseTrip,
   PurchaseTripItem,
-  PurchaseItem
+  PurchaseItem,
+  SalesReturn,
+  SalesReturnItem,
+  SalesReturnRefundOption
 } from '../types';
 import { generateInvoiceNumber, formatPKR } from '../utils/formatters';
 import { allocateTripFreight, calculateWeightedAverageLandedCost } from '../utils/freightAllocation';
@@ -42,6 +45,7 @@ interface AppContextType {
   customers: Customer[];
   suppliers: Supplier[];
   sales: Sale[];
+  salesReturns: SalesReturn[];
   purchases: Purchase[];
   purchaseTrips: PurchaseTrip[];
   stockMovements: StockMovement[];
@@ -132,6 +136,19 @@ interface AppContextType {
   // Transaction Actions
   createSale: (saleData: Omit<Sale, 'id' | 'invoice_number' | 'created_at'>) => Promise<Sale>;
   deleteSaleInvoice: (saleId: string, user: Profile) => Promise<{ success: boolean; message: string }>;
+  processSalesReturn: (returnData: {
+    sale_id: string;
+    invoice_number: string;
+    customer_id?: string;
+    customer_name: string;
+    date: string;
+    items: SalesReturnItem[];
+    reason?: string;
+    notes?: string;
+    refund_method: SalesReturnRefundOption;
+    payment_method?: PaymentMethod;
+  }, user: Profile) => Promise<SalesReturn>;
+  deleteSalesReturnRecord: (returnId: string, user: Profile) => Promise<{ success: boolean; message: string }>;
   
   createPurchase: (purchaseData: Omit<Purchase, 'id' | 'invoice_number' | 'created_at'>) => Promise<Purchase>;
   deletePurchaseInvoice: (purchaseId: string, user: Profile, forceAllowNegativeStock?: boolean) => Promise<{ 
@@ -192,6 +209,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
+  const [salesReturns, setSalesReturns] = useState<SalesReturn[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('psc_local_sales_returns');
+        if (cached) return JSON.parse(cached);
+      } catch {}
+    }
+    return [];
+  });
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [purchaseTrips, setPurchaseTrips] = useState<PurchaseTrip[]>(() => {
     if (typeof window !== 'undefined') {
@@ -262,9 +288,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return true;
         });
 
+        const syncedReturns = (cloudData as any).salesReturns || [];
+        setSalesReturns(syncedReturns);
+        if (typeof window !== 'undefined' && syncedReturns.length > 0) {
+          try {
+            localStorage.setItem('psc_local_sales_returns', JSON.stringify(syncedReturns));
+          } catch {}
+        }
+
         // Auto-reconcile customer balances with authoritative financialEngine
         const reconciledCustomers = (cloudData.customers || []).map(cust => {
-          const summary = calculateCustomerFinancials(cust, cloudData.sales || [], sanitizedPayments);
+          const summary = calculateCustomerFinancials(cust, cloudData.sales || [], sanitizedPayments, syncedReturns);
           const expectedBal = summary.outstandingReceivable;
           if (Math.abs(expectedBal - Number(cust.current_balance || 0)) > 0.01) {
             console.info(`Auto-reconciling customer "${cust.name}" balance: ${cust.current_balance} -> ${expectedBal}`);
@@ -374,6 +408,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setCustomers([]);
         setSuppliers([]);
         setSales([]);
+        setSalesReturns([]);
         setPurchases([]);
         setPurchaseTrips([]);
         setStockMovements([]);
@@ -1302,7 +1337,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const cust = customers.find(c => c.id === savedSale.customer_id);
       if (cust) {
         const nextSales = [savedSale, ...sales];
-        const summary = calculateCustomerFinancials(cust, nextSales, payments);
+        const summary = calculateCustomerFinancials(cust, nextSales, payments, salesReturns);
         const updatedCust = {
           ...cust,
           current_balance: summary.outstandingReceivable,
@@ -1346,6 +1381,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteSaleInvoice = async (saleId: string, user: Profile): Promise<{ success: boolean; message: string }> => {
     const targetSale = sales.find(s => s.id === saleId);
     if (!targetSale) return { success: false, message: 'Sale invoice not found.' };
+
+    const linkedReturns = salesReturns.filter(r => r.sale_id === saleId || r.invoice_number === targetSale.invoice_number);
+    if (linkedReturns.length > 0) {
+      return {
+        success: false,
+        message: `Cannot delete invoice ${targetSale.invoice_number} because it has ${linkedReturns.length} associated sales return / credit note record(s). Please reverse or delete the credit notes first.`
+      };
+    }
 
     const now = new Date().toISOString();
 
@@ -1446,6 +1489,306 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {
       success: true,
       message: `Invoice ${targetSale.invoice_number} successfully deleted. Inventory and customer balances were restored.`
+    };
+  };
+
+  // ==============================================================================
+  // SALES RETURNS & CREDIT NOTES (SUPABASE-FIRST + INSTANT FINANCIAL RECONCILIATION)
+  // ==============================================================================
+  const processSalesReturn = async (
+    returnData: {
+      sale_id: string;
+      invoice_number: string;
+      customer_id?: string;
+      customer_name: string;
+      date: string;
+      items: SalesReturnItem[];
+      reason?: string;
+      notes?: string;
+      refund_method: SalesReturnRefundOption;
+      payment_method?: PaymentMethod;
+    },
+    user: Profile
+  ): Promise<SalesReturn> => {
+    const totalAmount = Number(
+      returnData.items.reduce((acc, item) => acc + (Number(item.subtotal) || 0), 0).toFixed(2)
+    );
+    if (totalAmount <= 0) {
+      throw new Error('Total return amount must be greater than zero.');
+    }
+
+    const creditNoteNumber = generateInvoiceNumber('CRN');
+    const returnId = generateId();
+    let refundPaymentId: string | undefined = undefined;
+
+    // 1. If cash refund option selected, create a Payment outflow voucher in Cash Book
+    let createdPayment: Payment | null = null;
+    if (returnData.refund_method === 'cash_refund') {
+      const payMethod = returnData.payment_method || 'cash';
+      refundPaymentId = generateId();
+      const refundPay: Payment = {
+        id: refundPaymentId,
+        related_to: 'sales_return_refund',
+        reference_id: returnId,
+        reference_no: creditNoteNumber,
+        customer_id: returnData.customer_id,
+        customer_name: returnData.customer_name,
+        amount: totalAmount,
+        payment_method: payMethod,
+        notes: `Sales Return Refund for Invoice #${returnData.invoice_number} (CRN #${creditNoteNumber})${returnData.reason ? ` — Reason: ${returnData.reason}` : ''}`,
+        date: returnData.date || new Date().toISOString(),
+        created_by: user.name,
+        created_at: new Date().toISOString(),
+      };
+      createdPayment = await supabaseService.upsertPayment(refundPay);
+    }
+
+    const newReturn: SalesReturn = {
+      id: returnId,
+      credit_note_number: creditNoteNumber,
+      sale_id: returnData.sale_id,
+      invoice_number: returnData.invoice_number,
+      customer_id: returnData.customer_id,
+      customer_name: returnData.customer_name,
+      date: returnData.date || new Date().toISOString(),
+      items: returnData.items.map(item => ({
+        ...item,
+        id: item.id || generateId(),
+        return_id: returnId,
+      })),
+      total_amount: totalAmount,
+      reason: returnData.reason,
+      notes: returnData.notes,
+      refund_method: returnData.refund_method,
+      payment_method: returnData.payment_method,
+      refund_payment_id: refundPaymentId,
+      created_by: user.id,
+      created_by_name: user.name,
+      created_at: new Date().toISOString(),
+    };
+
+    // 2. Persist Sales Return & Credit Note
+    const savedReturn = await supabaseService.upsertSalesReturn(newReturn);
+    setSalesReturns(prev => [savedReturn, ...prev]);
+
+    if (createdPayment) {
+      setPayments(prev => [createdPayment!, ...prev]);
+    }
+
+    // 3. Stock Impact: Return items to inventory (Reverse of original sale deduction)
+    const movementsToAdd: StockMovement[] = [];
+    const rawMovementsToAdd: RawMaterialMovement[] = [];
+    const updatedProducts: Product[] = [...products];
+    const updatedRawMaterials: RawMaterial[] = [...rawMaterials];
+
+    for (const item of savedReturn.items) {
+      if (item.raw_material_id || item.item_type === 'raw_material') {
+        const rmId = item.raw_material_id!;
+        const rmIdx = updatedRawMaterials.findIndex(m => m.id === rmId);
+        if (rmIdx !== -1) {
+          const rm = updatedRawMaterials[rmIdx];
+          const addBackQty = Number(item.quantity);
+          const prevStk = Number(rm.current_stock);
+          const nextStk = Number((prevStk + addBackQty).toFixed(4));
+          const updatedRm = { ...rm, current_stock: nextStk, updated_at: new Date().toISOString() };
+          updatedRawMaterials[rmIdx] = updatedRm;
+          await supabaseService.upsertRawMaterial(updatedRm);
+
+          const rmMvt: RawMaterialMovement = {
+            id: generateId(),
+            raw_material_id: rm.id,
+            raw_material_name: rm.name,
+            movement_type: 'return',
+            quantity: addBackQty,
+            previous_stock: prevStk,
+            new_stock: nextStk,
+            reference_id: savedReturn.id,
+            notes: `Returned via Credit Note ${creditNoteNumber} against Invoice ${savedReturn.invoice_number} (${addBackQty} ${rm.unit})`,
+            date: savedReturn.date,
+            created_by_name: user.name,
+          };
+          await supabaseService.upsertRawMaterialMovement(rmMvt);
+          rawMovementsToAdd.push(rmMvt);
+        }
+      } else {
+        const prodId = item.product_id;
+        const prodIdx = updatedProducts.findIndex(p => p.id === prodId);
+        if (prodIdx !== -1) {
+          const prod = updatedProducts[prodIdx];
+          const addBackBaseQty = Number(item.base_quantity || item.quantity);
+          const prevStk = Number(prod.current_stock);
+          const nextStk = Number((prevStk + addBackBaseQty).toFixed(4));
+          const updatedProd = { ...prod, current_stock: nextStk, updated_at: new Date().toISOString() };
+          updatedProducts[prodIdx] = updatedProd;
+          await supabaseService.upsertProduct(updatedProd);
+
+          const mvt: StockMovement = {
+            id: generateId(),
+            product_id: prod.id,
+            product_name: prod.name,
+            movement_type: 'return',
+            quantity: addBackBaseQty,
+            previous_stock: prevStk,
+            new_stock: nextStk,
+            reference_id: savedReturn.id,
+            notes: `Returned via Credit Note ${creditNoteNumber} against Invoice ${savedReturn.invoice_number} (${item.pack_size_name ? `${item.quantity}x ${item.pack_size_name}` : `${addBackBaseQty} ${prod.base_unit || prod.unit}`})`,
+            date: savedReturn.date,
+            created_by_name: user.name,
+          };
+          await supabaseService.upsertStockMovement(mvt);
+          movementsToAdd.push(mvt);
+        }
+      }
+    }
+
+    if (movementsToAdd.length > 0) {
+      setProducts(updatedProducts);
+      setStockMovements(prev => [...movementsToAdd, ...prev]);
+    }
+    if (rawMovementsToAdd.length > 0) {
+      setRawMaterials(updatedRawMaterials);
+      setRawMaterialMovements(prev => [...rawMovementsToAdd, ...prev]);
+    }
+
+    // 4. Update Customer Balance via authoritative financialEngine
+    if (savedReturn.customer_id) {
+      const cust = customers.find(c => c.id === savedReturn.customer_id);
+      if (cust) {
+        const nextReturns = [savedReturn, ...salesReturns];
+        const nextPayments = createdPayment ? [createdPayment, ...payments] : payments;
+        const summary = calculateCustomerFinancials(cust, sales, nextPayments, nextReturns);
+        const updatedCust = {
+          ...cust,
+          current_balance: summary.outstandingReceivable,
+          updated_at: new Date().toISOString(),
+        };
+        await supabaseService.upsertCustomer(updatedCust);
+        setCustomers(prev => prev.map(c => (c.id === savedReturn.customer_id ? updatedCust : c)));
+      }
+    }
+
+    return savedReturn;
+  };
+
+  const deleteSalesReturnRecord = async (
+    returnId: string,
+    user: Profile
+  ): Promise<{ success: boolean; message: string }> => {
+    const targetReturn = salesReturns.find(r => r.id === returnId);
+    if (!targetReturn) return { success: false, message: 'Sales return record not found.' };
+
+    const now = new Date().toISOString();
+
+    // 1. Re-deduct the returned stock from finished products / raw materials
+    const movementsToAdd: StockMovement[] = [];
+    const rawMovementsToAdd: RawMaterialMovement[] = [];
+    const updatedProducts: Product[] = [...products];
+    const updatedRawMaterials: RawMaterial[] = [...rawMaterials];
+
+    for (const item of targetReturn.items) {
+      if (item.raw_material_id || item.item_type === 'raw_material') {
+        const rm = updatedRawMaterials.find(m => m.id === item.raw_material_id);
+        if (rm) {
+          const deductQty = Number(item.quantity);
+          const prevStk = Number(rm.current_stock);
+          const nextStk = Math.max(0, Number((prevStk - deductQty).toFixed(4)));
+          const updatedRm = { ...rm, current_stock: nextStk, updated_at: now };
+          await supabaseService.upsertRawMaterial(updatedRm);
+
+          const rmMvt: RawMaterialMovement = {
+            id: generateId(),
+            raw_material_id: rm.id,
+            raw_material_name: rm.name,
+            movement_type: 'resale_out',
+            quantity: -deductQty,
+            previous_stock: prevStk,
+            new_stock: nextStk,
+            reference_id: targetReturn.credit_note_number,
+            notes: `Reversed sales return ${targetReturn.credit_note_number}`,
+            date: now,
+            created_by_name: user.name,
+          };
+          await supabaseService.upsertRawMaterialMovement(rmMvt);
+          rawMovementsToAdd.push(rmMvt);
+        }
+      } else {
+        const prod = updatedProducts.find(p => p.id === item.product_id);
+        if (prod) {
+          const deductQty = Number(item.base_quantity || item.quantity);
+          const prevStk = Number(prod.current_stock);
+          const nextStk = Math.max(0, prevStk - deductQty);
+          const updatedProd = { ...prod, current_stock: nextStk, updated_at: now };
+          await supabaseService.upsertProduct(updatedProd);
+
+          const mvt: StockMovement = {
+            id: generateId(),
+            product_id: prod.id,
+            product_name: prod.name,
+            movement_type: 'sale_out',
+            quantity: -deductQty,
+            previous_stock: prevStk,
+            new_stock: nextStk,
+            reference_id: targetReturn.credit_note_number,
+            notes: `Reversed sales return ${targetReturn.credit_note_number}`,
+            date: now,
+            created_by_name: user.name,
+          };
+          await supabaseService.upsertStockMovement(mvt);
+          movementsToAdd.push(mvt);
+        }
+      }
+    }
+
+    // 2. If a refund payment voucher was created, delete it
+    if (targetReturn.refund_payment_id) {
+      await supabaseService.deletePayment(targetReturn.refund_payment_id);
+      setPayments(prev => prev.filter(p => p.id !== targetReturn.refund_payment_id));
+    }
+
+    // 3. Delete the sales return record in Supabase & local state
+    await supabaseService.deleteSalesReturn(returnId);
+    const nextReturns = salesReturns.filter(r => r.id !== returnId);
+    setSalesReturns(nextReturns);
+
+    if (movementsToAdd.length > 0) {
+      setProducts(updatedProducts);
+      setStockMovements(prev => [...movementsToAdd, ...prev]);
+    }
+    if (rawMovementsToAdd.length > 0) {
+      setRawMaterials(updatedRawMaterials);
+      setRawMaterialMovements(prev => [...rawMovementsToAdd, ...prev]);
+    }
+
+    // 4. Recalculate customer balance
+    if (targetReturn.customer_id) {
+      const cust = customers.find(c => c.id === targetReturn.customer_id);
+      if (cust) {
+        const remainingPayments = payments.filter(p => p.id !== targetReturn.refund_payment_id);
+        const summary = calculateCustomerFinancials(cust, sales, remainingPayments, nextReturns);
+        const updatedCust = {
+          ...cust,
+          current_balance: summary.outstandingReceivable,
+          updated_at: now,
+        };
+        await supabaseService.upsertCustomer(updatedCust);
+        setCustomers(prev => prev.map(c => (c.id === targetReturn.customer_id ? updatedCust : c)));
+      }
+    }
+
+    // 5. Add audit log
+    await addDeletionLogEntry({
+      entity_type: 'sales_return',
+      entity_id: returnId,
+      entity_title: `Credit Note ${targetReturn.credit_note_number} (Invoice ${targetReturn.invoice_number})`,
+      action_type: 'reversed_and_deleted',
+      impact_summary: `Reversed sales return of ${formatPKR(targetReturn.total_amount)}, re-deducted inventory stock, and adjusted customer balance.`,
+      performed_by: user.name,
+      performed_by_role: user.role,
+    });
+
+    return {
+      success: true,
+      message: `Credit note ${targetReturn.credit_note_number} successfully reversed and deleted.`,
     };
   };
 
@@ -2075,7 +2418,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const cust = customers.find(c => c.id === newPayment.customer_id);
       if (cust) {
         const nextPayments = [savedPayment, ...payments];
-        const summary = calculateCustomerFinancials(cust, sales, nextPayments);
+        const summary = calculateCustomerFinancials(cust, sales, nextPayments, salesReturns);
         const updatedCust = { 
           ...cust, 
           current_balance: summary.outstandingReceivable, 
@@ -2197,11 +2540,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setSales(prev => prev.map(s => s.id === sale.id ? updatedSale : s));
         }
       }
-      // Revert customer balance if this payment was a balance credit
-      if (target.customer_id && target.related_to === 'customer_balance') {
+      // Revert customer balance if this payment was for customer balance or advance
+      if (target.customer_id && (target.related_to === 'customer_balance' || target.related_to === 'customer_advance')) {
         const cust = customers.find(c => c.id === target.customer_id);
         if (cust) {
-          const updatedCust = { ...cust, current_balance: Number(((cust.current_balance || 0) + Number(target.amount || 0)).toFixed(2)), updated_at: new Date().toISOString() };
+          const remainingPayments = payments.filter(p => p.id !== paymentId);
+          const summary = calculateCustomerFinancials(cust, sales, remainingPayments, salesReturns);
+          const updatedCust = { ...cust, current_balance: summary.outstandingReceivable, updated_at: new Date().toISOString() };
           await supabaseService.upsertCustomer(updatedCust);
           setCustomers(prev => prev.map(c => c.id === cust.id ? updatedCust : c));
         }
@@ -2430,7 +2775,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const keys = [
         'psc_products', 'psc_raw_materials', 'psc_formulations', 'psc_production_batches',
         'psc_raw_movements', 'psc_customers', 'psc_suppliers', 'psc_sales', 'psc_purchases',
-        'psc_stock_movements', 'psc_payments', 'psc_expenses', 'psc_recurring_expenses', 'psc_deletion_logs', 'psc_users'
+        'psc_stock_movements', 'psc_payments', 'psc_expenses', 'psc_recurring_expenses', 'psc_deletion_logs', 'psc_users',
+        'psc_local_sales_returns'
       ];
       keys.forEach(k => localStorage.removeItem(k));
     }
@@ -2498,6 +2844,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         unarchiveSupplier,
         createSale,
         deleteSaleInvoice,
+        salesReturns,
+        processSalesReturn,
+        deleteSalesReturnRecord,
         createPurchase,
         deletePurchaseInvoice,
         purchaseTrips,
