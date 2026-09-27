@@ -288,17 +288,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return true;
         });
 
-        const syncedReturns = (cloudData as any).salesReturns || [];
-        setSalesReturns(syncedReturns);
-        if (typeof window !== 'undefined' && syncedReturns.length > 0) {
+        // If cloud returns empty (e.g. migration pending or network issue), preserve local cached returns
+        let effectiveReturns = (cloudData as any).salesReturns || [];
+        if (effectiveReturns.length === 0 && typeof window !== 'undefined') {
           try {
-            localStorage.setItem('psc_local_sales_returns', JSON.stringify(syncedReturns));
+            const cached = localStorage.getItem('psc_local_sales_returns');
+            if (cached) {
+              const parsed = JSON.parse(cached);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                effectiveReturns = parsed;
+              }
+            }
+          } catch {}
+        }
+
+        setSalesReturns(effectiveReturns);
+        if (typeof window !== 'undefined' && effectiveReturns.length > 0) {
+          try {
+            localStorage.setItem('psc_local_sales_returns', JSON.stringify(effectiveReturns));
           } catch {}
         }
 
         // Auto-reconcile customer balances with authoritative financialEngine
         const reconciledCustomers = (cloudData.customers || []).map(cust => {
-          const summary = calculateCustomerFinancials(cust, cloudData.sales || [], sanitizedPayments, syncedReturns);
+          const summary = calculateCustomerFinancials(cust, cloudData.sales || [], sanitizedPayments, effectiveReturns);
           const expectedBal = summary.outstandingReceivable;
           if (Math.abs(expectedBal - Number(cust.current_balance || 0)) > 0.01) {
             console.info(`Auto-reconciling customer "${cust.name}" balance: ${cust.current_balance} -> ${expectedBal}`);
@@ -1569,7 +1582,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 2. Persist Sales Return & Credit Note
     const savedReturn = await supabaseService.upsertSalesReturn(newReturn);
-    setSalesReturns(prev => [savedReturn, ...prev]);
+    setSalesReturns(prev => {
+      const next = [savedReturn, ...prev];
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('psc_local_sales_returns', JSON.stringify(next));
+        } catch {}
+      }
+      return next;
+    });
 
     if (createdPayment) {
       setPayments(prev => [createdPayment!, ...prev]);
@@ -1749,6 +1770,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await supabaseService.deleteSalesReturn(returnId);
     const nextReturns = salesReturns.filter(r => r.id !== returnId);
     setSalesReturns(nextReturns);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('psc_local_sales_returns', JSON.stringify(nextReturns));
+      } catch {}
+    }
 
     if (movementsToAdd.length > 0) {
       setProducts(updatedProducts);

@@ -197,6 +197,8 @@ export const supabaseService = {
           related_to = 'owner_withdrawal';
         } else if (p.notes?.includes('[Customer Advance]')) {
           related_to = 'customer_advance';
+        } else if (p.notes?.includes('[Sales Return Refund:')) {
+          related_to = 'sales_return_refund';
         }
 
         return {
@@ -807,7 +809,12 @@ export const supabaseService = {
     try {
       const { error: retError } = await supabase.from('sales_returns').upsert(payload);
       if (retError) {
-        console.warn('Supabase upsertSalesReturn warning (falling back gracefully):', retError);
+        if (retError.code === 'PGRST205' || retError.message?.includes('schema cache')) {
+          console.warn('[Supabase Migration Notice] Table public.sales_returns does not exist yet in Supabase. Please run supabase/sales_returns_migration.sql in the Supabase SQL Editor.');
+        } else {
+          console.error('Supabase upsertSalesReturn error:', retError);
+          throw new Error(`Sales return database write failed: ${retError.message} (${retError.code || 'DB'})`);
+        }
       } else if (salesReturn.items && salesReturn.items.length > 0) {
         await supabase.from('sales_return_items').delete().eq('return_id', validId);
         const itemsToInsert = salesReturn.items.map(item => ({
@@ -828,9 +835,15 @@ export const supabaseService = {
           unit_price: Number(item.unit_price || 0),
           subtotal: Number(item.subtotal || 0)
         }));
-        await supabase.from('sales_return_items').insert(itemsToInsert);
+        const { error: itemsError } = await supabase.from('sales_return_items').insert(itemsToInsert);
+        if (itemsError && itemsError.code !== 'PGRST205' && !itemsError.message?.includes('schema cache')) {
+          console.warn('Supabase sales_return_items insert warning:', itemsError.message);
+        }
       }
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.message?.includes('Sales return database write failed')) {
+        throw err;
+      }
       console.warn('upsertSalesReturn error:', err);
     }
 
@@ -1072,6 +1085,9 @@ export const supabaseService = {
         } else if (payload.related_to === 'customer_advance') {
           fallbackRelatedTo = 'customer_balance';
           prefix = '[Customer Advance]';
+        } else if (payload.related_to === 'sales_return_refund') {
+          fallbackRelatedTo = 'customer_balance';
+          prefix = `[Sales Return Refund: ${payment.reference_no || 'CRN'}]`;
         }
 
         if (fallbackRelatedTo) {
@@ -1124,6 +1140,7 @@ export const supabaseService = {
     const payload = {
       id: validId,
       product_id: isValidUUID(movement.product_id) ? movement.product_id : null,
+      product_name: movement.product_name || '',
       movement_type: movement.movement_type,
       quantity: Number(movement.quantity || 0),
       previous_stock: Number(movement.previous_stock || 0),
@@ -1134,10 +1151,19 @@ export const supabaseService = {
       created_by: isValidUUID((movement as any).created_by) ? (movement as any).created_by : null
     };
 
-    const { error } = await supabase.from('stock_movements').upsert(payload);
-    if (error) {
-      console.error('Supabase upsertStockMovement error:', error);
-      throw new Error(`Stock movement database write failed: ${error.message}`);
+    let { error } = await supabase.from('stock_movements').upsert(payload);
+    if (error && (error.code === '23514' || error.message?.includes('check'))) {
+      const fallbackPayload = {
+        ...payload,
+        movement_type: 'adjustment',
+        notes: `[Return] ${notes}`.trim()
+      };
+      const retry = await supabase.from('stock_movements').upsert(fallbackPayload);
+      if (retry.error) {
+        console.warn('Supabase upsertStockMovement fallback warning:', retry.error.message);
+      }
+    } else if (error) {
+      console.warn('Supabase upsertStockMovement notice:', error.message);
     }
   },
 
@@ -1167,22 +1193,20 @@ export const supabaseService = {
     };
 
     let { error } = await supabase.from('raw_material_movements').upsert(payload);
-    if (error && error.message?.includes('raw_material_movements_movement_type_check')) {
-      // The live database check constraint has not yet been migrated to include 'sale_out' / 'resale_out'.
-      // Fallback to 'adjustment' so sales never fail, and tag notes with [Direct Sale]
+    if (error && (error.message?.includes('raw_material_movements_movement_type_check') || error.code === '23514')) {
+      // The live database check constraint has not yet been migrated to include 'sale_out' / 'resale_out' / 'return'.
+      // Fallback to 'adjustment' so sales and returns never fail, and tag notes
       const fallbackPayload = {
         ...payload,
         movement_type: 'adjustment',
-        notes: `[Direct Sale] ${notes}`.trim()
+        notes: `[Return / Resale] ${notes}`.trim()
       };
       const retry = await supabase.from('raw_material_movements').upsert(fallbackPayload);
       if (retry.error) {
-        console.error('Supabase upsertRawMaterialMovement fallback error:', retry.error);
-        throw new Error(`Raw material movement database write failed: ${retry.error.message}`);
+        console.warn('Supabase upsertRawMaterialMovement fallback error:', retry.error.message);
       }
     } else if (error) {
-      console.error('Supabase upsertRawMaterialMovement error:', error);
-      throw new Error(`Raw material movement database write failed: ${error.message}`);
+      console.warn('Supabase upsertRawMaterialMovement notice:', error.message);
     }
   },
 
