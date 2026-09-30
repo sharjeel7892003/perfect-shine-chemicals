@@ -15,6 +15,14 @@ export interface Profile {
 export type ProductUnit = 'liter' | 'kg' | 'pcs' | 'bottle' | 'can' | 'drum' | 'carton';
 export type BaseUnit = 'liter' | 'kg';
 
+export interface PackagingItem {
+  raw_material_id: string;
+  raw_material_name: string;
+  quantity: number; // Quantity required to pack 1 unit of this size
+  unit: RawMaterialUnit;
+  cost_per_unit?: number;
+}
+
 export interface PackSize {
   id: string;
   product_id: string;
@@ -23,6 +31,9 @@ export interface PackSize {
   unit_label: string; // "bottle", "can", "bag", "liter", "kg", "carton"
   selling_price: number; // Default selling rate for this packaging
   is_default?: boolean;
+  packaging_items?: PackagingItem[]; // Packaging recipe per 1 unit of this size
+  packed_stock?: number; // Physical bottles/packs filled and ready to sell
+  true_cost?: number; // Combined cost per bottle (bulk liquid + packaging materials)
 }
 
 export interface Product {
@@ -114,8 +125,41 @@ export interface ProductionBatch {
   created_at?: string;
 }
 
+// 3B. PACKING RUN (BOTTLING / PACKAGING BATCH)
+export interface ConsumedPackagingMaterial {
+  raw_material_id: string;
+  raw_material_name: string;
+  quantity_per_unit: number;
+  total_quantity: number;
+  unit: RawMaterialUnit;
+  unit_cost: number;
+  total_cost: number;
+}
+
+export interface PackingRun {
+  id: string;
+  run_number: string; // e.g. "PACK-202609-001"
+  product_id: string;
+  product_name: string;
+  pack_size_id: string;
+  pack_size_name: string;
+  quantity_packed: number; // Number of bottles/packs filled
+  size_in_base_unit: number; // e.g. 1.0 for 1L
+  bulk_liquid_consumed: number; // quantity_packed * size_in_base_unit
+  bulk_unit_cost: number; // Chemical bulk cost per base unit
+  bulk_total_cost: number;
+  packaging_materials_consumed: ConsumedPackagingMaterial[];
+  packaging_total_cost: number;
+  total_cost: number; // bulk_total_cost + packaging_total_cost
+  true_cost_per_unit: number; // total_cost / quantity_packed
+  date: string;
+  operator_name?: string;
+  notes?: string;
+  created_at?: string;
+}
+
 // RAW MATERIAL MOVEMENTS
-export type RawMaterialMovementType = 'purchase_in' | 'production_out' | 'sale_out' | 'resale_out' | 'adjustment' | 'wastage' | 'return';
+export type RawMaterialMovementType = 'purchase_in' | 'production_out' | 'packaging_out' | 'sale_out' | 'resale_out' | 'adjustment' | 'wastage' | 'return';
 
 export interface RawMaterialMovement {
   id: string;
@@ -323,7 +367,7 @@ export interface PurchaseTrip {
   created_at?: string;
 }
 
-export type StockMovementType = 'purchase_in' | 'sale_out' | 'adjustment' | 'production' | 'wastage' | 'return';
+export type StockMovementType = 'purchase_in' | 'sale_out' | 'adjustment' | 'production' | 'packaging_out' | 'wastage' | 'return';
 
 export interface StockMovement {
   id: string;
@@ -399,7 +443,7 @@ export interface Payment {
 // ==============================================================================
 export interface DeletionAuditLog {
   id: string;
-  entity_type: 'customer' | 'supplier' | 'product' | 'raw_material' | 'sale' | 'purchase' | 'formulation' | 'staff' | 'production_batch' | 'expense' | 'sales_return';
+  entity_type: 'customer' | 'supplier' | 'product' | 'raw_material' | 'sale' | 'purchase' | 'formulation' | 'staff' | 'production_batch' | 'packing_run' | 'expense' | 'sales_return';
   entity_id: string;
   entity_title: string;
   action_type: 'deleted' | 'archived' | 'reversed_and_deleted' | 'deactivated';

@@ -100,6 +100,9 @@ export const SalesModule: React.FC = () => {
     multiplier: number;
     price: number;
     unitLabel: string;
+    isPackedSize: boolean;
+    packedStock: number;
+    trueCost: number;
   } => {
     const baseUnit = product.base_unit || product.unit || 'liter';
     const packs = product.pack_sizes && product.pack_sizes.length > 0 ? product.pack_sizes : [];
@@ -112,17 +115,35 @@ export const SalesModule: React.FC = () => {
         multiplier: 1.0,
         price: product.selling_price,
         unitLabel: baseUnit,
+        isPackedSize: false,
+        packedStock: 0,
+        trueCost: product.cost_price,
       };
     }
 
     const matched = packs.find(p => p.id === chosenId) || packs.find(p => p.is_default) || packs[0];
     if (matched) {
+      const isPacked = matched.id !== 'bulk';
+      const chemicalPortion = Number(((matched.size_in_base_unit || 1) * Number(product.cost_price || 0)).toFixed(4));
+      const packagingPortion = Number(
+        (matched.packaging_items || []).reduce((sum, item) => {
+          const rm = rawMaterials.find(r => r.id === item.raw_material_id);
+          const rate = rm ? Number(rm.cost_per_unit || 0) : Number(item.cost_per_unit || 0);
+          return sum + (Number(item.quantity || 0) * rate);
+        }, 0).toFixed(4)
+      );
+      const computedTrueCost = Number((chemicalPortion + packagingPortion).toFixed(4));
+      const effectiveTrueCost = matched.true_cost && matched.true_cost > 0 ? Number(matched.true_cost) : computedTrueCost;
+
       return {
         packId: matched.id,
         packName: matched.name,
         multiplier: matched.size_in_base_unit,
         price: matched.selling_price,
         unitLabel: matched.unit_label,
+        isPackedSize: isPacked,
+        packedStock: Number(matched.packed_stock || 0),
+        trueCost: effectiveTrueCost,
       };
     }
 
@@ -132,6 +153,9 @@ export const SalesModule: React.FC = () => {
       multiplier: 1.0,
       price: product.selling_price,
       unitLabel: baseUnit,
+      isPackedSize: false,
+      packedStock: 0,
+      trueCost: product.cost_price,
     };
   };
 
@@ -139,18 +163,27 @@ export const SalesModule: React.FC = () => {
     const product = products.find(p => p.id === productId);
     if (!product) return;
 
-    const baseStock = Number(product.current_stock);
-    if (baseStock <= 0) {
-      alert(`Cannot add ${product.name}: Out of stock in warehouse!`);
-      return;
-    }
-
     const packInfo = getSelectedPackForProduct(product);
-    const neededBaseQty = packInfo.multiplier;
 
-    if (neededBaseQty > baseStock) {
-      alert(`Insufficient stock! ${packInfo.packName} requires ${neededBaseQty} ${product.base_unit || product.unit}, but only ${baseStock} available.`);
-      return;
+    if (packInfo.isPackedSize) {
+      // Validate packed bottle stock!
+      const availablePacked = packInfo.packedStock;
+      if (availablePacked <= 0) {
+        alert(`Cannot add ${product.name} (${packInfo.packName}): 0 units in packed stock! Please pack bottles first in the Bottling & Packing module.`);
+        return;
+      }
+    } else {
+      // Validate bulk liquid stock!
+      const baseStock = Number(product.current_stock);
+      if (baseStock <= 0) {
+        alert(`Cannot add ${product.name}: Out of bulk liquid in warehouse!`);
+        return;
+      }
+      const neededBaseQty = packInfo.multiplier;
+      if (neededBaseQty > baseStock) {
+        alert(`Insufficient bulk liquid stock! ${packInfo.packName} requires ${neededBaseQty} ${product.base_unit || product.unit}, but only ${baseStock} available.`);
+        return;
+      }
     }
 
     setCartItems(prev => {
@@ -159,11 +192,19 @@ export const SalesModule: React.FC = () => {
       if (existingIdx !== -1) {
         const currentItem = prev[existingIdx];
         const nextPackQty = currentItem.quantity + 1;
-        const totalBaseRequired = nextPackQty * packInfo.multiplier;
 
-        if (totalBaseRequired > baseStock) {
-          alert(`Maximum available stock reached! Only ${baseStock} ${product.base_unit || product.unit} in storage.`);
-          return prev;
+        if (packInfo.isPackedSize) {
+          if (nextPackQty > packInfo.packedStock) {
+            alert(`Maximum available packed stock reached! Only ${packInfo.packedStock} ${packInfo.unitLabel}s in storage.`);
+            return prev;
+          }
+        } else {
+          const totalBaseRequired = nextPackQty * packInfo.multiplier;
+          const baseStock = Number(product.current_stock);
+          if (totalBaseRequired > baseStock) {
+            alert(`Maximum available bulk stock reached! Only ${baseStock} ${product.base_unit || product.unit} in storage.`);
+            return prev;
+          }
         }
 
         const updated = [...prev];
@@ -171,7 +212,7 @@ export const SalesModule: React.FC = () => {
           ...currentItem,
           quantity: nextPackQty,
           pack_quantity: nextPackQty,
-          base_quantity: totalBaseRequired,
+          base_quantity: nextPackQty * packInfo.multiplier,
           subtotal: nextPackQty * currentItem.unit_price,
         };
         return updated;
@@ -187,7 +228,7 @@ export const SalesModule: React.FC = () => {
         size_in_base_unit: packInfo.multiplier,
         base_quantity: packInfo.multiplier,
         quantity: 1,
-        unit_cost: product.cost_price * packInfo.multiplier,
+        unit_cost: packInfo.trueCost, // TRUE COMBINED COST!
         unit_price: packInfo.price,
         default_unit_price: packInfo.price,
         subtotal: packInfo.price,
@@ -272,25 +313,40 @@ export const SalesModule: React.FC = () => {
         return prev.filter((_, idx) => idx !== index);
       }
 
+      const multiplier = Number(item.size_in_base_unit || 1);
+      const isPacked = Boolean(item.pack_size_id && item.pack_size_id !== 'bulk');
+      const isDecimalAllowed = !isPacked;
+
       let baseStock = 99999;
       let unitLabel = item.unit || 'unit';
       if (item.raw_material_id) {
         const rm = rawMaterials.find(r => r.id === item.raw_material_id);
         baseStock = rm ? Number(rm.current_stock) : 99999;
         unitLabel = rm?.unit || unitLabel;
+        if (newQty > baseStock) {
+          alert(`Only ${baseStock} ${unitLabel} available in warehouse.`);
+          newQty = baseStock;
+        }
       } else {
         const product = products.find(p => p.id === item.product_id);
-        baseStock = product ? Number(product.current_stock) : 99999;
-        unitLabel = product?.base_unit || product?.unit || unitLabel;
-      }
+        const matchedPack = isPacked ? product?.pack_sizes?.find(ps => ps.id === item.pack_size_id) : undefined;
 
-      const multiplier = item.size_in_base_unit || 1.0;
-      const isDecimalAllowed = item.item_type === 'raw_material' || !item.pack_size_id || item.pack_size_id === 'bulk';
-      const totalBaseNeeded = Number((newQty * multiplier).toFixed(4));
-
-      if (totalBaseNeeded > baseStock) {
-        alert(`Only ${baseStock} ${unitLabel} available in warehouse.`);
-        newQty = isDecimalAllowed ? baseStock : (Math.floor(baseStock / multiplier) || 1);
+        if (isPacked && matchedPack) {
+          baseStock = Number(matchedPack.packed_stock || 0);
+          unitLabel = matchedPack.unit_label || 'bottles';
+          if (newQty > baseStock) {
+            alert(`Only ${baseStock} ${unitLabel} available in packed stock.`);
+            newQty = baseStock;
+          }
+        } else {
+          baseStock = product ? Number(product.current_stock) : 99999;
+          unitLabel = product?.base_unit || product?.unit || unitLabel;
+          const totalBaseNeeded = Number((newQty * multiplier).toFixed(4));
+          if (totalBaseNeeded > baseStock) {
+            alert(`Only ${baseStock} ${unitLabel} available in warehouse.`);
+            newQty = isDecimalAllowed ? Number((baseStock / multiplier).toFixed(4)) : (Math.floor(baseStock / multiplier) || 1);
+          }
+        }
       }
 
       const validQty = isDecimalAllowed ? Number(newQty.toFixed(4)) : Math.round(newQty);
@@ -592,19 +648,27 @@ export const SalesModule: React.FC = () => {
 
                         <div className="mt-2.5 p-2 rounded-xl bg-slate-800/50 border border-slate-700/60 flex items-center justify-between text-xs">
                           <div>
-                            <span className="text-[10px] text-slate-400 uppercase block">Warehouse Stock:</span>
-                            <span className={`font-mono font-black ${isLow ? 'text-rose-400' : 'text-white'}`}>
-                              {product.current_stock} {baseUnit}
+                            <span className="text-[10px] text-slate-400 uppercase block">
+                              {packInfo.isPackedSize ? 'Packed Stock:' : 'Bulk Liquid Stock:'}
+                            </span>
+                            <span className={`font-mono font-black ${
+                              packInfo.isPackedSize
+                                ? (packInfo.packedStock <= 0 ? 'text-rose-400' : 'text-emerald-400')
+                                : (isLow ? 'text-rose-400' : 'text-white')
+                            }`}>
+                              {packInfo.isPackedSize 
+                                ? `${packInfo.packedStock} ${packInfo.unitLabel}s`
+                                : `${product.current_stock} ${baseUnit}`
+                              }
                             </span>
                           </div>
-                          {defaultPack && (
-                            <div className="text-right">
-                              <span className="text-[10px] text-slate-400 uppercase block">Pack Estimate:</span>
-                              <span className="font-mono text-[11px] text-emerald-400 font-semibold">
-                                ≈ {estPacksAvailable} {defaultPack.unit_label}s
-                              </span>
-                            </div>
-                          )}
+
+                          <div className="text-right">
+                            <span className="text-[10px] text-slate-400 uppercase block">True Cost:</span>
+                            <span className="font-mono text-[11px] text-slate-300 font-semibold">
+                              {formatPKR(packInfo.trueCost)}
+                            </span>
+                          </div>
                         </div>
 
                         <div className="mt-3">
@@ -621,7 +685,7 @@ export const SalesModule: React.FC = () => {
                           >
                             {packSizes.map(pk => (
                               <option key={pk.id} value={pk.id}>
-                                {pk.name} ({pk.size_in_base_unit} {baseUnit}) • {formatPKR(pk.selling_price)}
+                                {pk.name} • {pk.packed_stock || 0} in stock • {formatPKR(pk.selling_price)}
                               </option>
                             ))}
                             <option value="bulk">
@@ -641,12 +705,12 @@ export const SalesModule: React.FC = () => {
 
                         <button
                           type="button"
-                          disabled={isOutOfStock}
+                          disabled={packInfo.isPackedSize ? packInfo.packedStock <= 0 : isOutOfStock}
                           onClick={() => addToCart(product.id)}
                           className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-bold text-xs transition-colors flex items-center gap-1 shadow-sm"
                         >
                           <Plus className="w-3.5 h-3.5" />
-                          <span>Add to Cart</span>
+                          <span>{packInfo.isPackedSize && packInfo.packedStock <= 0 ? 'Out of Packed Stock' : 'Add to Cart'}</span>
                         </button>
                       </div>
                     </div>

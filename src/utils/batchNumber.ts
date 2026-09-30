@@ -100,6 +100,34 @@ export const getNextBatchNumberForProduct = (
 };
 
 /**
+ * Calculates the next sequential packing run number for a product.
+ * Format: [Product SKU / Short Code]-Pack[Number] (e.g. DW-D1-Pack1, DW-D1-Pack2)
+ */
+export const getNextPackingRunNumber = (
+  productId: string,
+  runs: { product_id: string; run_number?: string }[],
+  product?: Product | { name: string; sku?: string }
+): string => {
+  const prefix = generateProductShortCode(product);
+  const productRuns = (runs || []).filter(r => r.product_id === productId);
+
+  let maxRunIndex = 0;
+  for (const run of productRuns) {
+    const rNum = run.run_number || '';
+    const match = rNum.match(/Pack[-_\s]?(\d+)/i) || rNum.match(/[-_](\d+)$/);
+    if (match) {
+      const parsedNum = parseInt(match[1], 10);
+      if (!isNaN(parsedNum) && parsedNum > maxRunIndex) {
+        maxRunIndex = parsedNum;
+      }
+    }
+  }
+
+  const nextNum = Math.max(productRuns.length, maxRunIndex) + 1;
+  return `${prefix}-Pack${nextNum}`;
+};
+
+/**
  * Helper to export data to a CSV file in browser.
  */
 export const exportToCSV = (

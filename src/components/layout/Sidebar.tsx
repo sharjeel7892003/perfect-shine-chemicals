@@ -15,7 +15,8 @@ import {
   FlaskConical,
   Layers,
   Factory,
-  DollarSign
+  DollarSign,
+  Boxes
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useApp } from '../../context/AppContext';
@@ -28,6 +29,7 @@ export type ActiveTab =
   | 'raw_materials'
   | 'formulations'
   | 'production'
+  | 'packing'
   | 'purchases' 
   | 'customers' 
   | 'suppliers' 
@@ -81,6 +83,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
     },
     { id: 'formulations' as ActiveTab, label: 'Formulations (BOM)', icon: Layers, visible: canAccessFormulations },
     { id: 'production' as ActiveTab, label: 'Production Batches', icon: Factory, visible: canAccessProduction },
+    { id: 'packing' as ActiveTab, label: 'Bottling & Packing', icon: Boxes, visible: canAccessProduction },
     { id: 'purchases' as ActiveTab, label: 'Purchases (Raw/Goods)', icon: Truck, visible: canManagePurchases },
     { id: 'customers' as ActiveTab, label: 'Customers & Ledgers', icon: Users, visible: canAccessCustomers },
     { id: 'suppliers' as ActiveTab, label: 'Suppliers & Vendors', icon: Building2, visible: canManagePurchases },

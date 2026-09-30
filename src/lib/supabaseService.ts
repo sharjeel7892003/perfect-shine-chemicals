@@ -18,7 +18,8 @@ import {
   PurchaseTrip,
   PurchaseTripItem,
   SalesReturn,
-  SalesReturnItem
+  SalesReturnItem,
+  PackingRun
 } from '../types';
 import { ensureUUID, isValidUUID } from '../utils/uuid';
 
@@ -55,7 +56,8 @@ export const supabaseService = {
         expRes,
         recExpRes,
         tripRes,
-        returnsRes
+        returnsRes,
+        packingRes
       ] = await Promise.all([
         supabase.from('products').select('*').order('created_at', { ascending: false }),
         supabase.from('customers').select('*').order('created_at', { ascending: false }),
@@ -73,7 +75,8 @@ export const supabaseService = {
         Promise.resolve(supabase.from('expenses').select('*').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
         Promise.resolve(supabase.from('recurring_expenses').select('*').order('created_at', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
         Promise.resolve(supabase.from('purchase_trips').select('*, purchase_trip_items(*)').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
-        Promise.resolve(supabase.from('sales_returns').select('*, sales_return_items(*)').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any))
+        Promise.resolve(supabase.from('sales_returns').select('*, sales_return_items(*)').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
+        Promise.resolve(supabase.from('packing_runs').select('*').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any))
       ]);
 
 
@@ -286,6 +289,7 @@ export const supabaseService = {
         expenses: (expRes?.data as Expense[]) || [],
         recurringExpenses: (recExpRes?.data as RecurringExpense[]) || [],
         purchaseTrips: normalizedPurchaseTrips,
+        packingRuns: ((packingRes?.data || []) as PackingRun[]),
       };
     } catch (err: any) {
       console.error('Failed to fetch from Supabase:', err);
@@ -1368,6 +1372,53 @@ export const supabaseService = {
   },
 
   // ============================================================================
+  // PACKING RUNS (BOTTLING / PACKAGING RUNS)
+  // ============================================================================
+  async upsertPackingRun(run: PackingRun): Promise<PackingRun> {
+    if (!isSupabaseConfigured || !supabase) return run;
+    assertOnline();
+
+    const validId = ensureUUID(run.id);
+    const payload = {
+      id: validId,
+      run_number: run.run_number,
+      product_id: isValidUUID(run.product_id) ? run.product_id : run.product_id,
+      product_name: run.product_name,
+      pack_size_id: run.pack_size_id,
+      pack_size_name: run.pack_size_name,
+      quantity_packed: Number(run.quantity_packed || 0),
+      size_in_base_unit: Number(run.size_in_base_unit || 1),
+      bulk_liquid_consumed: Number(run.bulk_liquid_consumed || 0),
+      bulk_unit_cost: Number(run.bulk_unit_cost || 0),
+      bulk_total_cost: Number(run.bulk_total_cost || 0),
+      packaging_materials_consumed: run.packaging_materials_consumed || [],
+      packaging_total_cost: Number(run.packaging_total_cost || 0),
+      total_cost: Number(run.total_cost || 0),
+      true_cost_per_unit: Number(run.true_cost_per_unit || 0),
+      date: run.date || new Date().toISOString(),
+      operator_name: run.operator_name || 'Staff',
+      notes: run.notes || '',
+      created_at: run.created_at || new Date().toISOString()
+    };
+
+    const { data, error } = await supabase.from('packing_runs').upsert(payload).select().single();
+    if (error) {
+      console.warn('Supabase upsertPackingRun warning (falling back to local):', error.message);
+    }
+    return (data as PackingRun) || { ...run, id: validId };
+  },
+
+  async deletePackingRun(id: string): Promise<void> {
+    if (!isSupabaseConfigured || !supabase || !isValidUUID(id)) return;
+    assertOnline();
+
+    const { error } = await supabase.from('packing_runs').delete().eq('id', id);
+    if (error) {
+      console.warn('Supabase deletePackingRun error:', error.message);
+    }
+  },
+
+  // ============================================================================
   // RESET ALL DATABASE DATA (CLEAN SLATE IN REVERSE FOREIGN KEY ORDER)
   // ============================================================================
   async resetAllDatabaseData(): Promise<void> {
@@ -1377,6 +1428,10 @@ export const supabaseService = {
     const dummyZeroUUID = '00000000-0000-0000-0000-000000000000';
 
     const tablesToWipe = [
+      'sales_return_items',
+      'sales_returns',
+      'purchase_trip_items',
+      'purchase_trips',
       'deletion_audit_logs',
       'payments',
       'expenses',
@@ -1387,6 +1442,7 @@ export const supabaseService = {
       'sales',
       'purchase_items',
       'purchases',
+      'packing_runs',
       'production_batches',
       'formulation_items',
       'product_formulations',

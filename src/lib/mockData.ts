@@ -10,6 +10,7 @@ import {
   RawMaterial, 
   ProductFormulation, 
   ProductionBatch, 
+  PackingRun,
   RawMaterialMovement 
 } from '../types';
 
@@ -32,6 +33,11 @@ export const INITIAL_FORMULATIONS: ProductFormulation[] = [];
 // 4. PRODUCTION BATCHES (CLEAN SLATE: 0 ITEMS)
 // ==============================================================================
 export const INITIAL_PRODUCTION_BATCHES: ProductionBatch[] = [];
+
+// ==============================================================================
+// 4B. PACKING RUNS / BOTTLING BATCHES (CLEAN SLATE: 0 ITEMS)
+// ==============================================================================
+export const INITIAL_PACKING_RUNS: PackingRun[] = [];
 
 // ==============================================================================
 // 5. RAW MATERIAL STOCK MOVEMENTS (CLEAN SLATE: 0 ITEMS)

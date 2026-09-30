@@ -18,7 +18,8 @@ import {
   Archive,
   RefreshCw,
   Layers,
-  Loader2
+  Loader2,
+  Boxes
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -27,6 +28,7 @@ import { formatPKR, formatDate, formatDateTime } from '../../utils/formatters';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { PackSizesModal } from './PackSizesModal';
+import { PackingRunModal } from '../packing/PackingRunModal';
 
 export const InventoryModule: React.FC = () => {
   const { 
@@ -54,6 +56,8 @@ export const InventoryModule: React.FC = () => {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isAdjustModalOpen, setIsAdjustModalOpen] = useState(false);
   const [isPackModalOpen, setIsPackModalOpen] = useState(false);
+  const [isPackingModalOpen, setIsPackingModalOpen] = useState(false);
+  const [packingProduct, setPackingProduct] = useState<Product | null>(null);
   const [deleteConfirmProduct, setDeleteConfirmProduct] = useState<Product | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -138,6 +142,11 @@ export const InventoryModule: React.FC = () => {
     setIsPackModalOpen(true);
   };
 
+  const openPackingModal = (product?: Product) => {
+    setPackingProduct(product || null);
+    setIsPackingModalOpen(true);
+  };
+
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -219,13 +228,23 @@ export const InventoryModule: React.FC = () => {
 
         <div className="flex items-center gap-2">
           {canAdjustStock && (
-            <button
-              onClick={() => openAdjustModal()}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
-            >
-              <Sliders className="w-4 h-4 text-amber-400" />
-              <span>Stock Adjustment</span>
-            </button>
+            <>
+              <button
+                onClick={() => openPackingModal()}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 text-xs font-semibold border border-teal-500/30 transition-colors"
+                title="Execute a Bottling & Packaging run"
+              >
+                <Boxes className="w-4 h-4 text-teal-400" />
+                <span>Pack Bottles</span>
+              </button>
+              <button
+                onClick={() => openAdjustModal()}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
+              >
+                <Sliders className="w-4 h-4 text-amber-400" />
+                <span>Stock Adjustment</span>
+              </button>
+            </>
           )}
 
           {canManageProducts && (
@@ -315,10 +334,11 @@ export const InventoryModule: React.FC = () => {
                   <th className="py-3 px-3">Product Name & SKU</th>
                   <th className="py-3 px-3">Category</th>
                   <th className="py-3 px-3 text-center">Base Unit</th>
-                  <th className="py-3 px-3">Sales Packaging Options</th>
-                  {isOwner && <th className="py-3 px-3 text-right">Cost Rate</th>}
+                  <th className="py-3 px-3 text-right">Unpacked Bulk Stock</th>
+                  <th className="py-3 px-3">Packed Bottles & Cost</th>
+                  <th className="py-3 px-3 text-center">Pack Options</th>
+                  {isOwner && <th className="py-3 px-3 text-right">Bulk Cost</th>}
                   <th className="py-3 px-3 text-right">Selling Rate</th>
-                  <th className="py-3 px-3 text-right">Current Stock (Base)</th>
                   <th className="py-3 px-3 text-right">Reorder Level</th>
                   <th className="py-3 px-3 text-center">Status</th>
                   <th className="py-3 px-3 text-right">Actions</th>
@@ -327,7 +347,7 @@ export const InventoryModule: React.FC = () => {
               <tbody className="divide-y divide-slate-800/60">
                 {filteredProducts.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="py-8 text-center text-slate-500">
+                    <td colSpan={11} className="py-8 text-center text-slate-500">
                       {showArchived ? 'No archived products found' : 'No active products match search criteria'}
                     </td>
                   </tr>
@@ -353,14 +373,45 @@ export const InventoryModule: React.FC = () => {
                             {baseUnit}
                           </span>
                         </td>
-                        <td className="py-3 px-3">
+                        <td className="py-3 px-3 text-right">
+                          <span className={`font-mono font-black text-sm ${isLow && !p.is_archived ? 'text-rose-400' : 'text-white'}`}>
+                            {Number(p.current_stock).toFixed(2)} <span className="text-[11px] font-normal text-slate-400">{baseUnit}</span>
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 min-w-[170px]">
+                          {p.pack_sizes && p.pack_sizes.length > 0 ? (
+                            <div className="flex flex-col gap-1">
+                              {p.pack_sizes.map((ps) => {
+                                const pStock = Number(ps.packed_stock || 0);
+                                return (
+                                  <div key={ps.id} className="flex items-center justify-between gap-2 text-[11px] bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700/50">
+                                    <span className="font-medium text-slate-300 truncate">{ps.name}:</span>
+                                    <div className="flex items-center gap-1 font-mono shrink-0">
+                                      <span className={`font-bold ${pStock > 0 ? 'text-teal-400' : 'text-slate-500'}`}>
+                                        {pStock} btls
+                                      </span>
+                                      {isOwner && Number(ps.true_cost || 0) > 0 && (
+                                        <span className="text-[10px] text-slate-400">
+                                          ({formatPKR(ps.true_cost || 0)})
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-slate-500 italic">Loose / bulk only</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-center">
                           <button
                             onClick={() => openPackModal(p)}
-                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700/60 transition-colors text-[11px]"
-                            title="Configure Pack Sizes"
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700/60 transition-colors text-[11px]"
+                            title="Configure Pack Sizes & Packaging Recipes"
                           >
                             <Box className="w-3.5 h-3.5 text-teal-400" />
-                            <span>{packCount} Pack Sizes</span>
+                            <span>{packCount} Sizes</span>
                           </button>
                         </td>
                         {isOwner && (
@@ -370,11 +421,6 @@ export const InventoryModule: React.FC = () => {
                         )}
                         <td className="py-3 px-3 text-right font-mono font-bold text-emerald-400">
                           {formatPKR(p.selling_price)}
-                        </td>
-                        <td className="py-3 px-3 text-right">
-                          <span className={`font-mono font-black text-sm ${isLow && !p.is_archived ? 'text-rose-400' : 'text-white'}`}>
-                            {p.current_stock} <span className="text-[11px] font-normal text-slate-400">{baseUnit}</span>
-                          </span>
                         </td>
                         <td className="py-3 px-3 text-right font-mono text-slate-400">
                           {p.reorder_level} {baseUnit}
@@ -393,13 +439,22 @@ export const InventoryModule: React.FC = () => {
                             {!p.is_archived ? (
                               <>
                                 {canAdjustStock && (
-                                  <button
-                                    onClick={() => openAdjustModal(p)}
-                                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 transition-colors"
-                                    title="Quick Stock Adjustment"
-                                  >
-                                    <Sliders className="w-3.5 h-3.5" />
-                                  </button>
+                                  <>
+                                    <button
+                                      onClick={() => openPackingModal(p)}
+                                      className="p-1.5 rounded-lg bg-teal-500/10 hover:bg-teal-500/20 text-teal-400 border border-teal-500/30 transition-colors"
+                                      title="Pack / Bottle this product"
+                                    >
+                                      <Boxes className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      onClick={() => openAdjustModal(p)}
+                                      className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 transition-colors"
+                                      title="Quick Stock Adjustment"
+                                    >
+                                      <Sliders className="w-3.5 h-3.5" />
+                                    </button>
+                                  </>
                                 )}
                                 {canManageProducts && (
                                   <button
@@ -767,6 +822,18 @@ export const InventoryModule: React.FC = () => {
           isOpen={isPackModalOpen}
           onClose={() => setIsPackModalOpen(false)}
           onSave={updateProductPackSizes}
+        />
+      )}
+
+      {/* Packing Run Modal */}
+      {isPackingModalOpen && (
+        <PackingRunModal
+          isOpen={isPackingModalOpen}
+          onClose={() => {
+            setIsPackingModalOpen(false);
+            setPackingProduct(null);
+          }}
+          initialProductId={packingProduct?.id}
         />
       )}
 

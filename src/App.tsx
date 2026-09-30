@@ -11,6 +11,7 @@ import { InventoryModule } from './components/inventory/InventoryModule';
 import { RawMaterialsModule } from './components/rawMaterials/RawMaterialsModule';
 import { FormulationsModule } from './components/formulations/FormulationsModule';
 import { ProductionModule } from './components/production/ProductionModule';
+import { PackingModule } from './components/packing/PackingModule';
 import { PurchasesModule } from './components/purchases/PurchasesModule';
 import { CustomersModule } from './components/customers/CustomersModule';
 import { SuppliersModule } from './components/suppliers/SuppliersModule';
@@ -83,6 +84,8 @@ const MainLayout: React.FC = () => {
             }} 
           />
         ) : <DashboardView onNavigate={setActiveTab} />;
+      case 'packing':
+        return canAccessProduction ? <PackingModule /> : <DashboardView onNavigate={setActiveTab} />;
       case 'purchases':
         return canManagePurchases ? <PurchasesModule /> : <DashboardView onNavigate={setActiveTab} />;
       case 'customers':

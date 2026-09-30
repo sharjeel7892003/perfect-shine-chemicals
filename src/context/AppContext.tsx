@@ -24,11 +24,13 @@ import {
   PurchaseItem,
   SalesReturn,
   SalesReturnItem,
-  SalesReturnRefundOption
+  SalesReturnRefundOption,
+  PackingRun,
+  PackagingItem
 } from '../types';
 import { generateInvoiceNumber, formatPKR } from '../utils/formatters';
 import { allocateTripFreight, calculateWeightedAverageLandedCost } from '../utils/freightAllocation';
-import { getNextBatchNumberForProduct } from '../utils/batchNumber';
+import { getNextBatchNumberForProduct, getNextPackingRunNumber } from '../utils/batchNumber';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { supabaseService } from '../lib/supabaseService';
 import { generateId, ensureUUID, isValidUUID } from '../utils/uuid';
@@ -48,6 +50,7 @@ interface AppContextType {
   salesReturns: SalesReturn[];
   purchases: Purchase[];
   purchaseTrips: PurchaseTrip[];
+  packingRuns: PackingRun[];
   stockMovements: StockMovement[];
   payments: Payment[];
   expenses: Expense[];
@@ -100,6 +103,21 @@ interface AppContextType {
     warningDetails?: string[]; 
     message: string 
   }>;
+
+  // Packing / Bottling Module Actions
+  recordPackingRun: (params: {
+    productId: string;
+    packSizeId: string;
+    quantityPacked: number;
+    runNumber?: string;
+    date: string;
+    operatorName: string;
+    notes?: string;
+  }) => Promise<{ success: boolean; message: string; run?: PackingRun }>;
+  deletePackingRun: (
+    runId: string, 
+    user: Profile
+  ) => Promise<{ success: boolean; message: string }>;
 
   // Safe Delete / Archive History Checkers
   checkProductHasHistory: (productId: string) => boolean;
@@ -228,6 +246,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return [];
   });
+  const [packingRuns, setPackingRuns] = useState<PackingRun[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('psc_local_packing_runs');
+        if (cached) return JSON.parse(cached);
+      } catch {}
+    }
+    return [];
+  });
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -351,6 +378,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (typeof window !== 'undefined' && syncedTrips.length > 0) {
           try {
             localStorage.setItem('psc_local_purchase_trips', JSON.stringify(syncedTrips));
+          } catch {}
+        }
+        let effectivePackingRuns = (cloudData as any).packingRuns || [];
+        if (effectivePackingRuns.length === 0 && typeof window !== 'undefined') {
+          try {
+            const cached = localStorage.getItem('psc_local_packing_runs');
+            if (cached) effectivePackingRuns = JSON.parse(cached);
+          } catch {}
+        }
+        setPackingRuns(effectivePackingRuns);
+        if (typeof window !== 'undefined' && effectivePackingRuns.length > 0) {
+          try {
+            localStorage.setItem('psc_local_packing_runs', JSON.stringify(effectivePackingRuns));
           } catch {}
         }
         setStockMovements(cloudData.stockMovements || []);
@@ -953,18 +993,382 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   };
 
+  // ==============================================================================
+  // PACKING & BOTTLING MODULE ACTIONS (DECIMAL-PRECISION & ATOMIC BLOCKING)
+  // ==============================================================================
+  const recordPackingRun = async (params: {
+    productId: string;
+    packSizeId: string;
+    quantityPacked: number;
+    runNumber?: string;
+    date: string;
+    operatorName: string;
+    notes?: string;
+  }): Promise<{ success: boolean; message: string; run?: PackingRun }> => {
+    const targetProduct = products.find(p => p.id === params.productId);
+    if (!targetProduct) {
+      return { success: false, message: 'Target product not found.' };
+    }
+
+    const packSize = (targetProduct.pack_sizes || []).find(ps => ps.id === params.packSizeId);
+    if (!packSize) {
+      return { success: false, message: 'Selected pack size not found for this product.' };
+    }
+
+    const qtyToPack = Number(params.quantityPacked);
+    if (!qtyToPack || qtyToPack <= 0) {
+      return { success: false, message: 'Quantity of bottles/packs to fill must be greater than zero.' };
+    }
+
+    const bulkMultiplier = Number(packSize.size_in_base_unit || 1);
+    const bulkNeeded = Number((qtyToPack * bulkMultiplier).toFixed(4));
+    const currentBulkStock = Number(targetProduct.current_stock || 0);
+
+    const stockErrors: string[] = [];
+
+    // 1. Check bulk liquid availability
+    if (bulkNeeded > currentBulkStock) {
+      stockErrors.push(
+        `Bulk Liquid "${targetProduct.name}": Required ${bulkNeeded} ${targetProduct.base_unit || targetProduct.unit}, but only ${currentBulkStock} ${targetProduct.base_unit || targetProduct.unit} available in warehouse bulk stock.`
+      );
+    }
+
+    // 2. Check packaging materials availability
+    const packagingRecipe = packSize.packaging_items || [];
+    const requirements: {
+      item: PackagingItem;
+      rm: RawMaterial;
+      totalNeeded: number;
+      unitCost: number;
+      cost: number;
+    }[] = [];
+
+    for (const item of packagingRecipe) {
+      const rm = rawMaterials.find(m => m.id === item.raw_material_id);
+      const totalNeeded = Number((qtyToPack * Number(item.quantity || 0)).toFixed(4));
+      if (!rm) {
+        stockErrors.push(`Packaging raw material "${item.raw_material_name}" could not be found.`);
+      } else {
+        const availableRm = Number(rm.current_stock || 0);
+        if (totalNeeded > availableRm) {
+          stockErrors.push(
+            `Packaging Item "${rm.name}": Required ${totalNeeded} ${rm.unit}, but only ${availableRm} ${rm.unit} in stock.`
+          );
+        } else {
+          const unitCost = Number(rm.cost_per_unit || 0);
+          const cost = Number((totalNeeded * unitCost).toFixed(4));
+          requirements.push({
+            item,
+            rm,
+            totalNeeded,
+            unitCost,
+            cost,
+          });
+        }
+      }
+    }
+
+    // INSUFFICIENT STOCK HANDLING (Requirement 2): Fully blocked if ANY material or bulk liquid is insufficient!
+    if (stockErrors.length > 0) {
+      return {
+        success: false,
+        message: `Packing run blocked due to insufficient stock:\n\n• ${stockErrors.join('\n• ')}`
+      };
+    }
+
+    // 3. Sequential Run Number
+    let finalRunNumber = (params.runNumber || '').trim();
+    if (!finalRunNumber) {
+      finalRunNumber = getNextPackingRunNumber(targetProduct.id, packingRuns, targetProduct);
+    } else {
+      let candidate = finalRunNumber;
+      let counter = 1;
+      const isTaken = (rNum: string) => packingRuns.some(r => r.run_number?.toLowerCase() === rNum.toLowerCase());
+      while (isTaken(candidate)) {
+        candidate = `${finalRunNumber}-${counter}`;
+        counter++;
+      }
+      finalRunNumber = candidate;
+    }
+
+    const now = new Date().toISOString();
+    const effectiveDate = params.date || now;
+
+    // 4. Calculations (Requirement 1: decimal precision)
+    const bulkUnitCost = Number(targetProduct.cost_price || 0);
+    const bulkTotalCost = Number((bulkNeeded * bulkUnitCost).toFixed(4));
+    const packagingTotalCost = Number(requirements.reduce((sum, r) => sum + r.cost, 0).toFixed(4));
+    const totalRunCost = Number((bulkTotalCost + packagingTotalCost).toFixed(4));
+    const trueCostPerUnit = Number((totalRunCost / qtyToPack).toFixed(4));
+
+    // 5. Deduct Packaging Materials from Raw Materials
+    const updatedRawMaterials = [...rawMaterials];
+    const newRawMovements: RawMaterialMovement[] = [];
+
+    for (const req of requirements) {
+      const rmIdx = updatedRawMaterials.findIndex(m => m.id === req.item.raw_material_id);
+      if (rmIdx !== -1) {
+        const prevStk = Number(updatedRawMaterials[rmIdx].current_stock);
+        const nextStk = Math.max(0, Number((prevStk - req.totalNeeded).toFixed(4)));
+        const updatedRm = {
+          ...updatedRawMaterials[rmIdx],
+          current_stock: nextStk,
+          updated_at: now,
+        };
+        updatedRawMaterials[rmIdx] = updatedRm;
+        await supabaseService.upsertRawMaterial(updatedRm);
+
+        const rmMvt: RawMaterialMovement = {
+          id: generateId(),
+          raw_material_id: req.item.raw_material_id,
+          raw_material_name: req.item.raw_material_name,
+          movement_type: 'packaging_out',
+          quantity: -req.totalNeeded,
+          previous_stock: prevStk,
+          new_stock: nextStk,
+          reference_id: finalRunNumber,
+          notes: `Consumed in Packing Run ${finalRunNumber} (${qtyToPack}x ${targetProduct.name} - ${packSize.name})`,
+          date: effectiveDate,
+          created_by_name: params.operatorName,
+        };
+        newRawMovements.push(rmMvt);
+        await supabaseService.upsertRawMaterialMovement(rmMvt);
+      }
+    }
+
+    // 6. Deduct Bulk Liquid from Target Product and Update Pack Size Packed Stock & True Cost
+    const prevBulkStock = Number(targetProduct.current_stock);
+    const newBulkStock = Math.max(0, Number((prevBulkStock - bulkNeeded).toFixed(4)));
+
+    const prevPackedStock = Number(packSize.packed_stock || 0);
+    const newPackedStock = Number((prevPackedStock + qtyToPack).toFixed(4));
+
+    // Weighted average true cost calculation
+    let weightedTrueCost = trueCostPerUnit;
+    const prevTrueCost = Number(packSize.true_cost || 0);
+    if (prevPackedStock > 0 && prevTrueCost > 0) {
+      const prevTotalVal = prevPackedStock * prevTrueCost;
+      const newTotalVal = qtyToPack * trueCostPerUnit;
+      weightedTrueCost = Number(((prevTotalVal + newTotalVal) / newPackedStock).toFixed(4));
+    }
+
+    const updatedPackSizes = (targetProduct.pack_sizes || []).map(ps => {
+      if (ps.id === packSize.id) {
+        return {
+          ...ps,
+          packed_stock: newPackedStock,
+          true_cost: weightedTrueCost,
+        };
+      }
+      return ps;
+    });
+
+    const updatedProduct: Product = {
+      ...targetProduct,
+      current_stock: newBulkStock,
+      pack_sizes: updatedPackSizes,
+      updated_at: now,
+    };
+    await supabaseService.upsertProduct(updatedProduct);
+
+    // 7. Log Stock Movement for Bulk Liquid Deduction
+    const bulkStockMovement: StockMovement = {
+      id: generateId(),
+      product_id: targetProduct.id,
+      product_name: targetProduct.name,
+      movement_type: 'packaging_out',
+      quantity: -bulkNeeded,
+      previous_stock: prevBulkStock,
+      new_stock: newBulkStock,
+      reference_id: finalRunNumber,
+      notes: `Bulk liquid filled into ${qtyToPack}x ${packSize.name} in Packing Run ${finalRunNumber}`,
+      date: effectiveDate,
+      created_by_name: params.operatorName,
+    };
+    await supabaseService.upsertStockMovement(bulkStockMovement);
+
+    // 8. Create and Save Packing Run Record
+    const newPackingRun: PackingRun = {
+      id: generateId(),
+      run_number: finalRunNumber,
+      product_id: targetProduct.id,
+      product_name: targetProduct.name,
+      pack_size_id: packSize.id,
+      pack_size_name: packSize.name,
+      quantity_packed: qtyToPack,
+      size_in_base_unit: bulkMultiplier,
+      bulk_liquid_consumed: bulkNeeded,
+      bulk_unit_cost: bulkUnitCost,
+      bulk_total_cost: bulkTotalCost,
+      packaging_materials_consumed: requirements.map(r => ({
+        raw_material_id: r.item.raw_material_id,
+        raw_material_name: r.item.raw_material_name,
+        quantity_per_unit: Number(r.item.quantity),
+        total_quantity: r.totalNeeded,
+        unit: r.item.unit,
+        unit_cost: r.unitCost,
+        total_cost: r.cost,
+      })),
+      packaging_total_cost: packagingTotalCost,
+      total_cost: totalRunCost,
+      true_cost_per_unit: trueCostPerUnit,
+      date: effectiveDate,
+      operator_name: params.operatorName,
+      notes: params.notes,
+      created_at: now,
+    };
+
+    const savedRun = await supabaseService.upsertPackingRun(newPackingRun);
+
+    // Update in-memory state
+    setRawMaterials(updatedRawMaterials);
+    setRawMaterialMovements(prev => [...newRawMovements, ...prev]);
+    setProducts(prev => prev.map(p => p.id === targetProduct.id ? updatedProduct : p));
+    setStockMovements(prev => [bulkStockMovement, ...prev]);
+    const nextPackingRuns = [savedRun, ...packingRuns];
+    setPackingRuns(nextPackingRuns);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('psc_local_packing_runs', JSON.stringify(nextPackingRuns));
+      } catch {}
+    }
+
+    return {
+      success: true,
+      message: `Packing Run ${finalRunNumber} recorded successfully! Packed ${qtyToPack} bottles of ${targetProduct.name} (${packSize.name}) at True Cost of PKR ${trueCostPerUnit.toFixed(2)}/bottle (Chemical: PKR ${(bulkTotalCost / qtyToPack).toFixed(2)} + Packaging: PKR ${(packagingTotalCost / qtyToPack).toFixed(2)}).`,
+      run: savedRun,
+    };
+  };
+
+  const deletePackingRun = async (
+    runId: string, 
+    user: Profile
+  ): Promise<{ success: boolean; message: string }> => {
+    const targetRun = packingRuns.find(r => r.id === runId);
+    if (!targetRun) return { success: false, message: 'Packing run not found.' };
+
+    const targetProduct = products.find(p => p.id === targetRun.product_id);
+    if (!targetProduct) return { success: false, message: 'Associated product not found.' };
+
+    const packSize = (targetProduct.pack_sizes || []).find(ps => ps.id === targetRun.pack_size_id);
+    const currentPackedStock = packSize ? Number(packSize.packed_stock || 0) : 0;
+    const runPackedQty = Number(targetRun.quantity_packed || 0);
+
+    if (currentPackedStock < runPackedQty) {
+      return {
+        success: false,
+        message: `Cannot reverse Packing Run ${targetRun.run_number}: Only ${currentPackedStock} bottles are currently in packed stock, but this run packed ${runPackedQty} bottles. Some bottles have already been sold!`
+      };
+    }
+
+    const now = new Date().toISOString();
+
+    // 1. Restore Bulk Liquid
+    const prevBulkStock = Number(targetProduct.current_stock || 0);
+    const restoredBulkStock = Number((prevBulkStock + Number(targetRun.bulk_liquid_consumed || 0)).toFixed(4));
+    const nextPackedStock = Math.max(0, Number((currentPackedStock - runPackedQty).toFixed(4)));
+
+    const updatedPackSizes = (targetProduct.pack_sizes || []).map(ps => {
+      if (ps.id === targetRun.pack_size_id) {
+        return {
+          ...ps,
+          packed_stock: nextPackedStock,
+        };
+      }
+      return ps;
+    });
+
+    const updatedProduct = {
+      ...targetProduct,
+      current_stock: restoredBulkStock,
+      pack_sizes: updatedPackSizes,
+      updated_at: now,
+    };
+    await supabaseService.upsertProduct(updatedProduct);
+
+    // 2. Restore Consumed Packaging Materials
+    const updatedRawMaterials = [...rawMaterials];
+    const newRawMovements: RawMaterialMovement[] = [];
+
+    for (const mat of targetRun.packaging_materials_consumed || []) {
+      const rmIdx = updatedRawMaterials.findIndex(m => m.id === mat.raw_material_id);
+      if (rmIdx !== -1) {
+        const prevStk = Number(updatedRawMaterials[rmIdx].current_stock || 0);
+        const nextStk = Number((prevStk + Number(mat.total_quantity || 0)).toFixed(4));
+        const updatedRm = {
+          ...updatedRawMaterials[rmIdx],
+          current_stock: nextStk,
+          updated_at: now,
+        };
+        updatedRawMaterials[rmIdx] = updatedRm;
+        await supabaseService.upsertRawMaterial(updatedRm);
+
+        const rmMvt: RawMaterialMovement = {
+          id: generateId(),
+          raw_material_id: mat.raw_material_id,
+          raw_material_name: mat.raw_material_name,
+          movement_type: 'adjustment',
+          quantity: Number(mat.total_quantity || 0),
+          previous_stock: prevStk,
+          new_stock: nextStk,
+          reference_id: targetRun.run_number,
+          notes: `Restored from reversed Packing Run ${targetRun.run_number}`,
+          date: now,
+          created_by_name: user.name,
+        };
+        newRawMovements.push(rmMvt);
+        await supabaseService.upsertRawMaterialMovement(rmMvt);
+      }
+    }
+
+    // 3. Delete Packing Run from Supabase & local state
+    await supabaseService.deletePackingRun(targetRun.id);
+
+    const nextRuns = packingRuns.filter(r => r.id !== runId);
+    setPackingRuns(nextRuns);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('psc_local_packing_runs', JSON.stringify(nextRuns));
+      } catch {}
+    }
+
+    setProducts(prev => prev.map(p => p.id === targetProduct.id ? updatedProduct : p));
+    setRawMaterials(updatedRawMaterials);
+    setRawMaterialMovements(prev => [...newRawMovements, ...prev]);
+
+    // 4. Log Deletion in DeletionAuditLog
+    await supabaseService.upsertDeletionLog({
+      id: generateId(),
+      date: now,
+      entity_type: 'packing_run',
+      entity_id: targetRun.id,
+      entity_title: `${targetRun.run_number} (${targetRun.product_name} - ${targetRun.pack_size_name})`,
+      action_type: 'reversed_and_deleted',
+      impact_summary: `Reversed packing run of ${targetRun.quantity_packed} bottles. Restored ${targetRun.bulk_liquid_consumed} ${targetProduct.base_unit || targetProduct.unit} bulk liquid and packaging materials.`,
+      performed_by: user.name,
+      performed_by_role: user.role,
+    });
+
+    return {
+      success: true,
+      message: `Packing Run ${targetRun.run_number} reversed successfully. Bulk liquid and packaging materials were restored to stock.`
+    };
+  };
+
   // Safe Delete History Checkers
   const checkProductHasHistory = (productId: string): boolean => {
     const hasSales = sales.some(s => s.items?.some(i => i.product_id === productId));
     const hasBatches = productionBatches.some(b => b.product_id === productId);
     const hasFormulation = formulations.some(f => f.product_id === productId);
-    return hasSales || hasBatches || hasFormulation;
+    const hasPacking = packingRuns.some(r => r.product_id === productId);
+    return hasSales || hasBatches || hasFormulation || hasPacking;
   };
 
   const checkRawMaterialHasHistory = (rawMaterialId: string): boolean => {
     const isUsedInFormulations = formulations.some(f => f.items?.some(i => i.raw_material_id === rawMaterialId));
     const isUsedInPurchases = purchases.some(p => p.items?.some(i => i.raw_material_id === rawMaterialId));
-    return isUsedInFormulations || isUsedInPurchases;
+    const isUsedInPacking = products.some(p => p.pack_sizes?.some(ps => ps.packaging_items?.some(pi => pi.raw_material_id === rawMaterialId)));
+    return isUsedInFormulations || isUsedInPurchases || isUsedInPacking;
   };
 
   const checkFormulationHasHistory = (formulationId: string): boolean => {
@@ -1311,22 +1715,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } else {
           const prod = products.find(p => p.id === item.product_id);
           if (prod) {
-            const deductBaseQty = item.base_quantity || item.quantity;
-            const prevStk = Number(prod.current_stock);
-            const nextStk = Math.max(0, prevStk - deductBaseQty);
-            const updatedProd = { ...prod, current_stock: nextStk, updated_at: new Date().toISOString() };
+            const isPackedSize = Boolean(item.pack_size_id && item.pack_size_id !== 'bulk');
+            const targetPack = isPackedSize 
+              ? (prod.pack_sizes || []).find(ps => ps.id === item.pack_size_id)
+              : undefined;
+
+            let updatedProd: Product;
+            let mvtQty: number;
+            let prevStk: number;
+            let nextStk: number;
+
+            if (isPackedSize && targetPack) {
+              // Deduct from this pack size's packed_stock
+              const prevPackStk = Number(targetPack.packed_stock || 0);
+              const deductPackQty = Number(item.quantity);
+              const nextPackStk = Math.max(0, Number((prevPackStk - deductPackQty).toFixed(4)));
+
+              const updatedPackSizes = (prod.pack_sizes || []).map(ps => 
+                ps.id === targetPack.id ? { ...ps, packed_stock: nextPackStk } : ps
+              );
+              updatedProd = { ...prod, pack_sizes: updatedPackSizes, updated_at: new Date().toISOString() };
+              prevStk = prevPackStk;
+              nextStk = nextPackStk;
+              mvtQty = -deductPackQty;
+            } else {
+              // Deduct bulk liquid from prod.current_stock
+              const deductBaseQty = item.base_quantity || item.quantity;
+              prevStk = Number(prod.current_stock);
+              nextStk = Math.max(0, Number((prevStk - deductBaseQty).toFixed(4)));
+              updatedProd = { ...prod, current_stock: nextStk, updated_at: new Date().toISOString() };
+              mvtQty = -deductBaseQty;
+            }
+
             await supabaseService.upsertProduct(updatedProd);
+            setProducts(prev => prev.map(p => p.id === updatedProd.id ? updatedProd : p));
 
             const mvt: StockMovement = {
               id: generateId(),
               product_id: prod.id,
               product_name: prod.name,
               movement_type: 'sale_out',
-              quantity: -deductBaseQty,
+              quantity: mvtQty,
               previous_stock: prevStk,
               new_stock: nextStk,
               reference_id: savedSale.id,
-              notes: `Sold via Invoice ${invoiceNum} (${item.pack_size_name ? `${item.quantity}x ${item.pack_size_name}` : `${deductBaseQty} ${prod.base_unit || prod.unit}`})`,
+              notes: isPackedSize && targetPack 
+                ? `Sold ${item.quantity}x ${item.pack_size_name} via Invoice ${invoiceNum} (Packed stock: ${prevStk} -> ${nextStk})`
+                : `Sold bulk liquid via Invoice ${invoiceNum} (${Math.abs(mvtQty)} ${prod.base_unit || prod.unit})`,
               date: savedSale.date,
               created_by_name: savedSale.salesperson_name,
             };
@@ -1434,22 +1869,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else {
         const prod = products.find(p => p.id === item.product_id);
         if (prod) {
-          const addBackBaseQty = item.base_quantity || item.quantity;
-          const prevStk = Number(prod.current_stock);
-          const nextStk = prevStk + addBackBaseQty;
-          const updatedProd = { ...prod, current_stock: nextStk, updated_at: now };
+          const isPackedSize = Boolean(item.pack_size_id && item.pack_size_id !== 'bulk');
+          const targetPack = isPackedSize 
+            ? (prod.pack_sizes || []).find(ps => ps.id === item.pack_size_id)
+            : undefined;
+
+          let updatedProd: Product;
+          let mvtQty: number;
+          let prevStk: number;
+          let nextStk: number;
+
+          if (isPackedSize && targetPack) {
+            const prevPackStk = Number(targetPack.packed_stock || 0);
+            const addBackQty = Number(item.quantity);
+            const nextPackStk = Number((prevPackStk + addBackQty).toFixed(4));
+            const updatedPackSizes = (prod.pack_sizes || []).map(ps => 
+              ps.id === targetPack.id ? { ...ps, packed_stock: nextPackStk } : ps
+            );
+            updatedProd = { ...prod, pack_sizes: updatedPackSizes, updated_at: now };
+            prevStk = prevPackStk;
+            nextStk = nextPackStk;
+            mvtQty = addBackQty;
+          } else {
+            const addBackBaseQty = item.base_quantity || item.quantity;
+            prevStk = Number(prod.current_stock);
+            nextStk = Number((prevStk + addBackBaseQty).toFixed(4));
+            updatedProd = { ...prod, current_stock: nextStk, updated_at: now };
+            mvtQty = addBackBaseQty;
+          }
+
           await supabaseService.upsertProduct(updatedProd);
+          setProducts(prev => prev.map(p => p.id === updatedProd.id ? updatedProd : p));
 
           const mvt: StockMovement = {
             id: generateId(),
             product_id: prod.id,
             product_name: prod.name,
             movement_type: 'return',
-            quantity: addBackBaseQty,
+            quantity: mvtQty,
             previous_stock: prevStk,
             new_stock: nextStk,
             reference_id: targetSale.invoice_number,
-            notes: `Restored from deleted invoice ${targetSale.invoice_number}`,
+            notes: isPackedSize && targetPack
+              ? `Restored ${item.quantity}x ${item.pack_size_name} from deleted invoice ${targetSale.invoice_number}`
+              : `Restored bulk liquid from deleted invoice ${targetSale.invoice_number}`,
             date: now,
             created_by_name: user.name,
           };
@@ -1636,10 +2099,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const prodIdx = updatedProducts.findIndex(p => p.id === prodId);
         if (prodIdx !== -1) {
           const prod = updatedProducts[prodIdx];
-          const addBackBaseQty = Number(item.base_quantity || item.quantity);
-          const prevStk = Number(prod.current_stock);
-          const nextStk = Number((prevStk + addBackBaseQty).toFixed(4));
-          const updatedProd = { ...prod, current_stock: nextStk, updated_at: new Date().toISOString() };
+          const isPackedSize = Boolean(item.pack_size_id && item.pack_size_id !== 'bulk');
+          const targetPack = isPackedSize 
+            ? (prod.pack_sizes || []).find(ps => ps.id === item.pack_size_id)
+            : undefined;
+
+          let updatedProd: Product;
+          let mvtQty: number;
+          let prevStk: number;
+          let nextStk: number;
+
+          if (isPackedSize && targetPack) {
+            const prevPackStk = Number(targetPack.packed_stock || 0);
+            const addBackQty = Number(item.quantity);
+            const nextPackStk = Number((prevPackStk + addBackQty).toFixed(4));
+            const updatedPackSizes = (prod.pack_sizes || []).map(ps => 
+              ps.id === targetPack.id ? { ...ps, packed_stock: nextPackStk } : ps
+            );
+            updatedProd = { ...prod, pack_sizes: updatedPackSizes, updated_at: new Date().toISOString() };
+            prevStk = prevPackStk;
+            nextStk = nextPackStk;
+            mvtQty = addBackQty;
+          } else {
+            const addBackBaseQty = Number(item.base_quantity || item.quantity);
+            prevStk = Number(prod.current_stock);
+            nextStk = Number((prevStk + addBackBaseQty).toFixed(4));
+            updatedProd = { ...prod, current_stock: nextStk, updated_at: new Date().toISOString() };
+            mvtQty = addBackBaseQty;
+          }
+
           updatedProducts[prodIdx] = updatedProd;
           await supabaseService.upsertProduct(updatedProd);
 
@@ -1648,11 +2136,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             product_id: prod.id,
             product_name: prod.name,
             movement_type: 'return',
-            quantity: addBackBaseQty,
+            quantity: mvtQty,
             previous_stock: prevStk,
             new_stock: nextStk,
             reference_id: savedReturn.id,
-            notes: `Returned via Credit Note ${creditNoteNumber} against Invoice ${savedReturn.invoice_number} (${item.pack_size_name ? `${item.quantity}x ${item.pack_size_name}` : `${addBackBaseQty} ${prod.base_unit || prod.unit}`})`,
+            notes: `Returned via Credit Note ${creditNoteNumber} against Invoice ${savedReturn.invoice_number} (${item.pack_size_name ? `${item.quantity}x ${item.pack_size_name}` : `${mvtQty} ${prod.base_unit || prod.unit}`})`,
             date: savedReturn.date,
             created_by_name: user.name,
           };
@@ -1735,10 +2223,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else {
         const prod = updatedProducts.find(p => p.id === item.product_id);
         if (prod) {
-          const deductQty = Number(item.base_quantity || item.quantity);
-          const prevStk = Number(prod.current_stock);
-          const nextStk = Math.max(0, prevStk - deductQty);
-          const updatedProd = { ...prod, current_stock: nextStk, updated_at: now };
+          const isPackedSize = Boolean(item.pack_size_id && item.pack_size_id !== 'bulk');
+          const targetPack = isPackedSize 
+            ? (prod.pack_sizes || []).find(ps => ps.id === item.pack_size_id)
+            : undefined;
+
+          let updatedProd: Product;
+          let mvtQty: number;
+          let prevStk: number;
+          let nextStk: number;
+
+          if (isPackedSize && targetPack) {
+            const prevPackStk = Number(targetPack.packed_stock || 0);
+            const deductPackQty = Number(item.quantity);
+            const nextPackStk = Math.max(0, Number((prevPackStk - deductPackQty).toFixed(4)));
+            const updatedPackSizes = (prod.pack_sizes || []).map(ps => 
+              ps.id === targetPack.id ? { ...ps, packed_stock: nextPackStk } : ps
+            );
+            updatedProd = { ...prod, pack_sizes: updatedPackSizes, updated_at: now };
+            prevStk = prevPackStk;
+            nextStk = nextPackStk;
+            mvtQty = -deductPackQty;
+          } else {
+            const deductQty = Number(item.base_quantity || item.quantity);
+            prevStk = Number(prod.current_stock);
+            nextStk = Math.max(0, Number((prevStk - deductQty).toFixed(4)));
+            updatedProd = { ...prod, current_stock: nextStk, updated_at: now };
+            mvtQty = -deductQty;
+          }
+
           await supabaseService.upsertProduct(updatedProd);
 
           const mvt: StockMovement = {
@@ -1746,7 +2259,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             product_id: prod.id,
             product_name: prod.name,
             movement_type: 'sale_out',
-            quantity: -deductQty,
+            quantity: mvtQty,
             previous_stock: prevStk,
             new_stock: nextStk,
             reference_id: targetReturn.credit_note_number,
@@ -2846,6 +3359,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         unarchiveFormulation,
         recordProductionBatch,
         deleteProductionBatch,
+        packingRuns,
+        recordPackingRun,
+        deletePackingRun,
         checkProductHasHistory,
         checkRawMaterialHasHistory,
         checkFormulationHasHistory,
