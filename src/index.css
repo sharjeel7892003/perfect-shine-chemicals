@@ -69,6 +69,7 @@
   }
 
   #printable-invoice, #printable-invoice *,
+  #printable-quotation, #printable-quotation *,
   #printable-credit-note, #printable-credit-note *,
   #printable-report, #printable-report *,
   #printable-ledger, #printable-ledger *,
@@ -77,6 +78,7 @@
   }
 
   #printable-invoice,
+  #printable-quotation,
   #printable-credit-note,
   #printable-report,
   #printable-ledger,
