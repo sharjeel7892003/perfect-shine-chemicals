@@ -44,6 +44,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     totalProductsValuation,
     productionBatches,
     expenses,
+    salesReturns,
     thisMonthExpenses,
     thisMonthOverheads
   } = useApp();
@@ -58,6 +59,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     expenses,
     customers,
     suppliers,
+    salesReturns,
   });
 
   const totalSalesRevenue = overallFinancials.totalSalesRevenue;

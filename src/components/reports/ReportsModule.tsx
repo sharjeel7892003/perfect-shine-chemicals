@@ -339,7 +339,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
   const sortedDebtors = customers
     .filter(c => !c.is_archived)
     .map(c => {
-      const summary = calculateCustomerFinancials(c, sales, payments);
+      const summary = calculateCustomerFinancials(c, sales, payments, salesReturns);
       return {
         ...c,
         current_balance: summary.outstandingReceivable,

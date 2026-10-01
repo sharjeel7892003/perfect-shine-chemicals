@@ -78,7 +78,7 @@ export const SalesModule: React.FC = () => {
   const [selectedPackByProduct, setSelectedPackByProduct] = useState<Record<string, string>>({});
 
   const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
-  const customerFinancials = selectedCustomer ? calculateCustomerFinancials(selectedCustomer, sales, payments) : null;
+  const customerFinancials = selectedCustomer ? calculateCustomerFinancials(selectedCustomer, sales, payments, salesReturns) : null;
   const availableAdvance = customerFinancials ? customerFinancials.advanceBalance : 0;
 
   // Cart Calculations
@@ -830,7 +830,7 @@ export const SalesModule: React.FC = () => {
                 >
                   <option value="">Counter Walk-in Retail Customer</option>
                   {customers.filter(c => !c.is_archived).map((c) => {
-                    const cFin = calculateCustomerFinancials(c, sales, payments);
+                    const cFin = calculateCustomerFinancials(c, sales, payments, salesReturns);
                     return (
                       <option key={c.id} value={c.id}>
                         {c.name} ({c.customer_type}) {cFin.advanceBalance > 0 ? `• Held Advance: ${formatPKR(cFin.advanceBalance)}` : cFin.outstandingReceivable > 0 ? `• Due: ${formatPKR(cFin.outstandingReceivable)}` : ''}

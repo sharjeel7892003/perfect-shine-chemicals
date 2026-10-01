@@ -112,6 +112,7 @@ export const PaymentsModule: React.FC = () => {
     expenses,
     customers,
     suppliers,
+    salesReturns,
   });
 
   const totalInflow = financialMetrics.totalCashCollected;
@@ -135,7 +136,7 @@ export const PaymentsModule: React.FC = () => {
     setLinkedSaleId('');
     const target = customers.find(c => c.id === custId);
     if (target) {
-      const summary = calculateCustomerFinancials(target, sales, payments);
+      const summary = calculateCustomerFinancials(target, sales, payments, salesReturns);
       setCustPayAmount(summary.outstandingReceivable);
     } else {
       setCustPayAmount(0);
@@ -153,7 +154,7 @@ export const PaymentsModule: React.FC = () => {
       }
     } else {
       if (currentSelectedCustomer) {
-        const summary = calculateCustomerFinancials(currentSelectedCustomer, sales, payments);
+        const summary = calculateCustomerFinancials(currentSelectedCustomer, sales, payments, salesReturns);
         setCustPayAmount(summary.outstandingReceivable);
       }
     }
@@ -997,9 +998,15 @@ export const PaymentsModule: React.FC = () => {
                 </div>
                 <div className="pl-4 border-l border-slate-800">
                   <span className="text-[10px] font-bold text-slate-400 uppercase">Current Outstanding Balance</span>
-                  <p className={`text-xl font-black font-mono ${selectedLedgerCustomer.current_balance > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
-                    {formatPKR(selectedLedgerCustomer.current_balance)}
-                  </p>
+                  {(() => {
+                    const custFin = calculateCustomerFinancials(selectedLedgerCustomer, sales, payments, salesReturns);
+                    const bal = custFin.outstandingReceivable > 0 ? custFin.outstandingReceivable : (custFin.advanceBalance > 0 ? -custFin.advanceBalance : 0);
+                    return (
+                      <p className={`text-xl font-black font-mono ${bal > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                        {formatPKR(Math.abs(bal))} {bal < 0 ? '(Advance)' : ''}
+                      </p>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
@@ -1732,7 +1739,7 @@ export const PaymentsModule: React.FC = () => {
               >
                 <option value="">Choose customer...</option>
                 {customers.map(c => {
-                  const summary = calculateCustomerFinancials(c, sales, payments);
+                  const summary = calculateCustomerFinancials(c, sales, payments, salesReturns);
                   return (
                     <option key={c.id} value={c.id}>
                       {c.name} ({c.customer_type}) {summary.advanceBalance > 0 ? `• Held Advance: ${formatPKR(summary.advanceBalance)}` : summary.outstandingReceivable > 0 ? `• Due: ${formatPKR(summary.outstandingReceivable)}` : ''}
