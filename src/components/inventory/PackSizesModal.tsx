@@ -44,6 +44,7 @@ export const PackSizesModal: React.FC<PackSizesModalProps> = ({
       packaging_items: p.packaging_items ? p.packaging_items.map(pi => ({ ...pi })) : [],
       packed_stock: Number(p.packed_stock || 0),
       true_cost: Number(p.true_cost || 0),
+      bottles_per_box: p.bottles_per_box !== undefined ? Number(p.bottles_per_box) : (p.size_in_base_unit <= 0.35 ? 24 : 12),
     }))
   );
 
@@ -61,6 +62,7 @@ export const PackSizesModal: React.FC<PackSizesModalProps> = ({
       packaging_items: [],
       packed_stock: 0,
       true_cost: product.cost_price,
+      bottles_per_box: 12,
     };
     setPackSizes(prev => [...prev, newPack]);
     setExpandedRecipeIdx(packSizes.length);
@@ -174,6 +176,7 @@ export const PackSizesModal: React.FC<PackSizesModalProps> = ({
       return {
         ...pack,
         true_cost: pack.true_cost && pack.true_cost > 0 ? pack.true_cost : estimatedTrueCost,
+        bottles_per_box: Number(pack.bottles_per_box || (pack.size_in_base_unit <= 0.35 ? 24 : 12))
       };
     });
 
@@ -186,7 +189,7 @@ export const PackSizesModal: React.FC<PackSizesModalProps> = ({
       isOpen={isOpen}
       onClose={onClose}
       title={`Packaging & Recipes: ${product.name}`}
-      subtitle={`Configure sales sizes and define the packaging recipe (bottle, cap, label, cotton) to track TRUE unit cost.`}
+      subtitle={`Configure sales sizes, box definitions (bottles/box), and define packaging recipes to track TRUE unit cost.`}
       maxWidth="3xl"
     >
       <form onSubmit={handleSave} className="space-y-4 text-xs">
@@ -210,7 +213,7 @@ export const PackSizesModal: React.FC<PackSizesModalProps> = ({
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-              Sales Packaging Sizes & Recipes
+              Sales Packaging Sizes, Box Types & Recipes
             </label>
             <button
               type="button"
@@ -239,21 +242,21 @@ export const PackSizesModal: React.FC<PackSizesModalProps> = ({
                   key={pack.id || idx}
                   className="bg-slate-800/80 rounded-xl border border-slate-700/80 overflow-hidden shadow-sm"
                 >
-                  {/* Top Bar: Size Name, Multiplier, Selling Price */}
+                  {/* Top Bar: Size Name, Size L, Bottles/Box, Selling Price */}
                   <div className="p-3 grid grid-cols-12 gap-2.5 items-center">
                     <div className="col-span-4">
                       <label className="text-[10px] text-slate-400 uppercase font-semibold block mb-0.5">Pack Name</label>
                       <input
                         type="text"
                         required
-                        placeholder="e.g. 1 Liter Bottle"
+                        placeholder="e.g. 275ml Bottle"
                         value={pack.name}
                         onChange={(e) => handleChangeField(idx, 'name', e.target.value)}
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:ring-1 focus:ring-emerald-500"
                       />
                     </div>
 
-                    <div className="col-span-3">
+                    <div className="col-span-2">
                       <label className="text-[10px] text-slate-400 uppercase font-semibold block mb-0.5">Size ({baseUnit})</label>
                       <div className="flex items-center gap-1">
                         <input
@@ -262,15 +265,33 @@ export const PackSizesModal: React.FC<PackSizesModalProps> = ({
                           min="0.001"
                           required
                           value={pack.size_in_base_unit}
-                          onChange={(e) => handleChangeField(idx, 'size_in_base_unit', parseFloat(e.target.value) || 0)}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            handleChangeField(idx, 'size_in_base_unit', val);
+                          }}
                           className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white text-right font-mono"
                         />
-                        <span className="text-slate-400 text-[11px] font-mono shrink-0">{baseUnit}</span>
                       </div>
                     </div>
 
-                    <div className="col-span-3">
-                      <label className="text-[10px] text-slate-400 uppercase font-semibold block mb-0.5">Selling Price (PKR)</label>
+                    <div className="col-span-2">
+                      <label className="text-[10px] text-cyan-400 uppercase font-bold block mb-0.5" title="Bottles per carton / box (e.g. 24 or 12)">
+                        Bottles/Box
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        required
+                        value={pack.bottles_per_box ?? (pack.size_in_base_unit <= 0.35 ? 24 : 12)}
+                        onChange={(e) => handleChangeField(idx, 'bottles_per_box', parseInt(e.target.value, 10) || 1)}
+                        className="w-full bg-slate-900 border border-cyan-500/50 rounded-lg px-2 py-1.5 text-xs text-cyan-300 text-right font-mono font-bold focus:ring-1 focus:ring-cyan-400"
+                        title="Bottles packed per carton box"
+                      />
+                    </div>
+
+                    <div className="col-span-2">
+                      <label className="text-[10px] text-slate-400 uppercase font-semibold block mb-0.5">Rate (PKR)</label>
                       <input
                         type="number"
                         step="any"

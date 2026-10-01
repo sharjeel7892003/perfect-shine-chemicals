@@ -34,6 +34,7 @@ export interface PackSize {
   packaging_items?: PackagingItem[]; // Packaging recipe per 1 unit of this size
   packed_stock?: number; // Physical bottles/packs filled and ready to sell
   true_cost?: number; // Combined cost per bottle (bulk liquid + packaging materials)
+  bottles_per_box?: number; // Number of bottles in a full carton/box (e.g. 24 or 12)
 }
 
 export interface Product {
@@ -51,6 +52,9 @@ export interface Product {
   pack_sizes?: PackSize[]; // Packaging options for sales reference
   is_active: boolean;
   is_archived?: boolean; // Soft delete flag for products with historical transactions
+  is_private_label?: boolean; // True if contract/private label product for a client
+  client_brand_name?: string; // e.g. "Neo Clean", "Crown Chemicals"
+  default_labour_rate?: number; // Default packaging labour per bottle (e.g. 3.5 PKR)
   created_at?: string;
   updated_at?: string;
 }
@@ -227,6 +231,13 @@ export interface SaleItem {
   unit_price: number; // Actual selling rate used for this sale line item
   default_unit_price?: number; // Standard / catalog selling rate (for reference & comparison)
   subtotal: number;
+  // Dedicated Private Label Fields
+  is_private_label?: boolean;
+  box_qty?: number; // Number of boxes sold (e.g. 26)
+  bottles_per_box?: number; // e.g. 24 or 12
+  bottle_qty?: number; // Total bottles = box_qty * bottles_per_box or entered (e.g. 624)
+  liters_qty?: number; // Total liters = bottle_qty * size_in_base_unit (e.g. 171.60)
+  rate_per_liter?: number; // Negotiated price per liter (e.g. 170.00)
 }
 
 export interface Sale {
@@ -242,11 +253,19 @@ export interface Sale {
   total_amount: number;
   amount_paid: number;
   advance_amount_applied?: number;
+  advance_received_date?: string;
   payment_status: PaymentStatus;
   payment_method: PaymentMethod;
   salesperson_id?: string;
   salesperson_name?: string;
   notes?: string;
+  // Dedicated Private Label Fields
+  invoice_type?: 'standard' | 'private_label';
+  is_private_label?: boolean;
+  client_brand_name?: string;
+  labour_rate_per_bottle?: number; // Packing labour cost per bottle (e.g. 3.5 PKR)
+  labour_bottle_qty?: number; // Sum of all bottles across line items (e.g. 948)
+  labour_total_amount?: number; // Total labour cost (e.g. 3,318 PKR)
   created_at?: string;
 }
 

@@ -77,6 +77,9 @@ export const InventoryModule: React.FC = () => {
     reorder_level: 50,
     description: '',
     is_active: true,
+    is_private_label: false,
+    client_brand_name: '',
+    default_labour_rate: 3.5,
   });
 
   // Form states for Stock Adjustment
@@ -100,6 +103,9 @@ export const InventoryModule: React.FC = () => {
       reorder_level: 50,
       description: '',
       is_active: true,
+      is_private_label: false,
+      client_brand_name: '',
+      default_labour_rate: 3.5,
     });
     setSubmitError(null);
     setIsAddModalOpen(true);
@@ -119,6 +125,9 @@ export const InventoryModule: React.FC = () => {
       reorder_level: product.reorder_level,
       description: product.description || '',
       is_active: product.is_active,
+      is_private_label: Boolean(product.is_private_label),
+      client_brand_name: product.client_brand_name || '',
+      default_labour_rate: product.default_labour_rate ? Number(product.default_labour_rate) : 3.5,
     });
     setSubmitError(null);
     setIsEditModalOpen(true);
@@ -361,7 +370,14 @@ export const InventoryModule: React.FC = () => {
                       <tr key={p.id} className="hover:bg-slate-800/40 transition-colors">
                         <td className="py-3 px-3">
                           <p className="font-bold text-white text-sm">{p.name}</p>
-                          <p className="text-[11px] text-slate-400 font-mono mt-0.5">{p.sku}</p>
+                          <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                            <span className="text-[11px] text-slate-400 font-mono">{p.sku}</span>
+                            {p.is_private_label && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-semibold">
+                                ⭐ Private Label: {p.client_brand_name || 'Client'}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="py-3 px-3 text-slate-300">
                           <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-medium">
@@ -702,6 +718,55 @@ export const InventoryModule: React.FC = () => {
                 onChange={(e) => setFormData({ ...formData, reorder_level: parseFloat(e.target.value) || 0 })}
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono"
               />
+            </div>
+
+            {/* Private Label Configuration Section */}
+            <div className="col-span-2 p-3.5 rounded-xl bg-slate-900 border border-slate-700/80 space-y-3">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={formData.is_private_label}
+                  onChange={(e) => setFormData({ ...formData, is_private_label: e.target.checked })}
+                  className="rounded border-slate-700 text-emerald-500 focus:ring-0 w-4 h-4"
+                />
+                <span className="text-white font-bold text-xs flex items-center gap-2">
+                  <span>Private Label / Contract Manufacturing Product</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-normal">
+                    Uses dedicated Private Label invoice (Rate/L, Liters, Bottles, Boxes, Labour)
+                  </span>
+                </span>
+              </label>
+
+              {formData.is_private_label && (
+                <div className="grid grid-cols-2 gap-3 pt-2.5 border-t border-slate-800">
+                  <div>
+                    <label className="block text-[10px] font-bold text-amber-400 uppercase mb-1">
+                      Client Brand Name
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Neo Clean, CleanPro, Crown"
+                      value={formData.client_brand_name}
+                      onChange={(e) => setFormData({ ...formData, client_brand_name: e.target.value })}
+                      className="w-full bg-slate-800 border border-amber-500/40 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400 font-medium"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                      Default Labour Rate (PKR/Bottle)
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      min="0"
+                      placeholder="3.50"
+                      value={formData.default_labour_rate}
+                      onChange={(e) => setFormData({ ...formData, default_labour_rate: parseFloat(e.target.value) || 0 })}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

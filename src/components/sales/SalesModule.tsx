@@ -81,9 +81,30 @@ export const SalesModule: React.FC = () => {
   const customerFinancials = selectedCustomer ? calculateCustomerFinancials(selectedCustomer, sales, payments, salesReturns) : null;
   const availableAdvance = customerFinancials ? customerFinancials.advanceBalance : 0;
 
-  // Cart Calculations
-  const subtotal = cartItems.reduce((acc, item) => acc + item.subtotal, 0);
+  // Private Label Order State
+  const [isPrivateLabelOrder, setIsPrivateLabelOrder] = useState<boolean>(false);
+  const [clientBrandName, setClientBrandName] = useState<string>('');
+  const [labourRatePerBottle, setLabourRatePerBottle] = useState<number>(3.5);
+
+  const isPrivateLabelSale = isPrivateLabelOrder || cartItems.some(i => i.is_private_label);
+  const totalBottles = isPrivateLabelSale 
+    ? cartItems.reduce((acc, item) => acc + (item.bottle_qty !== undefined ? item.bottle_qty : (item.quantity || 0)), 0)
+    : 0;
+  const labourAmount = isPrivateLabelSale
+    ? Number((totalBottles * labourRatePerBottle).toFixed(2))
+    : 0;
+  const productsSubtotal = cartItems.reduce((acc, item) => acc + item.subtotal, 0);
+  const subtotal = isPrivateLabelSale 
+    ? Number((productsSubtotal + labourAmount).toFixed(2))
+    : productsSubtotal;
   const totalAmount = Math.max(0, subtotal - discountAmount);
+
+  // Sync amount paid when payment status is full paid
+  React.useEffect(() => {
+    if (paymentStatus === 'paid') {
+      setAmountPaid(totalAmount);
+    }
+  }, [totalAmount, paymentStatus]);
 
   const handlePaymentStatusChange = (status: PaymentStatus) => {
     setPaymentStatus(status);
@@ -103,6 +124,7 @@ export const SalesModule: React.FC = () => {
     isPackedSize: boolean;
     packedStock: number;
     trueCost: number;
+    bottlesPerBox: number;
   } => {
     const baseUnit = product.base_unit || product.unit || 'liter';
     const packs = product.pack_sizes && product.pack_sizes.length > 0 ? product.pack_sizes : [];
@@ -118,6 +140,7 @@ export const SalesModule: React.FC = () => {
         isPackedSize: false,
         packedStock: 0,
         trueCost: product.cost_price,
+        bottlesPerBox: 1,
       };
     }
 
@@ -134,6 +157,7 @@ export const SalesModule: React.FC = () => {
       );
       const computedTrueCost = Number((chemicalPortion + packagingPortion).toFixed(4));
       const effectiveTrueCost = matched.true_cost && matched.true_cost > 0 ? Number(matched.true_cost) : computedTrueCost;
+      const bPerBox = matched.bottles_per_box !== undefined ? Number(matched.bottles_per_box) : (matched.size_in_base_unit <= 0.35 ? 24 : 12);
 
       return {
         packId: matched.id,
@@ -144,6 +168,7 @@ export const SalesModule: React.FC = () => {
         isPackedSize: isPacked,
         packedStock: Number(matched.packed_stock || 0),
         trueCost: effectiveTrueCost,
+        bottlesPerBox: bPerBox,
       };
     }
 
@@ -156,6 +181,7 @@ export const SalesModule: React.FC = () => {
       isPackedSize: false,
       packedStock: 0,
       trueCost: product.cost_price,
+      bottlesPerBox: 1,
     };
   };
 
@@ -163,26 +189,34 @@ export const SalesModule: React.FC = () => {
     const product = products.find(p => p.id === productId);
     if (!product) return;
 
+    const isProductPL = Boolean(product.is_private_label) || product.category === 'Private Label';
+    const isPL = isProductPL || isPrivateLabelOrder;
+
+    if (isProductPL && !isPrivateLabelOrder) {
+      setIsPrivateLabelOrder(true);
+      if (product.client_brand_name && !clientBrandName) {
+        setClientBrandName(product.client_brand_name);
+      }
+      if (product.default_labour_rate) {
+        setLabourRatePerBottle(product.default_labour_rate);
+      }
+    }
+
     const packInfo = getSelectedPackForProduct(product);
 
     if (packInfo.isPackedSize) {
       // Validate packed bottle stock!
       const availablePacked = packInfo.packedStock;
       if (availablePacked <= 0) {
-        alert(`Cannot add ${product.name} (${packInfo.packName}): 0 units in packed stock! Please pack bottles first in the Bottling & Packing module.`);
-        return;
+        const proceed = confirm(`Warning: ${product.name} (${packInfo.packName}) currently has 0 packed stock in inventory. Proceed with adding to order?`);
+        if (!proceed) return;
       }
     } else {
       // Validate bulk liquid stock!
       const baseStock = Number(product.current_stock);
       if (baseStock <= 0) {
-        alert(`Cannot add ${product.name}: Out of bulk liquid in warehouse!`);
-        return;
-      }
-      const neededBaseQty = packInfo.multiplier;
-      if (neededBaseQty > baseStock) {
-        alert(`Insufficient bulk liquid stock! ${packInfo.packName} requires ${neededBaseQty} ${product.base_unit || product.unit}, but only ${baseStock} available.`);
-        return;
+        const proceed = confirm(`Warning: ${product.name} currently has 0 bulk stock in warehouse. Proceed with adding to order?`);
+        if (!proceed) return;
       }
     }
 
@@ -191,31 +225,75 @@ export const SalesModule: React.FC = () => {
 
       if (existingIdx !== -1) {
         const currentItem = prev[existingIdx];
-        const nextPackQty = currentItem.quantity + 1;
+        if (isPL) {
+          const nextBoxes = (currentItem.box_qty || 1) + 1;
+          const bPerBox = currentItem.bottles_per_box || packInfo.bottlesPerBox || 24;
+          const bottleSize = currentItem.size_in_base_unit || packInfo.multiplier;
+          const nextBottles = Math.round(nextBoxes * bPerBox);
+          const nextLiters = Number((nextBottles * bottleSize).toFixed(2));
+          const rateL = currentItem.rate_per_liter || (product.selling_price > 0 ? product.selling_price : 170);
+          const nextSubtotal = Number((nextLiters * rateL).toFixed(2));
+          const nextUnitPrice = nextBottles > 0 ? Number((nextSubtotal / nextBottles).toFixed(4)) : 0;
 
-        if (packInfo.isPackedSize) {
-          if (nextPackQty > packInfo.packedStock) {
-            alert(`Maximum available packed stock reached! Only ${packInfo.packedStock} ${packInfo.unitLabel}s in storage.`);
-            return prev;
-          }
+          const updated = [...prev];
+          updated[existingIdx] = {
+            ...currentItem,
+            box_qty: nextBoxes,
+            bottles_per_box: bPerBox,
+            bottle_qty: nextBottles,
+            quantity: nextBottles,
+            pack_quantity: nextBottles,
+            liters_qty: nextLiters,
+            base_quantity: nextLiters,
+            rate_per_liter: rateL,
+            unit_price: nextUnitPrice,
+            subtotal: nextSubtotal,
+          };
+          return updated;
         } else {
-          const totalBaseRequired = nextPackQty * packInfo.multiplier;
-          const baseStock = Number(product.current_stock);
-          if (totalBaseRequired > baseStock) {
-            alert(`Maximum available bulk stock reached! Only ${baseStock} ${product.base_unit || product.unit} in storage.`);
-            return prev;
-          }
+          const nextPackQty = currentItem.quantity + 1;
+          const updated = [...prev];
+          updated[existingIdx] = {
+            ...currentItem,
+            quantity: nextPackQty,
+            pack_quantity: nextPackQty,
+            base_quantity: nextPackQty * packInfo.multiplier,
+            subtotal: nextPackQty * currentItem.unit_price,
+          };
+          return updated;
         }
+      }
 
-        const updated = [...prev];
-        updated[existingIdx] = {
-          ...currentItem,
-          quantity: nextPackQty,
-          pack_quantity: nextPackQty,
-          base_quantity: nextPackQty * packInfo.multiplier,
-          subtotal: nextPackQty * currentItem.unit_price,
+      if (isPL) {
+        const bPerBox = packInfo.bottlesPerBox || (packInfo.multiplier <= 0.35 ? 24 : 12);
+        const initialBoxes = 1;
+        const initialBottles = bPerBox;
+        const initialLiters = Number((initialBottles * packInfo.multiplier).toFixed(2));
+        const ratePerLiter = product.selling_price > 0 ? product.selling_price : 170;
+        const initialSubtotal = Number((initialLiters * ratePerLiter).toFixed(2));
+
+        const newItem: SaleItem = {
+          product_id: product.id,
+          product_name: product.name,
+          unit: product.base_unit || product.unit,
+          pack_size_id: packInfo.packId === 'bulk' ? undefined : packInfo.packId,
+          pack_size_name: packInfo.packName,
+          pack_quantity: initialBottles,
+          size_in_base_unit: packInfo.multiplier,
+          base_quantity: initialLiters,
+          quantity: initialBottles,
+          unit_cost: packInfo.trueCost,
+          unit_price: initialBottles > 0 ? Number((initialSubtotal / initialBottles).toFixed(4)) : ratePerLiter,
+          default_unit_price: ratePerLiter,
+          subtotal: initialSubtotal,
+          is_private_label: true,
+          box_qty: initialBoxes,
+          bottles_per_box: bPerBox,
+          bottle_qty: initialBottles,
+          liters_qty: initialLiters,
+          rate_per_liter: ratePerLiter,
         };
-        return updated;
+        return [...prev, newItem];
       }
 
       const newItem: SaleItem = {
@@ -228,7 +306,7 @@ export const SalesModule: React.FC = () => {
         size_in_base_unit: packInfo.multiplier,
         base_quantity: packInfo.multiplier,
         quantity: 1,
-        unit_cost: packInfo.trueCost, // TRUE COMBINED COST!
+        unit_cost: packInfo.trueCost,
         unit_price: packInfo.price,
         default_unit_price: packInfo.price,
         subtotal: packInfo.price,
@@ -362,6 +440,97 @@ export const SalesModule: React.FC = () => {
     });
   };
 
+  // Dedicated Cross-Conversion Handlers for Private Label
+  const updatePrivateLabelBoxes = (index: number, newBoxes: number) => {
+    setCartItems(prev => {
+      const item = prev[index];
+      if (!item) return prev;
+      if (newBoxes <= 0) {
+        return prev.filter((_, idx) => idx !== index);
+      }
+      const bPerBox = item.bottles_per_box || (item.size_in_base_unit && item.size_in_base_unit <= 0.35 ? 24 : 12);
+      const bottleSize = item.size_in_base_unit || 1;
+      const bottles = Math.round(newBoxes * bPerBox);
+      const liters = Number((bottles * bottleSize).toFixed(2));
+      const rateL = item.rate_per_liter !== undefined ? item.rate_per_liter : 170;
+      const subtotal = Number((liters * rateL).toFixed(2));
+      const unitPrice = bottles > 0 ? Number((subtotal / bottles).toFixed(4)) : 0;
+
+      const updated = [...prev];
+      updated[index] = {
+        ...item,
+        is_private_label: true,
+        box_qty: newBoxes,
+        bottles_per_box: bPerBox,
+        bottle_qty: bottles,
+        quantity: bottles,
+        pack_quantity: bottles,
+        liters_qty: liters,
+        base_quantity: liters,
+        rate_per_liter: rateL,
+        unit_price: unitPrice,
+        subtotal
+      };
+      return updated;
+    });
+  };
+
+  const updatePrivateLabelBottles = (index: number, newBottles: number) => {
+    setCartItems(prev => {
+      const item = prev[index];
+      if (!item) return prev;
+      if (newBottles <= 0) {
+        return prev.filter((_, idx) => idx !== index);
+      }
+      const bPerBox = item.bottles_per_box || (item.size_in_base_unit && item.size_in_base_unit <= 0.35 ? 24 : 12);
+      const bottleSize = item.size_in_base_unit || 1;
+      const boxes = bPerBox > 0 ? Number((newBottles / bPerBox).toFixed(2)) : 0;
+      const liters = Number((newBottles * bottleSize).toFixed(2));
+      const rateL = item.rate_per_liter !== undefined ? item.rate_per_liter : 170;
+      const subtotal = Number((liters * rateL).toFixed(2));
+      const unitPrice = newBottles > 0 ? Number((subtotal / newBottles).toFixed(4)) : 0;
+
+      const updated = [...prev];
+      updated[index] = {
+        ...item,
+        is_private_label: true,
+        box_qty: boxes,
+        bottles_per_box: bPerBox,
+        bottle_qty: newBottles,
+        quantity: newBottles,
+        pack_quantity: newBottles,
+        liters_qty: liters,
+        base_quantity: liters,
+        rate_per_liter: rateL,
+        unit_price: unitPrice,
+        subtotal
+      };
+      return updated;
+    });
+  };
+
+  const updatePrivateLabelRatePerLiter = (index: number, newRate: number) => {
+    setCartItems(prev => {
+      const item = prev[index];
+      if (!item) return prev;
+      const safeRate = Math.max(0, isNaN(newRate) ? 0 : newRate);
+      const liters = item.liters_qty !== undefined ? item.liters_qty : (item.base_quantity || 0);
+      const bottles = item.bottle_qty !== undefined ? item.bottle_qty : item.quantity;
+      const subtotal = Number((liters * safeRate).toFixed(2));
+      const unitPrice = bottles > 0 ? Number((subtotal / bottles).toFixed(4)) : 0;
+
+      const updated = [...prev];
+      updated[index] = {
+        ...item,
+        is_private_label: true,
+        rate_per_liter: safeRate,
+        unit_price: unitPrice,
+        subtotal
+      };
+      return updated;
+    });
+  };
+
   const removeFromCart = (index: number) => {
     setCartItems(prev => prev.filter((_, idx) => idx !== index));
   };
@@ -375,6 +544,9 @@ export const SalesModule: React.FC = () => {
     setSelectedCustomerId('');
     setSalesNotes('');
     setSaleDate(getTodayDateString());
+    setIsPrivateLabelOrder(false);
+    setClientBrandName('');
+    setLabourRatePerBottle(3.5);
   };
 
   const handleCheckout = async (e: React.FormEvent) => {
@@ -400,6 +572,20 @@ export const SalesModule: React.FC = () => {
         ? 'advance'
         : paymentMethod;
 
+    const isPLSale = isPrivateLabelSale || cartItems.some(i => i.is_private_label);
+    const effectiveClientBrand = clientBrandName || (selectedCustomer ? selectedCustomer.name : 'Private Label Client');
+
+    // Look up advance payment date if advance is applied
+    let advanceDate: string | undefined = undefined;
+    if (advanceApplied > 0 && selectedCustomerId) {
+      const advPayment = payments
+        .filter(p => p.customer_id === selectedCustomerId && (p.related_to === 'customer_advance' || (p.notes && p.notes.includes('[Customer Advance]'))))
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
+      if (advPayment) {
+        advanceDate = advPayment.date;
+      }
+    }
+
     setIsSubmitting(true);
     setSubmitError(null);
     try {
@@ -407,17 +593,32 @@ export const SalesModule: React.FC = () => {
         customer_id: selectedCustomerId || undefined,
         customer_name: customerName,
         date: formatSelectedDateToIso(saleDate),
-        items: cartItems,
+        items: cartItems.map(item => ({
+          ...item,
+          is_private_label: isPLSale ? true : item.is_private_label,
+          box_qty: item.box_qty,
+          bottles_per_box: item.bottles_per_box,
+          bottle_qty: item.bottle_qty || item.quantity,
+          liters_qty: item.liters_qty || item.base_quantity,
+          rate_per_liter: item.rate_per_liter || item.unit_price,
+        })),
         subtotal,
         discount: discountAmount,
         tax: 0,
         total_amount: totalAmount,
         amount_paid: finalAmountPaid,
         advance_amount_applied: advanceApplied,
+        advance_received_date: advanceDate,
         payment_status: paymentStatus,
         payment_method: finalPaymentMethod,
         salesperson_id: currentUser.id,
         notes: salesNotes,
+        invoice_type: isPLSale ? 'private_label' : 'standard',
+        is_private_label: isPLSale,
+        client_brand_name: isPLSale ? effectiveClientBrand : undefined,
+        labour_rate_per_bottle: isPLSale ? labourRatePerBottle : undefined,
+        labour_bottle_qty: isPLSale ? totalBottles : undefined,
+        labour_total_amount: isPLSale ? labourAmount : undefined,
       });
 
       clearCart();
@@ -638,7 +839,14 @@ export const SalesModule: React.FC = () => {
                       <div>
                         <div className="flex items-start justify-between gap-2">
                           <div>
-                            <h4 className="font-bold text-white text-sm leading-tight">{product.name}</h4>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <h4 className="font-bold text-white text-sm leading-tight">{product.name}</h4>
+                              {product.is_private_label && (
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                  ⭐ Private Label
+                                </span>
+                              )}
+                            </div>
                             <p className="text-[11px] text-slate-400 font-mono mt-0.5">{product.sku}</p>
                           </div>
                           <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-bold uppercase">
@@ -871,6 +1079,73 @@ export const SalesModule: React.FC = () => {
                     <span className="font-bold font-mono">{formatPKR(selectedCustomer.current_balance)}</span>
                   </div>
                 )}
+
+                {/* Sale Mode Selector (Standard Retail vs Private Label Contract) */}
+                <div className="mt-3 p-1.5 bg-slate-950/80 rounded-xl border border-slate-800 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsPrivateLabelOrder(false)}
+                    className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all ${
+                      !isPrivateLabelSale
+                        ? 'bg-slate-800 text-white shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Standard Retail
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsPrivateLabelOrder(true);
+                      if (!clientBrandName && selectedCustomer) {
+                        setClientBrandName(selectedCustomer.name);
+                      }
+                    }}
+                    className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                      isPrivateLabelSale
+                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 shadow'
+                        : 'text-slate-400 hover:text-amber-300'
+                    }`}
+                  >
+                    <span>⭐ Private Label</span>
+                  </button>
+                </div>
+
+                {/* Private Label Header Inputs when in Private Label Mode */}
+                {isPrivateLabelSale && (
+                  <div className="mt-2.5 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold flex items-center gap-1">
+                        <span>🏭 Contract Client Brand:</span>
+                      </span>
+                      <span className="text-[10px] text-amber-400 font-mono uppercase font-bold">Private Label</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] text-slate-300 block mb-0.5">Client Brand Name</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Neo Clean"
+                          value={clientBrandName}
+                          onChange={(e) => setClientBrandName(e.target.value)}
+                          className="w-full bg-slate-900 border border-amber-500/40 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-amber-400 font-semibold"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-slate-300 block mb-0.5">Packing Labour (PKR/btl)</label>
+                        <input
+                          type="number"
+                          step="any"
+                          min="0"
+                          placeholder="3.50"
+                          value={labourRatePerBottle}
+                          onChange={(e) => setLabourRatePerBottle(parseFloat(e.target.value) || 0)}
+                          className="w-full bg-slate-900 border border-amber-500/40 rounded px-2 py-1 text-xs text-white font-mono text-right font-bold"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Cart Items List */}
@@ -938,74 +1213,153 @@ export const SalesModule: React.FC = () => {
                           </div>
                         </div>
 
-                        {/* Quantity & Editable Unit Price Row */}
-                        <div className="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-slate-800/60 flex-wrap">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <div className="flex items-center gap-1">
-                              <span className="text-[10px] text-slate-400">Qty:</span>
-                              {(() => {
-                                const isDecimalAllowed = item.item_type === 'raw_material' || !item.pack_size_id || item.pack_size_id === 'bulk';
-                                return (
-                                  <input
-                                    type="number"
-                                    min={isDecimalAllowed ? "0.0001" : "1"}
-                                    step={isDecimalAllowed ? "any" : "1"}
-                                    value={item.quantity === 0 ? '' : item.quantity}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      if (val === '') {
-                                        updateQuantity(idx, 0);
-                                        return;
-                                      }
-                                      const num = isDecimalAllowed ? parseFloat(val) : parseInt(val, 10);
-                                      updateQuantity(idx, isNaN(num) ? 0 : num);
-                                    }}
-                                    className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-center text-white font-mono focus:border-emerald-500 focus:outline-none"
-                                  />
-                                );
-                              })()}
-                            </div>
-
-                            <span className="text-slate-500 text-xs font-mono">×</span>
-
-                            <div className="flex items-center gap-1">
-                              <span className="text-[10px] text-slate-400">Rate:</span>
-                              <div className="relative">
-                                <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-500 font-mono">Rs</span>
+                        {/* Dedicated Item Editor: Private Label vs Standard Retail */}
+                        {(item.is_private_label || isPrivateLabelSale) ? (
+                          <div className="mt-2.5 pt-2 border-t border-slate-800 space-y-2">
+                            <div className="grid grid-cols-12 gap-2 items-center">
+                              {/* Qty Box */}
+                              <div className="col-span-3">
+                                <label className="text-[10px] text-cyan-400 font-bold block mb-0.5" title="Boxes sold">
+                                  Qty (Box)
+                                </label>
                                 <input
                                   type="number"
                                   min="0"
                                   step="any"
-                                  value={item.unit_price === 0 ? '' : item.unit_price}
-                                  onChange={(e) => updateUnitPrice(idx, e.target.value === '' ? 0 : parseFloat(e.target.value))}
+                                  value={item.box_qty !== undefined ? (item.box_qty === 0 ? '' : item.box_qty) : (item.bottles_per_box ? (item.quantity / item.bottles_per_box) : '')}
+                                  onChange={(e) => {
+                                    const val = e.target.value === '' ? 0 : parseFloat(e.target.value);
+                                    updatePrivateLabelBoxes(idx, isNaN(val) ? 0 : val);
+                                  }}
                                   placeholder="0"
-                                  className={`w-20 bg-slate-900 border rounded pl-6 pr-1.5 py-0.5 text-xs text-right font-mono focus:outline-none transition-colors ${
-                                    rateInfo.isCustom
-                                      ? rateInfo.isDiscount
-                                        ? 'border-amber-500/60 text-amber-300 focus:border-amber-400'
-                                        : 'border-indigo-500/60 text-indigo-300 focus:border-indigo-400'
-                                      : 'border-slate-700 text-white focus:border-emerald-500'
-                                  }`}
-                                  title={`Default: ${formatPKR(rateInfo.standardPrice)}. Edit rate for this sale.`}
+                                  className="w-full bg-slate-950 border border-cyan-500/40 rounded px-1.5 py-1 text-xs text-center text-cyan-300 font-mono font-bold focus:outline-none focus:border-cyan-400"
                                 />
                               </div>
-                              {rateInfo.isCustom && rateInfo.standardPrice !== undefined && (
-                                <button
-                                  type="button"
-                                  onClick={() => updateUnitPrice(idx, rateInfo.standardPrice!)}
-                                  className="text-[9px] px-1.5 py-0.5 rounded text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-colors"
-                                  title={`Reset to default catalog rate (${formatPKR(rateInfo.standardPrice)})`}
-                                >
-                                  Reset
-                                </button>
-                              )}
+
+                              <span className="col-span-1 text-center text-slate-500 text-xs font-mono font-bold">⇄</span>
+
+                              {/* Qty Bottles */}
+                              <div className="col-span-4">
+                                <label className="text-[10px] text-slate-300 font-semibold block mb-0.5">
+                                  Qty (Bottles)
+                                </label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="1"
+                                  value={item.bottle_qty !== undefined ? (item.bottle_qty === 0 ? '' : item.bottle_qty) : item.quantity}
+                                  onChange={(e) => {
+                                    const val = e.target.value === '' ? 0 : parseInt(e.target.value, 10);
+                                    updatePrivateLabelBottles(idx, isNaN(val) ? 0 : val);
+                                  }}
+                                  placeholder="0"
+                                  className="w-full bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-xs text-center text-white font-mono font-bold focus:outline-none focus:border-emerald-500"
+                                />
+                              </div>
+
+                              {/* Rate per Liter */}
+                              <div className="col-span-4">
+                                <label className="text-[10px] text-amber-400 font-bold block mb-0.5">
+                                  Rate (PKR/L)
+                                </label>
+                                <div className="relative">
+                                  <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-500 font-mono">Rs</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="any"
+                                    value={item.rate_per_liter !== undefined ? (item.rate_per_liter === 0 ? '' : item.rate_per_liter) : (item.liters_qty ? Number((item.subtotal / item.liters_qty).toFixed(2)) : '')}
+                                    onChange={(e) => {
+                                      const val = e.target.value === '' ? 0 : parseFloat(e.target.value);
+                                      updatePrivateLabelRatePerLiter(idx, isNaN(val) ? 0 : val);
+                                    }}
+                                    placeholder="170"
+                                    className="w-full bg-slate-950 border border-amber-500/40 rounded pl-6 pr-1.5 py-1 text-xs text-right text-amber-300 font-mono font-bold focus:outline-none focus:border-amber-400"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Live calculation formula display */}
+                            <div className="p-1.5 rounded bg-slate-950/80 border border-slate-800 text-[10px] flex items-center justify-between text-slate-400 font-mono">
+                              <span>
+                                <strong className="text-cyan-300">{item.bottle_qty ?? item.quantity} btl</strong> × {item.size_in_base_unit || 0.275}L = <strong className="text-white">{(item.liters_qty ?? item.base_quantity ?? 0).toFixed(2)} Liters</strong>
+                              </span>
+                              <span>
+                                @ {formatPKR(item.rate_per_liter || 170)}/L = <strong className="text-emerald-400">{formatPKR(item.subtotal)}</strong>
+                              </span>
                             </div>
                           </div>
+                        ) : (
+                          /* Standard Retail Quantity & Editable Unit Price Row */
+                          <div className="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-slate-800/60 flex-wrap">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <div className="flex items-center gap-1">
+                                <span className="text-[10px] text-slate-400">Qty:</span>
+                                {(() => {
+                                  const isDecimalAllowed = item.item_type === 'raw_material' || !item.pack_size_id || item.pack_size_id === 'bulk';
+                                  return (
+                                    <input
+                                      type="number"
+                                      min={isDecimalAllowed ? "0.0001" : "1"}
+                                      step={isDecimalAllowed ? "any" : "1"}
+                                      value={item.quantity === 0 ? '' : item.quantity}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        if (val === '') {
+                                          updateQuantity(idx, 0);
+                                          return;
+                                        }
+                                        const num = isDecimalAllowed ? parseFloat(val) : parseInt(val, 10);
+                                        updateQuantity(idx, isNaN(num) ? 0 : num);
+                                      }}
+                                      className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-center text-white font-mono focus:border-emerald-500 focus:outline-none"
+                                    />
+                                  );
+                                })()}
+                              </div>
 
-                          <span className="text-[10px] text-slate-500 font-mono">
-                            ({item.base_quantity} {item.unit} total)
-                          </span>
-                        </div>
+                              <span className="text-slate-500 text-xs font-mono">×</span>
+
+                              <div className="flex items-center gap-1">
+                                <span className="text-[10px] text-slate-400">Rate:</span>
+                                <div className="relative">
+                                  <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-500 font-mono">Rs</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="any"
+                                    value={item.unit_price === 0 ? '' : item.unit_price}
+                                    onChange={(e) => updateUnitPrice(idx, e.target.value === '' ? 0 : parseFloat(e.target.value))}
+                                    placeholder="0"
+                                    className={`w-20 bg-slate-900 border rounded pl-6 pr-1.5 py-0.5 text-xs text-right font-mono focus:outline-none transition-colors ${
+                                      rateInfo.isCustom
+                                        ? rateInfo.isDiscount
+                                          ? 'border-amber-500/60 text-amber-300 focus:border-amber-400'
+                                          : 'border-indigo-500/60 text-indigo-300 focus:border-indigo-400'
+                                        : 'border-slate-700 text-white focus:border-emerald-500'
+                                    }`}
+                                    title={`Default: ${formatPKR(rateInfo.standardPrice)}. Edit rate for this sale.`}
+                                  />
+                                </div>
+                                {rateInfo.isCustom && rateInfo.standardPrice !== undefined && (
+                                  <button
+                                    type="button"
+                                    onClick={() => updateUnitPrice(idx, rateInfo.standardPrice!)}
+                                    className="text-[9px] px-1.5 py-0.5 rounded text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-colors"
+                                    title={`Reset to default catalog rate (${formatPKR(rateInfo.standardPrice)})`}
+                                  >
+                                    Reset
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            <span className="text-[10px] text-slate-500 font-mono">
+                              ({item.base_quantity} {item.unit} total)
+                            </span>
+                          </div>
+                        )}
                       </div>
                     );
                   })
@@ -1014,8 +1368,30 @@ export const SalesModule: React.FC = () => {
 
               {/* Discount & Totals */}
               <div className="space-y-2 pt-2 border-t border-slate-800 text-xs">
+                {isPrivateLabelSale && (
+                  <>
+                    <div className="flex items-center justify-between text-slate-400">
+                      <span>Products Subtotal ({cartItems.length} items):</span>
+                      <span className="font-mono font-bold text-white">{formatPKR(productsSubtotal)}</span>
+                    </div>
+
+                    {/* Automatic Labour row */}
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300">
+                      <div>
+                        <span className="font-bold block">Labour (Packing & Bottling):</span>
+                        <span className="text-[10px] text-amber-400 font-mono">
+                          {totalBottles} bottles × PKR {labourRatePerBottle}/btl
+                        </span>
+                      </div>
+                      <span className="font-mono font-black text-amber-200 text-sm">
+                        + {formatPKR(labourAmount)}
+                      </span>
+                    </div>
+                  </>
+                )}
+
                 <div className="flex items-center justify-between text-slate-400">
-                  <span>Subtotal ({cartItems.length} items):</span>
+                  <span>Invoice Subtotal:</span>
                   <span className="font-mono font-bold text-white">{formatPKR(subtotal)}</span>
                 </div>
 
@@ -1229,6 +1605,14 @@ export const SalesModule: React.FC = () => {
                           <span className="truncate">
                             {sale.items.map(i => `${i.quantity}x ${i.pack_size_name || i.product_name}`).join(', ')}
                           </span>
+                          {(sale.invoice_type === 'private_label' || sale.is_private_label) && (
+                            <span 
+                              className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 whitespace-nowrap"
+                              title={`Private Label invoice for ${sale.client_brand_name || 'Client'}`}
+                            >
+                              ⭐ Private Label
+                            </span>
+                          )}
                           {saleHasCustomRates(sale, products, rawMaterials) && (
                             <span 
                               className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 whitespace-nowrap"

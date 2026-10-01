@@ -137,10 +137,42 @@ export const supabaseService = {
         raw_materials_consumed: b.raw_materials_consumed || (b as any).consumed_materials || []
       }));
 
-      // 3. Normalized Sales (extract sale_items into .items, resolve raw_material_id if unmigrated)
-      const normalizedSales = (salesRes.data || []).map((s: any) => ({
-        ...s,
-        items: (s.sale_items || []).map((item: any) => {
+      // 3. Normalized Sales (extract sale_items into .items, resolve raw_material_id if unmigrated, restore Private Label metadata)
+      const normalizedSales = (salesRes.data || []).map((s: any) => {
+        let is_private_label = Boolean(s.is_private_label);
+        let invoice_type: 'standard' | 'private_label' = s.invoice_type || (is_private_label ? 'private_label' : 'standard');
+        let client_brand_name = s.client_brand_name || '';
+        let labour_rate_per_bottle = s.labour_rate_per_bottle ? Number(s.labour_rate_per_bottle) : undefined;
+        let labour_bottle_qty = s.labour_bottle_qty ? Number(s.labour_bottle_qty) : undefined;
+        let labour_total_amount = s.labour_total_amount ? Number(s.labour_total_amount) : undefined;
+        let advance_received_date = s.advance_received_date;
+        const metaItemsMap: Record<string, any> = {};
+
+        if (s.notes && typeof s.notes === 'string' && s.notes.includes('<!--PL_DATA:')) {
+          try {
+            const match = s.notes.match(/<!--PL_DATA:(.*?)-->/);
+            if (match && match[1]) {
+              const meta = JSON.parse(match[1]);
+              is_private_label = true;
+              invoice_type = 'private_label';
+              if (meta.client_brand_name) client_brand_name = meta.client_brand_name;
+              if (meta.labour_rate_per_bottle !== undefined) labour_rate_per_bottle = Number(meta.labour_rate_per_bottle);
+              if (meta.labour_bottle_qty !== undefined) labour_bottle_qty = Number(meta.labour_bottle_qty);
+              if (meta.labour_total_amount !== undefined) labour_total_amount = Number(meta.labour_total_amount);
+              if (meta.advance_received_date) advance_received_date = meta.advance_received_date;
+              if (Array.isArray(meta.items)) {
+                meta.items.forEach((mItem: any, idx: number) => {
+                  const key = mItem.pack_size_id || mItem.product_id || String(idx);
+                  metaItemsMap[key] = mItem;
+                });
+              }
+            }
+          } catch (e) {
+            console.warn('Failed to parse PL_DATA from sale note:', e);
+          }
+        }
+
+        const enrichedItems = (s.sale_items || []).map((item: any, idx: number) => {
           let item_type = item.item_type || (item.raw_material_id ? 'raw_material' : 'finished_product');
           let raw_material_id = item.raw_material_id;
           if (!item.product_id && !raw_material_id) {
@@ -150,14 +182,33 @@ export const supabaseService = {
               raw_material_id = matchedRm.id;
             }
           }
+          const mItem = metaItemsMap[item.pack_size_id] || metaItemsMap[item.product_id] || metaItemsMap[String(idx)];
           return {
             ...item,
             item_type,
-            raw_material_id
+            raw_material_id,
+            is_private_label: mItem ? Boolean(mItem.is_private_label) : (is_private_label || Boolean(item.is_private_label)),
+            box_qty: mItem?.box_qty !== undefined ? Number(mItem.box_qty) : item.box_qty,
+            bottles_per_box: mItem?.bottles_per_box !== undefined ? Number(mItem.bottles_per_box) : item.bottles_per_box,
+            bottle_qty: mItem?.bottle_qty !== undefined ? Number(mItem.bottle_qty) : (item.bottle_qty || item.quantity),
+            liters_qty: mItem?.liters_qty !== undefined ? Number(mItem.liters_qty) : (item.liters_qty || item.base_quantity),
+            rate_per_liter: mItem?.rate_per_liter !== undefined ? Number(mItem.rate_per_liter) : item.rate_per_liter,
           };
-        }),
-        salesperson_name: s.salesperson_id ? (profMap.get(s.salesperson_id) || 'Staff') : 'Staff'
-      }));
+        });
+
+        return {
+          ...s,
+          invoice_type,
+          is_private_label,
+          client_brand_name,
+          labour_rate_per_bottle,
+          labour_bottle_qty,
+          labour_total_amount,
+          advance_received_date,
+          items: enrichedItems,
+          salesperson_name: s.salesperson_id ? (profMap.get(s.salesperson_id) || 'Staff') : 'Staff'
+        };
+      });
 
       // 4. Normalized Purchases (extract purchase_items into .items, preserve freight/landed cost)
       const normalizedPurchases = (purchRes.data || []).map((p: any) => ({
@@ -674,6 +725,39 @@ export const supabaseService = {
     const validId = ensureUUID(sale.id);
     sale.id = validId;
 
+    // If Private Label, embed complete calculation metadata in notes
+    let notesPayload = sale.notes || '';
+    if (sale.invoice_type === 'private_label' || sale.is_private_label) {
+      const plMetadata = {
+        invoice_type: 'private_label',
+        is_private_label: true,
+        client_brand_name: sale.client_brand_name || '',
+        labour_rate_per_bottle: Number(sale.labour_rate_per_bottle || 3.5),
+        labour_bottle_qty: Number(sale.labour_bottle_qty || 0),
+        labour_total_amount: Number(sale.labour_total_amount || 0),
+        advance_received_date: sale.advance_received_date,
+        items: (sale.items || []).map(it => ({
+          product_id: it.product_id,
+          pack_size_id: it.pack_size_id,
+          product_name: it.product_name,
+          box_qty: it.box_qty,
+          bottles_per_box: it.bottles_per_box,
+          bottle_qty: it.bottle_qty,
+          liters_qty: it.liters_qty,
+          rate_per_liter: it.rate_per_liter,
+          subtotal: it.subtotal,
+          is_private_label: true
+        }))
+      };
+
+      notesPayload = notesPayload.replace(/<!--PL_DATA:.*?-->/g, '').trim();
+      const clientNotice = sale.client_brand_name ? `[Private Label Manufacturing for: ${sale.client_brand_name}]` : '';
+      if (clientNotice && !notesPayload.includes(clientNotice)) {
+        notesPayload = `${clientNotice}\n${notesPayload}`.trim();
+      }
+      notesPayload = `${notesPayload}\n<!--PL_DATA:${JSON.stringify(plMetadata)}-->`.trim();
+    }
+
     // 1. Insert parent sale
     const payload = {
       id: validId,
@@ -691,7 +775,7 @@ export const supabaseService = {
       payment_status: sale.payment_status || 'unpaid',
       payment_method: sale.payment_method || 'cash',
       salesperson_id: isValidUUID(sale.salesperson_id) ? sale.salesperson_id : null,
-      notes: sale.notes || ''
+      notes: notesPayload
     };
 
     const { error: saleError } = await supabase.from('sales').upsert(payload);
