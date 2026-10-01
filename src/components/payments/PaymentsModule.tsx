@@ -440,12 +440,45 @@ export const PaymentsModule: React.FC = () => {
       r.balance = running;
     });
 
-    // Apply date filters if any
-    return rows.filter(r => {
-      if (ledgerStartDate && new Date(r.date) < new Date(ledgerStartDate)) return false;
-      if (ledgerEndDate && new Date(r.date) > new Date(ledgerEndDate + 'T23:59:59')) return false;
-      return true;
-    });
+    // Handle date filtering with Brought Forward Balance calculation
+    let bfBal = 0;
+    let filtered: (typeof rows[0] & { isBroughtForward?: boolean })[] = [];
+
+    if (ledgerStartDate || ledgerEndDate) {
+      const startMs = ledgerStartDate ? new Date(ledgerStartDate + 'T00:00:00').getTime() : -Infinity;
+      const endMs = ledgerEndDate ? new Date(ledgerEndDate + 'T23:59:59').getTime() : Infinity;
+
+      const beforeStartRows = rows.filter(r => new Date(r.date).getTime() < startMs);
+      if (beforeStartRows.length > 0) {
+        bfBal = beforeStartRows[beforeStartRows.length - 1].balance;
+      }
+
+      const inRangeRows = rows.filter(r => {
+        const time = new Date(r.date).getTime();
+        return time >= startMs && time <= endMs;
+      });
+
+      if (bfBal !== 0 && ledgerStartDate) {
+        filtered = [
+          {
+            date: ledgerStartDate,
+            ref: 'B/F',
+            description: 'Balance Brought Forward (Prior Transactions)',
+            debit: bfBal > 0 ? bfBal : 0,
+            credit: bfBal < 0 ? Math.abs(bfBal) : 0,
+            balance: bfBal,
+            isBroughtForward: true,
+          },
+          ...inRangeRows,
+        ];
+      } else {
+        filtered = inRangeRows;
+      }
+    } else {
+      filtered = rows;
+    }
+
+    return filtered;
   };
 
   // ================= GENERATE SUPPLIER LEDGER TRANSACTIONS =================
@@ -509,11 +542,44 @@ export const PaymentsModule: React.FC = () => {
       r.balance = running;
     });
 
-    return rows.filter(r => {
-      if (ledgerStartDate && new Date(r.date) < new Date(ledgerStartDate)) return false;
-      if (ledgerEndDate && new Date(r.date) > new Date(ledgerEndDate + 'T23:59:59')) return false;
-      return true;
-    });
+    let bfBal = 0;
+    let filtered: (typeof rows[0] & { isBroughtForward?: boolean })[] = [];
+
+    if (ledgerStartDate || ledgerEndDate) {
+      const startMs = ledgerStartDate ? new Date(ledgerStartDate + 'T00:00:00').getTime() : -Infinity;
+      const endMs = ledgerEndDate ? new Date(ledgerEndDate + 'T23:59:59').getTime() : Infinity;
+
+      const beforeStartRows = rows.filter(r => new Date(r.date).getTime() < startMs);
+      if (beforeStartRows.length > 0) {
+        bfBal = beforeStartRows[beforeStartRows.length - 1].balance;
+      }
+
+      const inRangeRows = rows.filter(r => {
+        const time = new Date(r.date).getTime();
+        return time >= startMs && time <= endMs;
+      });
+
+      if (bfBal !== 0 && ledgerStartDate) {
+        filtered = [
+          {
+            date: ledgerStartDate,
+            ref: 'B/F',
+            description: 'Balance Brought Forward (Prior Purchases & Disb.)',
+            debit: bfBal < 0 ? Math.abs(bfBal) : 0,
+            credit: bfBal > 0 ? bfBal : 0,
+            balance: bfBal,
+            isBroughtForward: true,
+          },
+          ...inRangeRows,
+        ];
+      } else {
+        filtered = inRangeRows;
+      }
+    } else {
+      filtered = rows;
+    }
+
+    return filtered;
   };
 
   const customerLedgerRows = getCustomerLedgerRows();
@@ -961,7 +1027,12 @@ export const PaymentsModule: React.FC = () => {
                   </tr>
                 ) : (
                   customerLedgerRows.map((row, idx) => (
-                    <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
+                    <tr 
+                      key={idx} 
+                      className={`hover:bg-slate-800/40 transition-colors ${
+                        (row as any).isBroughtForward ? 'bg-amber-500/10 font-semibold' : ''
+                      }`}
+                    >
                       <td className="py-3 px-3 text-slate-400 font-mono">{formatDate(row.date)}</td>
                       <td className="py-3 px-3 font-mono font-bold text-white">{row.ref}</td>
                       <td className="py-3 px-3 text-slate-300">
@@ -976,7 +1047,7 @@ export const PaymentsModule: React.FC = () => {
                       </td>
                       <td className="py-3 px-3 text-right font-mono font-black text-sm">
                         <span className={row.balance > 0 ? 'text-amber-400' : 'text-emerald-400'}>
-                          {formatPKR(row.balance)}
+                          {formatPKR(Math.abs(row.balance))} {row.balance < 0 ? '(Adv)' : ''}
                         </span>
                       </td>
                     </tr>
@@ -1769,6 +1840,13 @@ export const PaymentsModule: React.FC = () => {
         customer={selectedLedgerCustomer || null}
         sales={sales}
         payments={payments}
+        salesReturns={salesReturns}
+        initialStartDate={ledgerStartDate}
+        initialEndDate={ledgerEndDate}
+        onDateRangeChange={(start, end) => {
+          setLedgerStartDate(start);
+          setLedgerEndDate(end);
+        }}
         isOwner={isOwner}
       />
 
@@ -1779,6 +1857,12 @@ export const PaymentsModule: React.FC = () => {
         supplier={selectedLedgerSupplier || null}
         purchases={purchases}
         payments={payments}
+        initialStartDate={ledgerStartDate}
+        initialEndDate={ledgerEndDate}
+        onDateRangeChange={(start, end) => {
+          setLedgerStartDate(start);
+          setLedgerEndDate(end);
+        }}
         isOwner={isOwner}
       />
     </div>

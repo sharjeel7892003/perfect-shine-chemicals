@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Customer, Sale, Payment, SalesReturn } from '../../types';
 import { useApp } from '../../context/AppContext';
 import { formatPKR, formatDate, formatDateTime, getTodayDateString } from '../../utils/formatters';
@@ -23,6 +23,9 @@ interface CustomerStatementModalProps {
   sales: Sale[];
   payments: Payment[];
   salesReturns?: SalesReturn[];
+  initialStartDate?: string;
+  initialEndDate?: string;
+  onDateRangeChange?: (startDate: string, endDate: string) => void;
   onArchive?: () => void;
   onDelete?: () => void;
   hasHistory?: boolean;
@@ -47,6 +50,9 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = ({
   sales,
   payments,
   salesReturns: propSalesReturns,
+  initialStartDate = '',
+  initialEndDate = '',
+  onDateRangeChange,
   onArchive,
   onDelete,
   hasHistory,
@@ -55,9 +61,17 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = ({
   const { salesReturns: appSalesReturns } = useApp();
   const effectiveSalesReturns = propSalesReturns || appSalesReturns || [];
 
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
+  const [startDate, setStartDate] = useState<string>(initialStartDate);
+  const [endDate, setEndDate] = useState<string>(initialEndDate);
   const [isPrinting, setIsPrinting] = useState<boolean>(false);
+
+  // Synchronize internal filter state with parent filter whenever modal is opened or props update
+  useEffect(() => {
+    if (isOpen) {
+      setStartDate(initialStartDate || '');
+      setEndDate(initialEndDate || '');
+    }
+  }, [isOpen, initialStartDate, initialEndDate]);
 
   // Compute chronological customer ledger rows with running balances
   const { allRows, displayedRows, broughtForwardBalance, totals } = useMemo(() => {
@@ -240,28 +254,30 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = ({
   const handleResetFilter = () => {
     setStartDate('');
     setEndDate('');
+    onDateRangeChange?.('', '');
   };
 
   const setPresetRange = (preset: 'month' | '30days' | 'year') => {
     const today = new Date();
     const endStr = getTodayDateString();
+    let newStart = '';
+    let newEnd = endStr;
     
     if (preset === 'month') {
       const year = today.getFullYear();
       const month = String(today.getMonth() + 1).padStart(2, '0');
-      setStartDate(`${year}-${month}-01`);
-      setEndDate(endStr);
+      newStart = `${year}-${month}-01`;
     } else if (preset === '30days') {
       const past = new Date(today);
       past.setDate(today.getDate() - 30);
-      const pastStr = past.toISOString().slice(0, 10);
-      setStartDate(pastStr);
-      setEndDate(endStr);
+      newStart = past.toISOString().slice(0, 10);
     } else if (preset === 'year') {
       const year = today.getFullYear();
-      setStartDate(`${year}-01-01`);
-      setEndDate(endStr);
+      newStart = `${year}-01-01`;
     }
+    setStartDate(newStart);
+    setEndDate(newEnd);
+    onDateRangeChange?.(newStart, newEnd);
   };
 
   const currentOutstanding = totals.closingBalance;
@@ -352,7 +368,10 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = ({
               <input
                 type="date"
                 value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
+                onChange={(e) => {
+                  setStartDate(e.target.value);
+                  onDateRangeChange?.(e.target.value, endDate);
+                }}
                 className="bg-slate-800/90 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white"
                 placeholder="From Date"
               />
@@ -360,7 +379,10 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = ({
               <input
                 type="date"
                 value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
+                onChange={(e) => {
+                  setEndDate(e.target.value);
+                  onDateRangeChange?.(startDate, e.target.value);
+                }}
                 className="bg-slate-800/90 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white"
                 placeholder="To Date"
               />
