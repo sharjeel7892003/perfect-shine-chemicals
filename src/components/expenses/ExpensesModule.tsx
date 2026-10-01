@@ -27,6 +27,7 @@ import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { Expense, ExpenseCategory, PaymentMethod, RecurringExpense } from '../../types';
 import { formatPKR, formatDate, getTodayDateString, formatSelectedDateToIso } from '../../utils/formatters';
+import { calculateMonthlyOverheads, getLocalMonthBounds } from '../../utils/financialEngine';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 
@@ -95,19 +96,17 @@ export const ExpensesModule: React.FC = () => {
   const handleQuickDate = (type: 'this_month' | 'today' | 'this_year' | 'all') => {
     const today = new Date();
     if (type === 'today') {
-      const d = today.toISOString().split('T')[0];
+      const d = getTodayDateString();
       setStartDate(d);
       setEndDate(d);
     } else if (type === 'this_month') {
-      const firstDay = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
-      const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().split('T')[0];
-      setStartDate(firstDay);
-      setEndDate(lastDay);
+      const bounds = getLocalMonthBounds(today);
+      setStartDate(bounds.startDate);
+      setEndDate(bounds.endDate);
     } else if (type === 'this_year') {
-      const firstDay = new Date(today.getFullYear(), 0, 1).toISOString().split('T')[0];
-      const lastDay = new Date(today.getFullYear(), 11, 31).toISOString().split('T')[0];
-      setStartDate(firstDay);
-      setEndDate(lastDay);
+      const year = today.getFullYear();
+      setStartDate(`${year}-01-01`);
+      setEndDate(`${year}-12-31`);
     } else {
       setStartDate('');
       setEndDate('');
@@ -132,8 +131,10 @@ export const ExpensesModule: React.FC = () => {
     ])
   ).filter(Boolean);
 
-  // Filtered Expense Records
+  // Filtered Expense Records (excluding archived/deleted entries)
   const filteredExpenses = expenses.filter(e => {
+    if ((e as any).is_archived || (e as any).is_deleted) return false;
+
     const matchesSearch = 
       (e.description && e.description.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (e.category && e.category.toLowerCase().includes(searchTerm.toLowerCase())) ||
@@ -146,19 +147,19 @@ export const ExpensesModule: React.FC = () => {
     return matchesSearch && matchesCategory && matchesMethod && matchesDate;
   });
 
-  // Current Month Key for Recurring logic
-  const currentMonthKey = new Date().toISOString().slice(0, 7); // 'YYYY-MM'
-  const currentMonthName = new Date().toLocaleString('default', { month: 'long', year: 'numeric' });
+  // Current Month Bounds & Single Source of Truth for Monthly Overheads
+  const currentMonthBounds = getLocalMonthBounds();
+  const currentMonthKey = currentMonthBounds.monthKey;
+  const currentMonthName = currentMonthBounds.monthName;
+
+  // Single authoritative source for This Month's Overheads
+  const monthlyOverheads = calculateMonthlyOverheads(expenses);
+  const currentMonthExpensesTotal = monthlyOverheads.total;
 
   // Identify recurring expenses that are active and NOT YET confirmed/posted for this month
   const pendingRecurringExpenses = recurringExpenses.filter(r => {
     return r.is_active && r.last_posted_month !== currentMonthKey;
   });
-
-  // Metrics Calculations
-  const currentMonthExpensesTotal = expenses
-    .filter(e => e.date && e.date.startsWith(currentMonthKey))
-    .reduce((acc, e) => acc + Number(e.amount || 0), 0);
 
   const filteredExpensesTotal = filteredExpenses.reduce((acc, e) => acc + Number(e.amount || 0), 0);
 
@@ -540,8 +541,8 @@ END $$;`;
           </div>
           <p className="text-2xl font-black text-amber-400 mt-3 font-mono">{formatPKR(currentMonthExpensesTotal)}</p>
           <div className="flex items-center justify-between text-xs text-slate-400 mt-2">
-            <span>{currentMonthName}</span>
-            <span className="text-amber-400 font-medium">Overhead outflow</span>
+            <span>{monthlyOverheads.monthName}</span>
+            <span className="text-amber-400 font-medium">{monthlyOverheads.count} items logged</span>
           </div>
         </div>
 

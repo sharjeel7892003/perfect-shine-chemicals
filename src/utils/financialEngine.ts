@@ -425,7 +425,9 @@ export const calculateFinancialMetrics = (data: {
   }
 
   // 5. Operating Expenses
-  const filteredExpenses = expenses.filter(e => isDateInBounds(e.date, startDate, endDate));
+  const filteredExpenses = expenses.filter(
+    e => !(e as any).is_archived && !(e as any).is_deleted && isDateInBounds(e.date, startDate, endDate)
+  );
   const operatingExpenses = Number(
     filteredExpenses.reduce((acc, e) => acc + (Number(e.amount) || 0), 0).toFixed(2)
   );
@@ -461,4 +463,136 @@ export const calculateFinancialMetrics = (data: {
     customerSummaries,
     supplierSummaries,
   };
+};
+
+/**
+ * Authoritative helper to get the local calendar month key and bounds.
+ * Always respects the user's local timezone (avoiding UTC day/month shift bugs).
+ */
+export const getLocalMonthBounds = (targetDate: Date = new Date()): {
+  year: number;
+  month: number; // 1-12
+  monthKey: string; // 'YYYY-MM'
+  monthName: string; // e.g. 'September 2026'
+  startDate: string; // 'YYYY-MM-01'
+  endDate: string; // 'YYYY-MM-DD' (last day of month)
+} => {
+  const year = targetDate.getFullYear();
+  const month = targetDate.getMonth() + 1;
+  const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+  const lastDay = new Date(year, month, 0).getDate();
+  const lastDayStr = String(lastDay).padStart(2, '0');
+  const monthName = targetDate.toLocaleString('default', { month: 'long', year: 'numeric' });
+  return {
+    year,
+    month,
+    monthKey,
+    monthName,
+    startDate: `${year}-${String(month).padStart(2, '0')}-01`,
+    endDate: `${year}-${String(month).padStart(2, '0')}-${lastDayStr}`,
+  };
+};
+
+/**
+ * Tests whether an expense date falls within a target calendar month (in local time).
+ * Robust against ISO strings with timezones, YYYY-MM-DD strings, etc.
+ */
+export const isExpenseInCalendarMonth = (
+  expenseDate?: string,
+  targetYear?: number,
+  targetMonth?: number // 1-12
+): boolean => {
+  if (!expenseDate) return false;
+
+  const now = new Date();
+  const year = targetYear ?? now.getFullYear();
+  const month = targetMonth ?? (now.getMonth() + 1);
+  const targetPrefix = `${year}-${String(month).padStart(2, '0')}`;
+
+  // 1. Direct YYYY-MM prefix match (covers '2026-09-10...', '2026-09')
+  if (expenseDate.slice(0, 7) === targetPrefix) {
+    return true;
+  }
+
+  // 2. Parse Date object as fallback
+  const d = new Date(expenseDate);
+  if (!isNaN(d.getTime())) {
+    return d.getFullYear() === year && (d.getMonth() + 1) === month;
+  }
+
+  return false;
+};
+
+export interface MonthlyOverheadsSummary {
+  total: number;
+  expenses: Expense[];
+  count: number;
+  monthKey: string;
+  monthName: string;
+  startDate: string;
+  endDate: string;
+  categoryBreakdown: { category: string; amount: number; count: number; percentage: number }[];
+}
+
+/**
+ * Authoritative global calculation source for "This Month's Overheads / Operating Expenses".
+ * 
+ * Sums all physical expense records (rent, electricity, salaries, maintenance, transport, etc.)
+ * falling within the specified calendar month (defaulting to the current local month),
+ * strictly excluding any archived or deleted expense entries.
+ */
+export const calculateMonthlyOverheads = (
+  expenses: Expense[],
+  targetDate: Date = new Date()
+): MonthlyOverheadsSummary => {
+  const bounds = getLocalMonthBounds(targetDate);
+
+  const validExpenses = (expenses || []).filter(e => {
+    // Exclude archived or soft-deleted entries
+    if ((e as any).is_archived || (e as any).is_deleted) return false;
+    // Exclude zero or invalid amounts
+    if (!e.date || Number(e.amount || 0) <= 0) return false;
+    return isExpenseInCalendarMonth(e.date, bounds.year, bounds.month);
+  });
+
+  const total = Number(
+    validExpenses.reduce((acc, e) => acc + (Number(e.amount) || 0), 0).toFixed(2)
+  );
+
+  // Group by category
+  const catMap: Record<string, { category: string; amount: number; count: number }> = {};
+  validExpenses.forEach(e => {
+    const cat = e.category || 'Other';
+    if (!catMap[cat]) {
+      catMap[cat] = { category: cat, amount: 0, count: 0 };
+    }
+    catMap[cat].amount += Number(e.amount || 0);
+    catMap[cat].count += 1;
+  });
+
+  const categoryBreakdown = Object.values(catMap)
+    .map(c => ({
+      ...c,
+      amount: Number(c.amount.toFixed(2)),
+      percentage: total > 0 ? Number(((c.amount / total) * 100).toFixed(1)) : 0,
+    }))
+    .sort((a, b) => b.amount - a.amount);
+
+  return {
+    total,
+    expenses: validExpenses,
+    count: validExpenses.length,
+    monthKey: bounds.monthKey,
+    monthName: bounds.monthName,
+    startDate: bounds.startDate,
+    endDate: bounds.endDate,
+    categoryBreakdown,
+  };
+};
+
+/**
+ * Quick helper to get the single authoritative total for This Month's Overheads
+ */
+export const calculateCurrentMonthOverheads = (expenses: Expense[]): number => {
+  return calculateMonthlyOverheads(expenses).total;
 };

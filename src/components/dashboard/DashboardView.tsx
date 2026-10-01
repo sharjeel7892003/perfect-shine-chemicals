@@ -44,7 +44,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     totalProductsValuation,
     productionBatches,
     expenses,
-    thisMonthExpenses
+    thisMonthExpenses,
+    thisMonthOverheads
   } = useApp();
   
   const { currentUser, isOwner, canCreateSale, canManagePurchases, canRecordProduction } = useAuth();
@@ -67,12 +68,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     acc + (s.items || []).reduce((iAcc, item) => iAcc + ((item.unit_cost || 0) * (item.quantity || 0)), 0), 0
   );
   const grossProfit = totalSalesRevenue - totalCOGS;
-  const totalExpensesAmount = expenses.reduce((acc, e) => acc + Number(e.amount || 0), 0);
+  const totalExpensesAmount = expenses
+    .filter(e => !(e as any).is_archived && !(e as any).is_deleted)
+    .reduce((acc, e) => acc + Number(e.amount || 0), 0);
   const netProfit = grossProfit - totalExpensesAmount;
 
-  // This month metrics
-  const currentMonthKey = new Date().toISOString().slice(0, 7);
-  const thisMonthSales = sales.filter(s => s.date && s.date.startsWith(currentMonthKey));
+  // This month metrics using local calendar bounds
+  const currentMonthKey = thisMonthOverheads?.monthKey || new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0');
+  const thisMonthSales = sales.filter(s => s.date && s.date.slice(0, 7) === currentMonthKey);
   const thisMonthRevenue = thisMonthSales.reduce((acc, s) => acc + (s.total_amount || 0), 0);
   const thisMonthCOGS = thisMonthSales.reduce((acc, s) => 
     acc + (s.items || []).reduce((iAcc, item) => iAcc + ((item.unit_cost || 0) * (item.quantity || 0)), 0), 0
@@ -212,9 +215,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           </div>
           <p className="text-2xl font-black text-rose-400 mt-3 font-mono">{formatPKR(thisMonthExpenses)}</p>
           <div className="flex items-center justify-between text-xs text-slate-400 mt-2">
-            <span>Operating expenses</span>
+            <span>{thisMonthOverheads?.monthName || 'Operating expenses'}</span>
             <button onClick={() => onNavigate('expenses')} className="text-rose-400 hover:underline flex items-center gap-0.5 font-medium">
-              Expenses <ArrowUpRight className="w-3 h-3" />
+              {thisMonthOverheads?.count ?? 0} items <ArrowUpRight className="w-3 h-3" />
             </button>
           </div>
         </div>

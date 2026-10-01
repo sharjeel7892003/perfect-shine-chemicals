@@ -31,7 +31,13 @@ import { getRateDifferenceInfo, RateDifferenceInfo } from '../../utils/pricing';
 import { exportToCSV } from '../../utils/batchNumber';
 import { Badge } from '../common/Badge';
 import { Sale, ProductionBatch, ConsumedRawMaterial, Customer, Supplier } from '../../types';
-import { calculateFinancialMetrics, calculateCustomerFinancials, calculateSupplierFinancials } from '../../utils/financialEngine';
+import { 
+  calculateFinancialMetrics, 
+  calculateCustomerFinancials, 
+  calculateSupplierFinancials,
+  calculateMonthlyOverheads,
+  getLocalMonthBounds
+} from '../../utils/financialEngine';
 import { ProductionReportView } from './ProductionReportView';
 import { RawMaterialPurchaseReportView } from './RawMaterialPurchaseReportView';
 
@@ -107,10 +113,9 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
       setStartDate(formatted);
       setEndDate(formatted);
     } else if (type === 'this_month') {
-      const firstDay = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
-      const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().split('T')[0];
-      setStartDate(firstDay);
-      setEndDate(lastDay);
+      const bounds = getLocalMonthBounds(today);
+      setStartDate(bounds.startDate);
+      setEndDate(bounds.endDate);
     } else {
       setStartDate('');
       setEndDate('');
@@ -305,9 +310,13 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
   const estimatedGrossProfit = profitRevenue - profitCOGS;
   const grossMarginPercent = profitRevenue > 0 ? ((estimatedGrossProfit / profitRevenue) * 100).toFixed(1) : '0';
 
-  // Filter Operating Expenses in selected timeframe
-  const filteredOperatingExpenses = expenses.filter(e => isDateInRange(e.date));
-  const totalOperatingExpenses = filteredOperatingExpenses.reduce((acc, e) => acc + Number(e.amount || 0), 0);
+  // Filter Operating Expenses in selected timeframe (excluding archived/deleted)
+  const filteredOperatingExpenses = expenses.filter(
+    e => !(e as any).is_archived && !(e as any).is_deleted && isDateInRange(e.date)
+  );
+  const totalOperatingExpenses = Number(
+    filteredOperatingExpenses.reduce((acc, e) => acc + Number(e.amount || 0), 0).toFixed(2)
+  );
 
   // Group Operating Expenses by Category
   const expensesByCategoryMap: Record<string, { category: string; amount: number; count: number }> = {};

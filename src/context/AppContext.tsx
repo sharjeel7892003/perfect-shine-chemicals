@@ -35,7 +35,13 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { supabaseService } from '../lib/supabaseService';
 import { generateId, ensureUUID, isValidUUID } from '../utils/uuid';
 import { useAuth } from './AuthContext';
-import { calculateCustomerFinancials, calculateSupplierFinancials } from '../utils/financialEngine';
+import { 
+  calculateCustomerFinancials, 
+  calculateSupplierFinancials, 
+  calculateMonthlyOverheads, 
+  getLocalMonthBounds,
+  MonthlyOverheadsSummary 
+} from '../utils/financialEngine';
 
 interface AppContextType {
   // State
@@ -69,6 +75,7 @@ interface AppContextType {
   totalRawMaterialsValuation: number;
   totalProductsValuation: number;
   thisMonthExpenses: number;
+  thisMonthOverheads: MonthlyOverheadsSummary;
   totalExpenses: number;
 
   // Raw Materials Actions
@@ -508,13 +515,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     .filter(p => p.is_active && !p.is_archived)
     .reduce((acc, p) => acc + (Number(p.current_stock || 0) * Number(p.cost_price || 0)), 0);
 
-  // Derived expenses metrics
-  const currentMonthPrefix = new Date().toISOString().slice(0, 7); // 'YYYY-MM'
-  const thisMonthExpenses = expenses
-    .filter(e => e.date && e.date.startsWith(currentMonthPrefix))
-    .reduce((acc, e) => acc + Number(e.amount || 0), 0);
+  // Derived expenses metrics - single source of truth from financialEngine
+  const thisMonthOverheads = calculateMonthlyOverheads(expenses);
+  const thisMonthExpenses = thisMonthOverheads.total;
 
-  const totalExpenses = expenses.reduce((acc, e) => acc + Number(e.amount || 0), 0);
+  const totalExpenses = expenses
+    .filter(e => !(e as any).is_archived && !(e as any).is_deleted)
+    .reduce((acc, e) => acc + Number(e.amount || 0), 0);
 
   // ==============================================================================
   // RAW MATERIALS ACTIONS (SUPABASE-FIRST)
@@ -3276,7 +3283,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const now = new Date();
-    const currentMonthKey = now.toISOString().slice(0, 7); // 'YYYY-MM'
+    const currentMonthKey = getLocalMonthBounds(now).monthKey; // 'YYYY-MM'
 
     const expensePayload: Omit<Expense, 'id' | 'created_at'> = {
       date: now.toISOString(),
@@ -3348,6 +3355,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         totalRawMaterialsValuation,
         totalProductsValuation,
         thisMonthExpenses,
+        thisMonthOverheads,
         totalExpenses,
         addRawMaterial,
         updateRawMaterial,
