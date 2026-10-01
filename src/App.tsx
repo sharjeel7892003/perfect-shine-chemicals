@@ -7,6 +7,7 @@ import { MobileNav } from './components/layout/MobileNav';
 
 import { DashboardView } from './components/dashboard/DashboardView';
 import { SalesModule } from './components/sales/SalesModule';
+import { QuotationsModule } from './components/quotations/QuotationsModule';
 import { InventoryModule } from './components/inventory/InventoryModule';
 import { RawMaterialsModule } from './components/rawMaterials/RawMaterialsModule';
 import { FormulationsModule } from './components/formulations/FormulationsModule';
@@ -61,6 +62,8 @@ const MainLayout: React.FC = () => {
         return <DashboardView onNavigate={setActiveTab} />;
       case 'sales':
         return canAccessSales ? <SalesModule /> : <DashboardView onNavigate={setActiveTab} />;
+      case 'quotations':
+        return canAccessSales ? <QuotationsModule /> : <DashboardView onNavigate={setActiveTab} />;
       case 'inventory':
         return <InventoryModule />;
       case 'raw_materials':

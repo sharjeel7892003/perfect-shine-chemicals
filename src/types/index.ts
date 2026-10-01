@@ -476,4 +476,52 @@ export interface DeletionAuditLog {
     payments_reversed_count?: number;
   };
 }
+// ==============================================================================
+// 5. PRICE QUOTATIONS & PROPOSALS ENTITY
+// ==============================================================================
+export type QuotationStatus = 'pending' | 'accepted' | 'rejected' | 'expired';
 
+export interface QuotationLineItem {
+  id: string;
+  product_name: string; // Product / formula name (e.g. "Car Wash Shampoo")
+  size?: string; // Pack size description (e.g. "500ml Bottle", "275ml Bottle", "1 Liter")
+  // Fully manual cost breakdown fields (all uncoupled from BOM/system)
+  product_cost: number; // Bulk chemical/formulation cost per unit
+  bottle_cost: number; // Bottle container cost
+  cap_cost: number; // Cap / trigger / pump cost
+  label_cost: number; // Sticker label front/back cost
+  labour_cost: number; // Filling, induction seal & packing labour cost
+  carton_cost: number; // Master shipper carton cost per unit
+  total_cost_per_unit: number; // Auto-sum of the above 6 cost elements
+  quoted_price_per_unit: number; // Final selling price quoted to customer
+  moq?: string; // Optional line-specific MOQ
+  notes?: string;
+}
+
+export interface Quotation {
+  id: string;
+  quotation_number: string; // e.g. "QT-2026-0001"
+  customer_id?: string; // Optional if existing customer selected
+  customer_name: string; // Customer or prospect person name
+  company_name?: string; // Company / Brand name
+  phone?: string;
+  email?: string;
+  date: string; // Quotation date (YYYY-MM-DD)
+  validity_period: string; // e.g. "Valid for 15 days"
+  status: QuotationStatus; // 'pending' | 'accepted' | 'rejected' | 'expired'
+  items: QuotationLineItem[];
+  // Additional manual fields
+  moq: string; // Minimum Order Quantity (e.g. "1,000 Units per SKU")
+  repeat_order_moq?: string; // Repeat Order MOQ (e.g. "500 Units")
+  sample_cost?: string; // Sample Cost (e.g. "PKR 2,500 (Refundable upon order)")
+  sample_lead_time?: string; // Sample Lead Time (e.g. "3-5 Working Days")
+  delivery_charges?: string; // Delivery Charges (e.g. "Ex-Factory Lahore / At actual")
+  available_fragrances?: string; // Available Fragrances (e.g. "Lemon, Ocean Breeze, Strawberry, Jasmine")
+  formula_specifications?: string; // Formula Specifications
+  batch_mfg_expiry_info?: string; // Batch / MFG / Expiry Info
+  terms_conditions?: string; // Payment & commercial terms
+  notes?: string; // Private internal notes
+  created_by?: string;
+  created_at?: string;
+  updated_at?: string;
+}

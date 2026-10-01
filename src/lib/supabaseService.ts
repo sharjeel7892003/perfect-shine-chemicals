@@ -19,7 +19,8 @@ import {
   PurchaseTripItem,
   SalesReturn,
   SalesReturnItem,
-  PackingRun
+  PackingRun,
+  Quotation
 } from '../types';
 import { ensureUUID, isValidUUID } from '../utils/uuid';
 
@@ -57,7 +58,8 @@ export const supabaseService = {
         recExpRes,
         tripRes,
         returnsRes,
-        packingRes
+        packingRes,
+        quotRes
       ] = await Promise.all([
         supabase.from('products').select('*').order('created_at', { ascending: false }),
         supabase.from('customers').select('*').order('created_at', { ascending: false }),
@@ -76,7 +78,8 @@ export const supabaseService = {
         Promise.resolve(supabase.from('recurring_expenses').select('*').order('created_at', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
         Promise.resolve(supabase.from('purchase_trips').select('*, purchase_trip_items(*)').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
         Promise.resolve(supabase.from('sales_returns').select('*, sales_return_items(*)').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
-        Promise.resolve(supabase.from('packing_runs').select('*').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any))
+        Promise.resolve(supabase.from('packing_runs').select('*').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
+        Promise.resolve(supabase.from('quotations').select('*').order('created_at', { ascending: false })).catch(() => ({ data: [], error: null } as any))
       ]);
 
 
@@ -341,6 +344,7 @@ export const supabaseService = {
         recurringExpenses: (recExpRes?.data as RecurringExpense[]) || [],
         purchaseTrips: normalizedPurchaseTrips,
         packingRuns: ((packingRes?.data || []) as PackingRun[]),
+        quotations: ((quotRes?.data || []) as Quotation[]),
       };
     } catch (err: any) {
       console.error('Failed to fetch from Supabase:', err);
@@ -1545,6 +1549,60 @@ export const supabaseService = {
       } catch (err) {
         console.warn(`Exception wiping table ${table}:`, err);
       }
+    }
+  },
+
+  // ============================================================================
+  // QUOTATIONS
+  // ============================================================================
+  async saveQuotation(quotation: Quotation): Promise<Quotation> {
+    if (!isSupabaseConfigured || !supabase) return quotation;
+    try {
+      assertOnline();
+      const validId = ensureUUID(quotation.id);
+      const payload = {
+        id: validId,
+        quotation_number: quotation.quotation_number,
+        customer_id: isValidUUID(quotation.customer_id) ? quotation.customer_id : null,
+        customer_name: quotation.customer_name,
+        company_name: quotation.company_name || null,
+        phone: quotation.phone || null,
+        email: quotation.email || null,
+        date: quotation.date,
+        validity_period: quotation.validity_period,
+        status: quotation.status,
+        items: quotation.items,
+        moq: quotation.moq,
+        repeat_order_moq: quotation.repeat_order_moq || null,
+        sample_cost: quotation.sample_cost || null,
+        sample_lead_time: quotation.sample_lead_time || null,
+        delivery_charges: quotation.delivery_charges || null,
+        available_fragrances: quotation.available_fragrances || null,
+        formula_specifications: quotation.formula_specifications || null,
+        batch_mfg_expiry_info: quotation.batch_mfg_expiry_info || null,
+        terms_conditions: quotation.terms_conditions || null,
+        notes: quotation.notes || null,
+        created_by: isValidUUID(quotation.created_by) ? quotation.created_by : null,
+      };
+      const { error } = await supabase.from('quotations').upsert(payload);
+      if (error) {
+        console.warn('Supabase quotation upsert notice:', error.message);
+      }
+    } catch (e) {
+      console.warn('Local fallback active for quotations:', e);
+    }
+    return quotation;
+  },
+
+  async deleteQuotation(id: string): Promise<void> {
+    if (!isSupabaseConfigured || !supabase) return;
+    try {
+      assertOnline();
+      if (isValidUUID(id)) {
+        await supabase.from('quotations').delete().eq('id', id);
+      }
+    } catch (e) {
+      console.warn('Failed to delete quotation from cloud:', e);
     }
   }
 };

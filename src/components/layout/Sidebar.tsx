@@ -16,7 +16,8 @@ import {
   Layers,
   Factory,
   DollarSign,
-  Boxes
+  Boxes,
+  FileSpreadsheet
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useApp } from '../../context/AppContext';
@@ -25,6 +26,7 @@ import { Badge } from '../common/Badge';
 export type ActiveTab = 
   | 'dashboard' 
   | 'sales' 
+  | 'quotations'
   | 'inventory' 
   | 'raw_materials'
   | 'formulations'
@@ -65,6 +67,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
   const navItems = [
     { id: 'dashboard' as ActiveTab, label: 'Dashboard', icon: LayoutDashboard, visible: true },
     { id: 'sales' as ActiveTab, label: 'Sales & POS', icon: ShoppingCart, visible: canAccessSales },
+    { id: 'quotations' as ActiveTab, label: 'Price Quotations', icon: FileSpreadsheet, visible: canAccessSales },
     { 
       id: 'inventory' as ActiveTab, 
       label: 'Finished Goods Stock', 

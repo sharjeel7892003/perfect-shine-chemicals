@@ -26,7 +26,10 @@ import {
   SalesReturnItem,
   SalesReturnRefundOption,
   PackingRun,
-  PackagingItem
+  PackagingItem,
+  Quotation,
+  QuotationLineItem,
+  QuotationStatus
 } from '../types';
 import { generateInvoiceNumber, formatPKR } from '../utils/formatters';
 import { allocateTripFreight, calculateWeightedAverageLandedCost } from '../utils/freightAllocation';
@@ -57,6 +60,7 @@ interface AppContextType {
   purchases: Purchase[];
   purchaseTrips: PurchaseTrip[];
   packingRuns: PackingRun[];
+  quotations: Quotation[];
   stockMovements: StockMovement[];
   payments: Payment[];
   expenses: Expense[];
@@ -204,6 +208,12 @@ interface AppContextType {
   deleteRecurringExpense: (id: string) => Promise<void>;
   confirmAndPostRecurringExpense: (recurringId: string, customAmount?: number, customPaymentMethod?: PaymentMethod, user?: Profile) => Promise<Expense>;
 
+  // Price Quotations Actions
+  saveQuotation: (quotationData: Omit<Quotation, 'id' | 'created_at'> & { id?: string }) => Promise<Quotation>;
+  updateQuotationStatus: (id: string, status: QuotationStatus) => Promise<void>;
+  duplicateQuotation: (id: string) => Promise<Quotation>;
+  deleteQuotation: (id: string) => Promise<void>;
+
   // Helper
   resetToDefaultData: () => Promise<void>;
 }
@@ -257,6 +267,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (typeof window !== 'undefined') {
       try {
         const cached = localStorage.getItem('psc_local_packing_runs');
+        if (cached) return JSON.parse(cached);
+      } catch {}
+    }
+    return [];
+  });
+  const [quotations, setQuotations] = useState<Quotation[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('psc_local_quotations');
         if (cached) return JSON.parse(cached);
       } catch {}
     }
@@ -398,6 +417,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (typeof window !== 'undefined' && effectivePackingRuns.length > 0) {
           try {
             localStorage.setItem('psc_local_packing_runs', JSON.stringify(effectivePackingRuns));
+          } catch {}
+        }
+        let effectiveQuotations = (cloudData as any).quotations || [];
+        if (effectiveQuotations.length === 0 && typeof window !== 'undefined') {
+          try {
+            const cached = localStorage.getItem('psc_local_quotations');
+            if (cached) effectiveQuotations = JSON.parse(cached);
+          } catch {}
+        }
+        setQuotations(effectiveQuotations);
+        if (typeof window !== 'undefined' && effectiveQuotations.length > 0) {
+          try {
+            localStorage.setItem('psc_local_quotations', JSON.stringify(effectiveQuotations));
           } catch {}
         }
         setStockMovements(cloudData.stockMovements || []);
@@ -3329,6 +3361,146 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await loadCloudData();
   };
 
+  // Price Quotations Handlers
+  const saveQuotation = async (quotationData: Omit<Quotation, 'id' | 'created_at'> & { id?: string }): Promise<Quotation> => {
+    const isNew = !quotationData.id;
+    const validId = quotationData.id || generateId();
+    
+    // Auto-generate quotation number if not provided
+    let quotNumber = quotationData.quotation_number;
+    if (!quotNumber) {
+      const year = new Date().getFullYear();
+      const count = quotations.length + 1;
+      quotNumber = `QT-${year}-${String(count).padStart(4, '0')}`;
+    }
+
+    const items: QuotationLineItem[] = (quotationData.items || []).map(item => {
+      const pCost = Number(item.product_cost || 0);
+      const bCost = Number(item.bottle_cost || 0);
+      const capCost = Number(item.cap_cost || 0);
+      const lCost = Number(item.label_cost || 0);
+      const labCost = Number(item.labour_cost || 0);
+      const cCost = Number(item.carton_cost || 0);
+      const totalCost = Number((pCost + bCost + capCost + lCost + labCost + cCost).toFixed(2));
+      return {
+        ...item,
+        id: item.id || generateId(),
+        product_cost: pCost,
+        bottle_cost: bCost,
+        cap_cost: capCost,
+        label_cost: lCost,
+        labour_cost: labCost,
+        carton_cost: cCost,
+        total_cost_per_unit: totalCost,
+        quoted_price_per_unit: Number(item.quoted_price_per_unit || 0),
+      };
+    });
+
+    const quotation: Quotation = {
+      ...quotationData,
+      id: validId,
+      quotation_number: quotNumber,
+      items,
+      date: quotationData.date || new Date().toISOString().split('T')[0],
+      validity_period: quotationData.validity_period || 'Valid for 15 days',
+      status: quotationData.status || 'pending',
+      moq: quotationData.moq || '1,000 Units',
+      created_at: isNew ? new Date().toISOString() : (quotations.find(q => q.id === validId)?.created_at || new Date().toISOString()),
+      updated_at: new Date().toISOString(),
+    };
+
+    setQuotations(prev => {
+      const existingIdx = prev.findIndex(q => q.id === validId);
+      const next = existingIdx !== -1 
+        ? prev.map((q, idx) => idx === existingIdx ? quotation : q)
+        : [quotation, ...prev];
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('psc_local_quotations', JSON.stringify(next));
+        } catch {}
+      }
+      return next;
+    });
+
+    try {
+      await supabaseService.saveQuotation(quotation);
+    } catch (e) {
+      console.warn('Failed to save quotation to Supabase:', e);
+    }
+
+    return quotation;
+  };
+
+  const updateQuotationStatus = async (id: string, status: QuotationStatus): Promise<void> => {
+    let updated: Quotation | undefined;
+    setQuotations(prev => {
+      const next = prev.map(q => {
+        if (q.id === id) {
+          updated = { ...q, status, updated_at: new Date().toISOString() };
+          return updated;
+        }
+        return q;
+      });
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('psc_local_quotations', JSON.stringify(next));
+        } catch {}
+      }
+      return next;
+    });
+
+    if (updated) {
+      try {
+        await supabaseService.saveQuotation(updated);
+      } catch (e) {
+        console.warn('Failed to update quotation status in Supabase:', e);
+      }
+    }
+  };
+
+  const duplicateQuotation = async (id: string): Promise<Quotation> => {
+    const original = quotations.find(q => q.id === id);
+    if (!original) {
+      throw new Error('Quotation not found');
+    }
+
+    const year = new Date().getFullYear();
+    const count = quotations.length + 1;
+    const newNumber = `QT-${year}-${String(count).padStart(4, '0')}`;
+
+    const duplicatedData: Omit<Quotation, 'id' | 'created_at'> = {
+      ...original,
+      quotation_number: newNumber,
+      date: new Date().toISOString().split('T')[0],
+      status: 'pending',
+      items: original.items.map(item => ({
+        ...item,
+        id: generateId()
+      })),
+      notes: original.notes ? `${original.notes} (Duplicated from ${original.quotation_number})` : `Duplicated from ${original.quotation_number}`,
+    };
+
+    return await saveQuotation(duplicatedData);
+  };
+
+  const deleteQuotation = async (id: string): Promise<void> => {
+    setQuotations(prev => {
+      const next = prev.filter(q => q.id !== id);
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('psc_local_quotations', JSON.stringify(next));
+        } catch {}
+      }
+      return next;
+    });
+
+    try {
+      await supabaseService.deleteQuotation(id);
+    } catch (e) {
+      console.warn('Failed to delete quotation from Supabase:', e);
+    }
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -3413,6 +3585,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateRecurringExpense,
         deleteRecurringExpense,
         confirmAndPostRecurringExpense,
+        quotations,
+        saveQuotation,
+        updateQuotationStatus,
+        duplicateQuotation,
+        deleteQuotation,
         resetToDefaultData,
       }}
     >
