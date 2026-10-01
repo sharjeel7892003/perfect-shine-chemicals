@@ -219,7 +219,7 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDel
                   {sale.items.map((item, idx) => {
                     const liters = Number((item.liters_qty ?? item.base_quantity ?? 0).toFixed(2));
                     const bottles = Number(item.bottle_qty ?? item.quantity ?? 0);
-                    const bPerBox = item.bottles_per_box || (item.size_in_base_unit && item.size_in_base_unit <= 0.35 ? 24 : 12);
+                    const bPerBox = item.bottles_per_box !== undefined && item.bottles_per_box > 0 ? item.bottles_per_box : undefined;
                     const boxes = item.box_qty !== undefined 
                       ? item.box_qty 
                       : (bPerBox ? Number((bottles / bPerBox).toFixed(2)) : '-');

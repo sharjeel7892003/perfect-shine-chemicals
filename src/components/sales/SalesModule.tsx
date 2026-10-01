@@ -441,16 +441,45 @@ export const SalesModule: React.FC = () => {
   };
 
   // Dedicated Cross-Conversion Handlers for Private Label
-  const updatePrivateLabelBoxes = (index: number, newBoxes: number) => {
+  const updatePrivateLabelBottleSize = (index: number, newSizeL: number, packName?: string, packId?: string) => {
     setCartItems(prev => {
       const item = prev[index];
       if (!item) return prev;
-      if (newBoxes <= 0) {
-        return prev.filter((_, idx) => idx !== index);
-      }
-      const bPerBox = item.bottles_per_box || (item.size_in_base_unit && item.size_in_base_unit <= 0.35 ? 24 : 12);
+      const safeSize = Math.max(0.001, isNaN(newSizeL) ? 0.5 : newSizeL);
+      const bottles = item.bottle_qty !== undefined ? item.bottle_qty : item.quantity;
+      const liters = Number((bottles * safeSize).toFixed(2));
+      const rateL = item.rate_per_liter !== undefined ? item.rate_per_liter : 170;
+      const subtotal = Number((liters * rateL).toFixed(2));
+      const unitPrice = bottles > 0 ? Number((subtotal / bottles).toFixed(4)) : 0;
+
+      const updated = [...prev];
+      updated[index] = {
+        ...item,
+        is_private_label: true,
+        pack_size_id: packId !== undefined ? packId : item.pack_size_id,
+        pack_size_name: packName !== undefined ? packName : item.pack_size_name,
+        size_in_base_unit: safeSize,
+        bottle_qty: bottles,
+        quantity: bottles,
+        pack_quantity: bottles,
+        liters_qty: liters,
+        base_quantity: liters,
+        rate_per_liter: rateL,
+        unit_price: unitPrice,
+        subtotal
+      };
+      return updated;
+    });
+  };
+
+  const updatePrivateLabelBottlesPerBox = (index: number, newBPerBox: number) => {
+    setCartItems(prev => {
+      const item = prev[index];
+      if (!item) return prev;
+      const safeBPerBox = Math.max(0, isNaN(newBPerBox) ? 0 : newBPerBox);
+      const boxes = item.box_qty !== undefined ? item.box_qty : 0;
       const bottleSize = item.size_in_base_unit || 1;
-      const bottles = Math.round(newBoxes * bPerBox);
+      const bottles = Math.round(boxes * safeBPerBox);
       const liters = Number((bottles * bottleSize).toFixed(2));
       const rateL = item.rate_per_liter !== undefined ? item.rate_per_liter : 170;
       const subtotal = Number((liters * rateL).toFixed(2));
@@ -460,8 +489,39 @@ export const SalesModule: React.FC = () => {
       updated[index] = {
         ...item,
         is_private_label: true,
-        box_qty: newBoxes,
-        bottles_per_box: bPerBox,
+        bottles_per_box: safeBPerBox,
+        box_qty: boxes,
+        bottle_qty: bottles,
+        quantity: bottles,
+        pack_quantity: bottles,
+        liters_qty: liters,
+        base_quantity: liters,
+        rate_per_liter: rateL,
+        unit_price: unitPrice,
+        subtotal
+      };
+      return updated;
+    });
+  };
+
+  const updatePrivateLabelBoxes = (index: number, newBoxes: number) => {
+    setCartItems(prev => {
+      const item = prev[index];
+      if (!item) return prev;
+      const safeBoxes = Math.max(0, isNaN(newBoxes) ? 0 : newBoxes);
+      const bPerBox = item.bottles_per_box !== undefined ? item.bottles_per_box : 0;
+      const bottleSize = item.size_in_base_unit || 1;
+      const bottles = Math.round(safeBoxes * bPerBox);
+      const liters = Number((bottles * bottleSize).toFixed(2));
+      const rateL = item.rate_per_liter !== undefined ? item.rate_per_liter : 170;
+      const subtotal = Number((liters * rateL).toFixed(2));
+      const unitPrice = bottles > 0 ? Number((subtotal / bottles).toFixed(4)) : 0;
+
+      const updated = [...prev];
+      updated[index] = {
+        ...item,
+        is_private_label: true,
+        box_qty: safeBoxes,
         bottle_qty: bottles,
         quantity: bottles,
         pack_quantity: bottles,
@@ -479,26 +539,23 @@ export const SalesModule: React.FC = () => {
     setCartItems(prev => {
       const item = prev[index];
       if (!item) return prev;
-      if (newBottles <= 0) {
-        return prev.filter((_, idx) => idx !== index);
-      }
-      const bPerBox = item.bottles_per_box || (item.size_in_base_unit && item.size_in_base_unit <= 0.35 ? 24 : 12);
+      const safeBottles = Math.max(0, isNaN(newBottles) ? 0 : newBottles);
+      const bPerBox = item.bottles_per_box !== undefined ? item.bottles_per_box : 0;
       const bottleSize = item.size_in_base_unit || 1;
-      const boxes = bPerBox > 0 ? Number((newBottles / bPerBox).toFixed(2)) : 0;
-      const liters = Number((newBottles * bottleSize).toFixed(2));
+      const boxes = bPerBox > 0 ? Number((safeBottles / bPerBox).toFixed(2)) : (item.box_qty || 0);
+      const liters = Number((safeBottles * bottleSize).toFixed(2));
       const rateL = item.rate_per_liter !== undefined ? item.rate_per_liter : 170;
       const subtotal = Number((liters * rateL).toFixed(2));
-      const unitPrice = newBottles > 0 ? Number((subtotal / newBottles).toFixed(4)) : 0;
+      const unitPrice = safeBottles > 0 ? Number((subtotal / safeBottles).toFixed(4)) : 0;
 
       const updated = [...prev];
       updated[index] = {
         ...item,
         is_private_label: true,
         box_qty: boxes,
-        bottles_per_box: bPerBox,
-        bottle_qty: newBottles,
-        quantity: newBottles,
-        pack_quantity: newBottles,
+        bottle_qty: safeBottles,
+        quantity: safeBottles,
+        pack_quantity: safeBottles,
         liters_qty: liters,
         base_quantity: liters,
         rate_per_liter: rateL,
@@ -1216,10 +1273,69 @@ export const SalesModule: React.FC = () => {
                         {/* Dedicated Item Editor: Private Label vs Standard Retail */}
                         {(item.is_private_label || isPrivateLabelSale) ? (
                           <div className="mt-2.5 pt-2 border-t border-slate-800 space-y-2">
-                            <div className="grid grid-cols-12 gap-2 items-center">
+                            {/* Row 1: Bottle Size Selector & Size in Liters */}
+                            <div className="flex items-center justify-between gap-2 bg-slate-950/70 p-1.5 rounded border border-slate-800/80">
+                              <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                                <span className="text-[10px] text-emerald-400 font-bold shrink-0">Bottle Size:</span>
+                                <select
+                                  value={item.pack_size_id || (item.size_in_base_unit ? `custom_${item.size_in_base_unit}` : 'custom_0.5')}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    if (val.startsWith('custom_')) {
+                                      const size = parseFloat(val.replace('custom_', ''));
+                                      updatePrivateLabelBottleSize(idx, size, `${size >= 1 ? size + 'L' : (size * 1000) + 'ml'}`);
+                                    } else {
+                                      const prod = products.find(p => p.id === item.product_id);
+                                      const ps = prod?.pack_sizes?.find(p => p.id === val);
+                                      if (ps) {
+                                        updatePrivateLabelBottleSize(idx, ps.size_in_base_unit, ps.name, ps.id);
+                                        if (ps.bottles_per_box && (!item.bottles_per_box || item.bottles_per_box === 12 || item.bottles_per_box === 24)) {
+                                          updatePrivateLabelBottlesPerBox(idx, ps.bottles_per_box);
+                                        }
+                                      }
+                                    }
+                                  }}
+                                  className="bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none focus:border-emerald-500 truncate flex-1"
+                                >
+                                  {/* Defined product pack sizes if any */}
+                                  {products.find(p => p.id === item.product_id)?.pack_sizes?.map(ps => (
+                                    <option key={ps.id} value={ps.id}>
+                                      {ps.name} ({ps.size_in_base_unit}L)
+                                    </option>
+                                  ))}
+                                  {/* Standard preset bottle sizes */}
+                                  <option value="custom_0.25">250ml (0.25L)</option>
+                                  <option value="custom_0.275">275ml (0.275L)</option>
+                                  <option value="custom_0.5">500ml (0.50L)</option>
+                                  <option value="custom_1.0">1000ml / 1L (1.00L)</option>
+                                  <option value="custom_5.0">5000ml / 5L (5.00L)</option>
+                                </select>
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <span className="text-[10px] text-slate-400">Size:</span>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  min="0.001"
+                                  value={item.size_in_base_unit !== undefined ? item.size_in_base_unit : 0.5}
+                                  onChange={(e) => {
+                                    const val = parseFloat(e.target.value);
+                                    if (!isNaN(val) && val > 0) {
+                                      updatePrivateLabelBottleSize(idx, val, `${val >= 1 ? val + 'L' : (val * 1000) + 'ml'}`);
+                                    }
+                                  }}
+                                  className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-xs text-center text-emerald-400 font-mono font-bold focus:outline-none focus:border-emerald-500"
+                                  title="Bottle size in Liters (e.g. 0.5 for 500ml)"
+                                />
+                                <span className="text-[10px] text-slate-400 font-mono">L</span>
+                              </div>
+                            </div>
+
+                            {/* Row 2: 4 Inputs - Qty (Box), Bottles/Box, Qty (Bottles), Rate (PKR/L) */}
+                            <div className="grid grid-cols-4 gap-1.5 items-end">
                               {/* Qty Box */}
-                              <div className="col-span-3">
-                                <label className="text-[10px] text-cyan-400 font-bold block mb-0.5" title="Boxes sold">
+                              <div>
+                                <label className="text-[10px] text-cyan-400 font-bold block mb-0.5 truncate" title="Boxes sold">
                                   Qty (Box)
                                 </label>
                                 <input
@@ -1232,15 +1348,32 @@ export const SalesModule: React.FC = () => {
                                     updatePrivateLabelBoxes(idx, isNaN(val) ? 0 : val);
                                   }}
                                   placeholder="0"
-                                  className="w-full bg-slate-950 border border-cyan-500/40 rounded px-1.5 py-1 text-xs text-center text-cyan-300 font-mono font-bold focus:outline-none focus:border-cyan-400"
+                                  className="w-full bg-slate-950 border border-cyan-500/40 rounded px-1 py-1 text-xs text-center text-cyan-300 font-mono font-bold focus:outline-none focus:border-cyan-400"
                                 />
                               </div>
 
-                              <span className="col-span-1 text-center text-slate-500 text-xs font-mono font-bold">⇄</span>
+                              {/* Bottles Per Box (MANUAL PER-INVOICE ENTRY) */}
+                              <div>
+                                <label className="text-[10px] text-purple-400 font-bold block mb-0.5 truncate" title="Bottles per box for THIS invoice (e.g. 6, 12, 24)">
+                                  Bottles/Box
+                                </label>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  step="1"
+                                  value={item.bottles_per_box !== undefined ? (item.bottles_per_box === 0 ? '' : item.bottles_per_box) : ''}
+                                  onChange={(e) => {
+                                    const val = e.target.value === '' ? 0 : parseInt(e.target.value, 10);
+                                    updatePrivateLabelBottlesPerBox(idx, isNaN(val) ? 0 : val);
+                                  }}
+                                  placeholder="e.g. 6"
+                                  className="w-full bg-slate-950 border border-purple-500/40 rounded px-1 py-1 text-xs text-center text-purple-300 font-mono font-bold focus:outline-none focus:border-purple-400"
+                                />
+                              </div>
 
                               {/* Qty Bottles */}
-                              <div className="col-span-4">
-                                <label className="text-[10px] text-slate-300 font-semibold block mb-0.5">
+                              <div>
+                                <label className="text-[10px] text-slate-300 font-semibold block mb-0.5 truncate" title="Total bottles = Box × Bottles/Box">
                                   Qty (Bottles)
                                 </label>
                                 <input
@@ -1253,17 +1386,16 @@ export const SalesModule: React.FC = () => {
                                     updatePrivateLabelBottles(idx, isNaN(val) ? 0 : val);
                                   }}
                                   placeholder="0"
-                                  className="w-full bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-xs text-center text-white font-mono font-bold focus:outline-none focus:border-emerald-500"
+                                  className="w-full bg-slate-950 border border-slate-700 rounded px-1 py-1 text-xs text-center text-white font-mono font-bold focus:outline-none focus:border-emerald-500"
                                 />
                               </div>
 
                               {/* Rate per Liter */}
-                              <div className="col-span-4">
-                                <label className="text-[10px] text-amber-400 font-bold block mb-0.5">
+                              <div>
+                                <label className="text-[10px] text-amber-400 font-bold block mb-0.5 truncate" title="Rate per Liter (PKR/L)">
                                   Rate (PKR/L)
                                 </label>
                                 <div className="relative">
-                                  <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-500 font-mono">Rs</span>
                                   <input
                                     type="number"
                                     min="0"
@@ -1274,19 +1406,19 @@ export const SalesModule: React.FC = () => {
                                       updatePrivateLabelRatePerLiter(idx, isNaN(val) ? 0 : val);
                                     }}
                                     placeholder="170"
-                                    className="w-full bg-slate-950 border border-amber-500/40 rounded pl-6 pr-1.5 py-1 text-xs text-right text-amber-300 font-mono font-bold focus:outline-none focus:border-amber-400"
+                                    className="w-full bg-slate-950 border border-amber-500/40 rounded px-1 py-1 text-xs text-right text-amber-300 font-mono font-bold focus:outline-none focus:border-amber-400"
                                   />
                                 </div>
                               </div>
                             </div>
 
                             {/* Live calculation formula display */}
-                            <div className="p-1.5 rounded bg-slate-950/80 border border-slate-800 text-[10px] flex items-center justify-between text-slate-400 font-mono">
+                            <div className="p-1.5 rounded bg-slate-950/80 border border-slate-800 text-[10px] flex items-center justify-between text-slate-400 font-mono flex-wrap gap-1">
                               <span>
-                                <strong className="text-cyan-300">{item.bottle_qty ?? item.quantity} btl</strong> × {item.size_in_base_unit || 0.275}L = <strong className="text-white">{(item.liters_qty ?? item.base_quantity ?? 0).toFixed(2)} Liters</strong>
+                                <strong className="text-cyan-300">{item.bottle_qty ?? item.quantity} btl</strong> × {Number((item.size_in_base_unit || 0.5).toFixed(3))}L = <strong className="text-white">{(item.liters_qty ?? item.base_quantity ?? 0).toFixed(2)} Liters</strong>
                               </span>
                               <span>
-                                @ {formatPKR(item.rate_per_liter || 170)}/L = <strong className="text-emerald-400">{formatPKR(item.subtotal)}</strong>
+                                @ <strong className="text-amber-300">{formatPKR(item.rate_per_liter || 170)}/L</strong> = <strong className="text-emerald-400">{formatPKR(item.subtotal)}</strong>
                               </span>
                             </div>
                           </div>
