@@ -31,18 +31,43 @@
 /* Print specific styles for invoices, reports, and ledger statements */
 @media print {
   @page {
-    size: auto;
-    margin: 12mm 10mm;
+    size: A4 portrait;
+    margin: 12mm 10mm 15mm 10mm;
   }
-  html, body {
+  html, body, #root {
     background: #ffffff !important;
     color: #0f172a !important;
     overflow: visible !important;
     height: auto !important;
+    min-height: 100% !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    position: static !important;
+    float: none !important;
   }
+  
+  /* Reset all fixed and scrollable modal containers so they don't clip multi-page output */
+  .fixed,
+  [class*="fixed"],
+  [class*="overflow-hidden"],
+  [class*="overflow-y-auto"],
+  [class*="max-h-"] {
+    position: static !important;
+    overflow: visible !important;
+    max-height: none !important;
+    height: auto !important;
+    inset: auto !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+    backdrop-filter: none !important;
+  }
+
   body * {
     visibility: hidden;
   }
+
   #printable-invoice, #printable-invoice *,
   #printable-credit-note, #printable-credit-note *,
   #printable-report, #printable-report *,
@@ -50,17 +75,19 @@
   #printable-statement, #printable-statement * {
     visibility: visible;
   }
+
   #printable-invoice,
   #printable-credit-note,
   #printable-report,
   #printable-ledger,
   #printable-statement {
     visibility: visible !important;
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
-    margin: 0;
+    position: relative !important;
+    display: block !important;
+    left: auto !important;
+    top: auto !important;
+    width: 100% !important;
+    margin: 0 !important;
     padding: 0 !important;
     background: white !important;
     color: #0f172a !important;
@@ -68,18 +95,31 @@
     max-height: none !important;
     box-shadow: none !important;
     border: none !important;
+    page-break-after: auto !important;
+    break-after: auto !important;
   }
+
   .no-print {
     display: none !important;
   }
+
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    page-break-inside: auto !important;
+    break-inside: auto !important;
+  }
+
   tr {
-    page-break-inside: avoid;
-    break-inside: avoid;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
   }
+
   thead {
-    display: table-header-group;
+    display: table-header-group !important;
   }
+
   tfoot {
-    display: table-footer-group;
+    display: table-footer-group !important;
   }
 }

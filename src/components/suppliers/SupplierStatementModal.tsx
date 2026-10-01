@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Supplier, Purchase, Payment } from '../../types';
 import { formatPKR, formatDate, formatDateTime, getTodayDateString } from '../../utils/formatters';
+import { printElement } from '../../utils/printHelper';
 import { 
   Printer, 
   X, 
@@ -195,12 +196,19 @@ export const SupplierStatementModal: React.FC<SupplierStatementModalProps> = ({
 
   if (!isOpen || !supplier) return null;
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     setIsPrinting(true);
-    setTimeout(() => {
+    try {
+      await printElement(
+        'printable-ledger',
+        `Supplier_Statement_${supplier.name.replace(/[^a-zA-Z0-9]/g, '_')}_${startDate || 'all'}_to_${endDate || 'all'}`
+      );
+    } catch (e) {
+      console.error('Print failed, falling back:', e);
       window.print();
+    } finally {
       setIsPrinting(false);
-    }, 100);
+    }
   };
 
   const handleResetFilter = () => {
@@ -233,8 +241,8 @@ export const SupplierStatementModal: React.FC<SupplierStatementModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/80 backdrop-blur-sm overflow-y-auto">
-      <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-4xl overflow-hidden shadow-2xl flex flex-col max-h-[96vh] my-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/80 backdrop-blur-sm overflow-y-auto print:static print:inset-auto print:p-0 print:bg-white print:overflow-visible print:block">
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-4xl overflow-hidden shadow-2xl flex flex-col max-h-[96vh] my-auto print:static print:w-full print:max-w-none print:max-h-none print:border-none print:shadow-none print:rounded-none print:overflow-visible print:bg-white print:block">
         
         {/* Controls Bar (Always hidden during print) */}
         <div className="no-print flex flex-col gap-3 px-6 py-4 border-b border-slate-800 bg-slate-900/90 shrink-0">
@@ -349,7 +357,7 @@ export const SupplierStatementModal: React.FC<SupplierStatementModalProps> = ({
 
         {/* Printable Statement Sheet Area */}
         <div 
-          className="overflow-y-auto p-6 sm:p-8 bg-white text-slate-900 flex-1" 
+          className="overflow-y-auto p-6 sm:p-8 bg-white text-slate-900 flex-1 print:overflow-visible print:p-0 print:h-auto print:max-h-none print:static print:block" 
           id="printable-ledger"
         >
           {/* Company Branding & Statement Header */}
@@ -473,8 +481,8 @@ export const SupplierStatementModal: React.FC<SupplierStatementModalProps> = ({
           </div>
 
           {/* Chronological Ledger Transactions Table */}
-          <div className="border border-slate-300 rounded-xl overflow-hidden mb-6">
-            <table className="w-full text-left text-xs border-collapse">
+          <div className="border border-slate-300 rounded-xl overflow-hidden mb-6 print:overflow-visible print:border-none print:rounded-none print:m-0">
+            <table className="w-full text-left text-xs border-collapse print:text-[10px]">
               <thead>
                 <tr className="bg-slate-900 text-white uppercase tracking-wider text-[10px] font-bold">
                   <th className="py-2.5 px-3 border-r border-slate-800">Date</th>

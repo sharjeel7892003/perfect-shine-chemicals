@@ -30,6 +30,7 @@ export const CustomersModule: React.FC = () => {
     customers, 
     sales, 
     payments, 
+    salesReturns,
     addCustomer, 
     updateCustomer, 
     deleteOrArchiveCustomer,
@@ -481,6 +482,7 @@ export const CustomersModule: React.FC = () => {
         customer={selectedCustomer}
         sales={sales}
         payments={payments}
+        salesReturns={salesReturns}
         isOwner={isOwner}
         hasHistory={selectedCustomer ? checkCustomerHasHistory(selectedCustomer.id) : false}
         onArchive={() => {
