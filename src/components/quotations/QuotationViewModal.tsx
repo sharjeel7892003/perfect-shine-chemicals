@@ -387,104 +387,166 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
           )}
 
           {/* ========================================================================= */}
-          {/* COMMERCIAL TERMS & PARAMETERS GRID (Compact A4 page layout)              */}
+          {/* TERMS & CONDITIONS & ORDER DETAILS (Spacious, Scannable Layout)           */}
           {/* ========================================================================= */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3.5 [break-inside:avoid] print:[break-inside:avoid]">
-            {/* Left Box: Terms & Operations */}
-            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1.5">
-              <h4 className="font-bold text-slate-900 uppercase tracking-wider text-[10px] border-b border-slate-200 pb-1 flex items-center gap-1.5">
-                <Package className="w-3 h-3 text-emerald-700" />
-                <span>Commercial Terms & Order Quantities</span>
-              </h4>
-              <div className="grid grid-cols-2 gap-1.5 text-[10px]">
-                <div>
-                  <span className="text-slate-500 block">Initial Order MOQ:</span>
-                  <span className="font-bold text-slate-900">{quotation.moq || '1,000 Units'}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block">Repeat Order MOQ:</span>
-                  <span className="font-bold text-slate-900">{quotation.repeat_order_moq || '500 Units'}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block">Sample Cost:</span>
-                  <span className="font-bold text-slate-900">{quotation.sample_cost || 'PKR 2,500'}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block">Sample Lead Time:</span>
-                  <span className="font-bold text-slate-900">{quotation.sample_lead_time || '3-5 Working Days'}</span>
-                </div>
-                <div className="col-span-2">
-                  <span className="text-slate-500 block">Delivery & Logistics:</span>
-                  <span className="font-bold text-slate-900">{quotation.delivery_charges || 'Ex-Factory Lahore / Freight at actual'}</span>
-                </div>
-                {quotation.available_fragrances && (
-                  <div className="col-span-2">
-                    <span className="text-slate-500 block">Available Fragrances:</span>
-                    <span className="font-bold text-slate-900">{quotation.available_fragrances}</span>
-                  </div>
-                )}
+          <div className="mt-8 pt-6 border-t-2 border-slate-900 [break-inside:avoid] print:[break-inside:avoid]">
+            {/* Clear Section Heading */}
+            <div className="flex items-center justify-between mb-4 pb-2 border-b-2 border-slate-200">
+              <div className="flex items-center gap-2">
+                <Package className="w-4 h-4 text-emerald-700" />
+                <h3 className="text-xs sm:text-sm font-black text-slate-950 uppercase tracking-wider">
+                  Terms & Conditions & Order Details
+                </h3>
               </div>
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                Commercial Parameters
+              </span>
             </div>
 
-            {/* Right Box: Specifications & Quality Control */}
-            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1.5">
-              <h4 className="font-bold text-slate-900 uppercase tracking-wider text-[10px] border-b border-slate-200 pb-1 flex items-center gap-1.5">
-                <ShieldCheck className="w-3 h-3 text-emerald-700" />
-                <span>Formulation & Quality Specifications</span>
-              </h4>
-              <div className="space-y-1 text-[10px]">
-                {quotation.formula_specifications ? (
-                  <div>
-                    <span className="text-slate-500 block">Technical Specs:</span>
-                    <p className="font-medium text-slate-800 whitespace-pre-wrap">{quotation.formula_specifications}</p>
-                  </div>
-                ) : (
-                  <div>
-                    <span className="text-slate-500 block">Technical Specs:</span>
-                    <p className="font-medium text-slate-800">Custom pH-balanced formulation engineered with industrial-grade surfactants & stabilizers.</p>
-                  </div>
-                )}
-                {quotation.batch_mfg_expiry_info && (
-                  <div className="pt-0.5">
-                    <span className="text-slate-500 block">Batch, MFG & Expiry:</span>
-                    <p className="font-medium text-slate-800 whitespace-pre-wrap">{quotation.batch_mfg_expiry_info}</p>
-                  </div>
-                )}
+            {/* Itemized Terms Rows (Each term on its own clearly separated line) */}
+            <div className="border border-slate-300 rounded-xl overflow-hidden bg-white divide-y divide-slate-200 shadow-sm text-xs">
+              
+              {/* Minimum Order Quantity (MOQ) */}
+              <div className="grid grid-cols-1 sm:grid-cols-12 px-4 py-3 bg-slate-50/70 items-center">
+                <span className="sm:col-span-4 font-bold text-slate-800 text-[11px] uppercase tracking-wide flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0"></span>
+                  Minimum Order Quantity (MOQ):
+                </span>
+                <span className="sm:col-span-8 font-bold text-slate-950 text-xs">
+                  {quotation.moq || '1,000 Units per SKU'}
+                </span>
               </div>
+
+              {/* Repeat Order MOQ */}
+              {quotation.repeat_order_moq && (
+                <div className="grid grid-cols-1 sm:grid-cols-12 px-4 py-3 items-center">
+                  <span className="sm:col-span-4 font-bold text-slate-800 text-[11px] uppercase tracking-wide flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0"></span>
+                    Repeat Order MOQ:
+                  </span>
+                  <span className="sm:col-span-8 font-semibold text-slate-900 text-xs">
+                    {quotation.repeat_order_moq}
+                  </span>
+                </div>
+              )}
+
+              {/* Validity Period */}
+              <div className="grid grid-cols-1 sm:grid-cols-12 px-4 py-3 bg-slate-50/70 items-center">
+                <span className="sm:col-span-4 font-bold text-slate-800 text-[11px] uppercase tracking-wide flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0"></span>
+                  Quotation Validity:
+                </span>
+                <span className="sm:col-span-8 font-bold text-emerald-800 text-xs">
+                  {quotation.validity_period || 'Valid for 15 days'}
+                </span>
+              </div>
+
+              {/* Sample Cost Note */}
+              <div className="grid grid-cols-1 sm:grid-cols-12 px-4 py-3 items-center">
+                <span className="sm:col-span-4 font-bold text-slate-800 text-[11px] uppercase tracking-wide flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0"></span>
+                  Sample Cost & Refund Policy:
+                </span>
+                <span className="sm:col-span-8 font-semibold text-slate-900 text-xs">
+                  {quotation.sample_cost || 'PKR 2,500 (100% Refundable against confirmed bulk order)'}
+                </span>
+              </div>
+
+              {/* Sample Lead Time */}
+              <div className="grid grid-cols-1 sm:grid-cols-12 px-4 py-3 bg-slate-50/70 items-center">
+                <span className="sm:col-span-4 font-bold text-slate-800 text-[11px] uppercase tracking-wide flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0"></span>
+                  Sample Lead Time:
+                </span>
+                <span className="sm:col-span-8 font-semibold text-slate-900 text-xs">
+                  {quotation.sample_lead_time || '3-5 Working Days'}
+                </span>
+              </div>
+
+              {/* Delivery & Logistics */}
+              <div className="grid grid-cols-1 sm:grid-cols-12 px-4 py-3 items-center">
+                <span className="sm:col-span-4 font-bold text-slate-800 text-[11px] uppercase tracking-wide flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0"></span>
+                  Delivery & Freight Charges:
+                </span>
+                <span className="sm:col-span-8 font-semibold text-slate-900 text-xs">
+                  {quotation.delivery_charges || 'Ex-Factory Lahore / Freight at actual to destination'}
+                </span>
+              </div>
+
+              {/* Available Fragrances */}
+              {quotation.available_fragrances && (
+                <div className="grid grid-cols-1 sm:grid-cols-12 px-4 py-3 bg-slate-50/70 items-start">
+                  <span className="sm:col-span-4 font-bold text-slate-800 text-[11px] uppercase tracking-wide flex items-center gap-2 pt-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0"></span>
+                    Available Fragrances:
+                  </span>
+                  <span className="sm:col-span-8 font-semibold text-slate-900 text-xs leading-relaxed">
+                    {quotation.available_fragrances}
+                  </span>
+                </div>
+              )}
+
+              {/* Formula Specifications */}
+              {quotation.formula_specifications && (
+                <div className="grid grid-cols-1 sm:grid-cols-12 px-4 py-3 items-start">
+                  <span className="sm:col-span-4 font-bold text-slate-800 text-[11px] uppercase tracking-wide flex items-center gap-2 pt-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0"></span>
+                    Formula Specifications:
+                  </span>
+                  <span className="sm:col-span-8 font-medium text-slate-900 text-xs whitespace-pre-wrap leading-relaxed">
+                    {quotation.formula_specifications}
+                  </span>
+                </div>
+              )}
+
+              {/* Batch, MFG & Expiry Info */}
+              {quotation.batch_mfg_expiry_info && (
+                <div className="grid grid-cols-1 sm:grid-cols-12 px-4 py-3 bg-slate-50/70 items-start">
+                  <span className="sm:col-span-4 font-bold text-slate-800 text-[11px] uppercase tracking-wide flex items-center gap-2 pt-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0"></span>
+                    Batch, MFG & Expiry Info:
+                  </span>
+                  <span className="sm:col-span-8 font-medium text-slate-900 text-xs whitespace-pre-wrap leading-relaxed">
+                    {quotation.batch_mfg_expiry_info}
+                  </span>
+                </div>
+              )}
+
+              {/* Payment & Contract Terms */}
+              {quotation.terms_conditions && (
+                <div className="grid grid-cols-1 sm:grid-cols-12 px-4 py-3.5 items-start">
+                  <span className="sm:col-span-4 font-bold text-slate-800 text-[11px] uppercase tracking-wide flex items-center gap-2 pt-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0"></span>
+                    Payment & Contract Terms:
+                  </span>
+                  <div className="sm:col-span-8 text-slate-900 font-medium text-xs whitespace-pre-wrap leading-relaxed">
+                    {quotation.terms_conditions}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* General Notes / Payment Terms */}
-          {quotation.terms_conditions && (
-            <div className="mb-3.5 p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-[10px] [break-inside:avoid] print:[break-inside:avoid]">
-              <span className="font-bold text-slate-700 uppercase tracking-wider text-[9px] block mb-0.5">
-                Payment & Contract Terms:
-              </span>
-              <p className="text-slate-600 whitespace-pre-wrap leading-relaxed">
-                {quotation.terms_conditions}
-              </p>
-            </div>
-          )}
-
           {/* Signatures & Quotation Acceptance Block */}
-          <div className="mt-6 pt-4 border-t-2 border-slate-200 grid grid-cols-2 gap-6 text-xs [break-inside:avoid] print:[break-inside:avoid]">
+          <div className="mt-8 pt-6 border-t-2 border-slate-300 grid grid-cols-2 gap-8 text-xs [break-inside:avoid] print:[break-inside:avoid]">
             <div>
-              <p className="font-bold text-slate-800 uppercase tracking-wider text-[9px] mb-6">
+              <p className="font-bold text-slate-800 uppercase tracking-wider text-[10px] mb-8">
                 Authorized Signatory (Perfect Shine Chemicals):
               </p>
-              <div className="border-t border-slate-400 w-44 pt-1">
-                <p className="font-bold text-slate-900 text-xs">Muhammad Sharjeel</p>
-                <p className="text-[9px] text-slate-500">Managing Partner / Operations</p>
+              <div className="border-t-2 border-slate-900 w-52 pt-1.5">
+                <p className="font-black text-slate-950 text-xs">Sharjeel Ahmad</p>
+                <p className="text-[10px] text-slate-600 font-medium mt-0.5">Managing Partner - Operations</p>
               </div>
             </div>
 
             <div className="text-right flex flex-col items-end">
-              <p className="font-bold text-slate-800 uppercase tracking-wider text-[9px] mb-6">
+              <p className="font-bold text-slate-800 uppercase tracking-wider text-[10px] mb-8">
                 Client Acceptance Signature & Stamp:
               </p>
-              <div className="border-t border-slate-400 w-44 pt-1 text-right">
-                <p className="font-bold text-slate-900 text-xs">{quotation.customer_name}</p>
-                <p className="text-[9px] text-slate-500">Date: _______________</p>
+              <div className="border-t-2 border-slate-900 w-52 pt-1.5 text-right">
+                <p className="font-black text-slate-950 text-xs">{quotation.customer_name}</p>
+                <p className="text-[10px] text-slate-600 font-medium mt-0.5">Date: _______________</p>
               </div>
             </div>
           </div>

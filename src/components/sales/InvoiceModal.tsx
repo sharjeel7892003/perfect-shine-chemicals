@@ -389,9 +389,10 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDel
               <p>• Make all cheques / online transfers payable to "Perfect Shine Chemicals".</p>
               <p>• For JazzCash / EasyPaisa verifications, WhatsApp receipt to 0327-4549485.</p>
             </div>
-            <div className="text-right flex flex-col justify-end">
-              <div className="border-t border-slate-400 w-44 ml-auto pt-1 text-center text-slate-700 font-semibold">
-                Authorized Signature
+            <div className="text-right flex flex-col justify-end items-end">
+              <div className="border-t border-slate-400 w-48 pt-1 text-right">
+                <p className="font-bold text-slate-900 text-xs">Sharjeel Ahmad</p>
+                <p className="text-[9px] text-slate-500 font-medium">Managing Partner - Operations</p>
               </div>
             </div>
           </div>
