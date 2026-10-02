@@ -55,24 +55,24 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
   const [items, setItems] = useState<QuotationLineItem[]>([
     {
       id: 'item-1',
-      product_name: 'Premium Car Wash Shampoo',
-      size: '500ml Bottle',
-      product_cost: 45,
-      bottle_cost: 22,
-      cap_cost: 8,
-      label_cost: 6,
+      product_name: '',
+      size: '',
+      product_cost: 0,
+      bottle_cost: 0,
+      cap_cost: 0,
+      label_cost: 0,
       labour_cost: 0,
-      carton_cost: 5,
-      total_cost_per_unit: 86,
-      quoted_price_per_unit: 86,
-      moq: '1,000 Bottles',
+      carton_cost: 0,
+      total_cost_per_unit: 0,
+      quoted_price_per_unit: 0,
+      moq: '',
       notes: ''
     }
   ]);
 
   // Additional Quotation Fields
-  const [moq, setMoq] = useState<string>('1,000 Units per SKU');
-  const [repeatOrderMoq, setRepeatOrderMoq] = useState<string>('500 Units');
+  const [moq, setMoq] = useState<string>('');
+  const [repeatOrderMoq, setRepeatOrderMoq] = useState<string>('');
   const [sampleCost, setSampleCost] = useState<string>('PKR 2,500 (100% Refundable against confirmed bulk order)');
   const [sampleLeadTime, setSampleLeadTime] = useState<string>('3-5 Working Days');
   const [deliveryCharges, setDeliveryCharges] = useState<string>('Ex-Factory Lahore / Freight at actual to destination');
@@ -103,11 +103,14 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
       setDate(initialQuotation.date || new Date().toISOString().split('T')[0]);
       setValidityPeriod(initialQuotation.validity_period || 'Valid for 15 days');
       setStatus(initialQuotation.status || 'pending');
-      setItems(initialQuotation.items && initialQuotation.items.length > 0 ? initialQuotation.items : [
+      setItems(initialQuotation.items && initialQuotation.items.length > 0 ? initialQuotation.items.map(it => ({
+        ...it,
+        moq: it.moq || ''
+      })) : [
         {
           id: 'item-1',
           product_name: '',
-          size: '500ml',
+          size: '',
           product_cost: 0,
           bottle_cost: 0,
           cap_cost: 0,
@@ -116,10 +119,12 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
           carton_cost: 0,
           total_cost_per_unit: 0,
           quoted_price_per_unit: 0,
+          moq: '',
+          notes: ''
         }
       ]);
-      setMoq(initialQuotation.moq || '1,000 Units per SKU');
-      setRepeatOrderMoq(initialQuotation.repeat_order_moq || '500 Units');
+      setMoq(initialQuotation.moq || '');
+      setRepeatOrderMoq(initialQuotation.repeat_order_moq || '');
       setSampleCost(initialQuotation.sample_cost || 'PKR 2,500');
       setSampleLeadTime(initialQuotation.sample_lead_time || '3-5 Working Days');
       setDeliveryCharges(initialQuotation.delivery_charges || 'Ex-Factory Lahore / Freight at actual');
@@ -145,20 +150,22 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
       setItems([
         {
           id: 'item-1',
-          product_name: 'Premium Car Wash Shampoo',
-          size: '500ml Bottle',
-          product_cost: 45,
-          bottle_cost: 22,
-          cap_cost: 8,
-          label_cost: 6,
+          product_name: '',
+          size: '',
+          product_cost: 0,
+          bottle_cost: 0,
+          cap_cost: 0,
+          label_cost: 0,
           labour_cost: 0,
-          carton_cost: 5,
-          total_cost_per_unit: 86,
-          quoted_price_per_unit: 86,
-          moq: '1,000 Bottles',
+          carton_cost: 0,
+          total_cost_per_unit: 0,
+          quoted_price_per_unit: 0,
+          moq: '',
           notes: ''
         }
       ]);
+      setMoq('');
+      setRepeatOrderMoq('');
     }
   }, [initialQuotation, isOpen]);
 
@@ -206,7 +213,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
       {
         id: `item-${Date.now()}`,
         product_name: '',
-        size: '500ml Bottle',
+        size: '',
         product_cost: 0,
         bottle_cost: 0,
         cap_cost: 0,
@@ -215,7 +222,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
         carton_cost: 0,
         total_cost_per_unit: 0,
         quoted_price_per_unit: 0,
-        moq: moq,
+        moq: '',
         notes: ''
       }
     ]);
@@ -257,8 +264,8 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
         validity_period: validityPeriod,
         status,
         items,
-        moq,
-        repeat_order_moq: repeatOrderMoq,
+        moq: moq.trim() || (items.length === 1 && items[0].moq ? items[0].moq.trim() : undefined),
+        repeat_order_moq: repeatOrderMoq.trim() || undefined,
         sample_cost: sampleCost,
         sample_lead_time: sampleLeadTime,
         delivery_charges: deliveryCharges,
@@ -528,10 +535,10 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                     key={item.id || idx}
                     className="p-3.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 transition-all space-y-3"
                   >
-                    {/* Item Title, Size, Notes & Remove Button */}
+                    {/* Item Title, Size, MOQ & Remove Button */}
                     <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-2">
-                        <div className="sm:col-span-2">
+                      <div className="flex-1 grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                        <div className="sm:col-span-5">
                           <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">
                             Product Description / SKU #{idx + 1} *
                           </label>
@@ -545,7 +552,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                           />
                         </div>
 
-                        <div>
+                        <div className="sm:col-span-4">
                           <label className="text-[10px] text-slate-400 font-semibold block mb-0.5">
                             Pack Size / Container
                           </label>
@@ -555,6 +562,19 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                             value={item.size || ''}
                             onChange={(e) => updateLineItem(idx, 'size', e.target.value)}
                             className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
+                          />
+                        </div>
+
+                        <div className="sm:col-span-3">
+                          <label className="text-[10px] text-emerald-400 font-bold block mb-0.5">
+                            MOQ (Per SKU)
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Enter MOQ"
+                            value={item.moq || ''}
+                            onChange={(e) => updateLineItem(idx, 'moq', e.target.value)}
+                            className="w-full bg-slate-950 border border-emerald-500/40 rounded-lg px-2.5 py-1.5 text-xs text-white font-semibold focus:border-emerald-400 focus:outline-none"
                           />
                         </div>
                       </div>
@@ -724,11 +744,11 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
               <div>
                 <label className="text-[11px] text-slate-400 font-semibold block mb-1">
-                  Minimum Order Quantity (MOQ)
+                  General / Default MOQ (Optional)
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. 1,000 Units per SKU"
+                  placeholder="Enter MOQ (or leave blank if set per SKU above)"
                   value={moq}
                   onChange={(e) => setMoq(e.target.value)}
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-purple-500 focus:outline-none font-medium"
@@ -737,11 +757,11 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
 
               <div>
                 <label className="text-[11px] text-slate-400 font-semibold block mb-1">
-                  Repeat Order MOQ
+                  Repeat Order MOQ (Optional)
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. 500 Units"
+                  placeholder="Enter repeat order MOQ"
                   value={repeatOrderMoq}
                   onChange={(e) => setRepeatOrderMoq(e.target.value)}
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-purple-500 focus:outline-none"

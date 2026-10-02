@@ -512,7 +512,7 @@ export interface Quotation {
   status: QuotationStatus; // 'pending' | 'accepted' | 'rejected' | 'expired'
   items: QuotationLineItem[];
   // Additional manual fields
-  moq: string; // Minimum Order Quantity (e.g. "1,000 Units per SKU")
+  moq?: string; // Minimum Order Quantity (e.g. "1,000 Units per SKU" or optional per-SKU)
   repeat_order_moq?: string; // Repeat Order MOQ (e.g. "500 Units")
   sample_cost?: string; // Sample Cost (e.g. "PKR 2,500 (Refundable upon order)")
   sample_lead_time?: string; // Sample Lead Time (e.g. "3-5 Working Days")

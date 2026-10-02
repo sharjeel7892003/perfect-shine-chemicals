@@ -229,9 +229,19 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
                 <p className="text-[11px] font-bold text-slate-900 mt-0.5">
                   Products Included: {quotation.items.length} SKU(s)
                 </p>
-                <p className="text-[11px] text-slate-600 mt-0.5">
-                  Standard MOQ: <strong className="text-slate-900">{quotation.moq}</strong>
-                </p>
+                {quotation.items.some(it => it.moq) ? (
+                  <p className="text-[11px] text-slate-600 mt-0.5">
+                    MOQ: <strong className="text-slate-900">{
+                      quotation.items.length === 1 
+                        ? quotation.items[0].moq 
+                        : 'Specified per SKU below'
+                    }</strong>
+                  </p>
+                ) : quotation.moq ? (
+                  <p className="text-[11px] text-slate-600 mt-0.5">
+                    MOQ: <strong className="text-slate-900">{quotation.moq}</strong>
+                  </p>
+                ) : null}
                 {quotation.repeat_order_moq && (
                   <p className="text-[11px] text-slate-600 mt-0.5">
                     Repeat Order MOQ: <strong className="text-slate-900">{quotation.repeat_order_moq}</strong>
@@ -281,8 +291,12 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
                           </span>
                           <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-500 font-medium">
                             <span>Pack: <strong className="text-slate-700">{item.size || 'Standard'}</strong></span>
-                            <span>•</span>
-                            <span>MOQ: <strong className="text-slate-700">{item.moq || quotation.moq}</strong></span>
+                            {(item.moq || quotation.moq) && (
+                              <>
+                                <span>•</span>
+                                <span>MOQ: <strong className="text-slate-900 font-bold">{item.moq || quotation.moq}</strong></span>
+                              </>
+                            )}
                           </div>
                           {item.notes && (
                             <span className="text-[10px] text-slate-500 italic block mt-0.5">
@@ -358,7 +372,15 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
                         <td className="py-1.5 px-1.5 text-slate-400 font-bold">{idx + 1}</td>
                         <td className="py-1.5 px-1.5 font-sans font-bold text-slate-900">
                           <div>{item.product_name}</div>
-                          <span className="text-[9px] text-slate-500 font-normal">{item.size || 'Standard'}</span>
+                          <div className="text-[9px] text-slate-500 font-normal flex items-center gap-1.5">
+                            <span>{item.size || 'Standard'}</span>
+                            {item.moq && (
+                              <>
+                                <span>•</span>
+                                <span className="font-semibold text-slate-700">MOQ: {item.moq}</span>
+                              </>
+                            )}
+                          </div>
                         </td>
                         <td className="py-1.5 px-1.5 text-right text-slate-600">{formatPKR(item.product_cost)}</td>
                         <td className="py-1.5 px-1.5 text-right text-slate-600">{formatPKR(item.bottle_cost)}</td>
@@ -407,15 +429,32 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
             <div className="border border-slate-300 rounded-xl overflow-hidden bg-white divide-y divide-slate-200 shadow-sm text-xs">
               
               {/* Minimum Order Quantity (MOQ) */}
-              <div className="grid grid-cols-1 sm:grid-cols-12 px-4 py-3 bg-slate-50/70 items-center">
-                <span className="sm:col-span-4 font-bold text-slate-800 text-[11px] uppercase tracking-wide flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0"></span>
-                  Minimum Order Quantity (MOQ):
-                </span>
-                <span className="sm:col-span-8 font-bold text-slate-950 text-xs">
-                  {quotation.moq || '1,000 Units per SKU'}
-                </span>
-              </div>
+              {(quotation.items.some(it => it.moq) || quotation.moq) && (
+                <div className="grid grid-cols-1 sm:grid-cols-12 px-4 py-3 bg-slate-50/70 items-start">
+                  <span className="sm:col-span-4 font-bold text-slate-800 text-[11px] uppercase tracking-wide flex items-center gap-2 pt-0.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0"></span>
+                    Minimum Order Quantity (MOQ):
+                  </span>
+                  <div className="sm:col-span-8 text-xs text-slate-950">
+                    {quotation.items.some(it => it.moq) ? (
+                      quotation.items.length === 1 ? (
+                        <span className="font-bold">{quotation.items[0].moq}</span>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {quotation.items.map((it, idx) => (
+                            <div key={it.id || idx} className="flex items-center justify-between text-xs py-0.5 border-b border-slate-200/60 last:border-0">
+                              <span className="font-semibold text-slate-700">{it.product_name || `SKU #${idx + 1}`} ({it.size || 'Standard'}):</span>
+                              <span className="font-black text-slate-950 font-mono">{it.moq || 'As agreed'}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )
+                    ) : (
+                      <span className="font-bold">{quotation.moq}</span>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Repeat Order MOQ */}
               {quotation.repeat_order_moq && (

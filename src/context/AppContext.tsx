@@ -3405,7 +3405,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       date: quotationData.date || new Date().toISOString().split('T')[0],
       validity_period: quotationData.validity_period || 'Valid for 15 days',
       status: quotationData.status || 'pending',
-      moq: quotationData.moq || '1,000 Units',
+      moq: quotationData.moq || '',
       created_at: isNew ? new Date().toISOString() : (quotations.find(q => q.id === validId)?.created_at || new Date().toISOString()),
       updated_at: new Date().toISOString(),
     };
