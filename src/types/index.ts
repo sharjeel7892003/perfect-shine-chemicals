@@ -492,7 +492,8 @@ export interface QuotationLineItem {
   label_cost: number; // Sticker label front/back cost
   labour_cost: number; // Filling, induction seal & packing labour cost
   carton_cost: number; // Master shipper carton cost per unit
-  total_cost_per_unit: number; // Auto-sum of the above 6 cost elements
+  transport_cost?: number; // Transportation / delivery cost per unit
+  total_cost_per_unit: number; // Auto-sum of the component cost elements
   quoted_price_per_unit: number; // Final selling price quoted to customer
   moq?: string; // Optional line-specific MOQ
   notes?: string;

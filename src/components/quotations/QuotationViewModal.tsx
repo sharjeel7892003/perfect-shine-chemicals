@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Quotation, QuotationLineItem } from '../../types';
 import { formatPKR, formatDate } from '../../utils/formatters';
+import { printElement } from '../../utils/printHelper';
 
 interface QuotationViewModalProps {
   quotation: Quotation;
@@ -30,11 +31,11 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
   onClose,
   onEdit,
 }) => {
-  // Mode: 'customer' (prices only) vs 'internal' (full cost & margin breakdown)
+  // Mode: 'customer' (breakdown + total) vs 'internal' (full cost, labour & margins)
   const [viewMode, setViewMode] = useState<'customer' | 'internal'>('customer');
 
   const handlePrint = () => {
-    window.print();
+    printElement('printable-quotation', `Quotation_${quotation.quotation_number}`);
   };
 
   const getStatusBadge = (status: string) => {
@@ -52,7 +53,7 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-sm overflow-y-auto">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
         
         {/* Top Control Bar (Screen only, completely hidden on print) */}
         <div className="p-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between gap-3 no-print flex-wrap">
@@ -84,7 +85,7 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
                     ? 'bg-emerald-500 text-slate-950 shadow font-bold'
                     : 'text-slate-400 hover:text-white'
                 }`}
-                title="Customer-facing proposal: Shows ONLY final selling price per unit (hides internal cost structure)"
+                title="Customer-facing proposal: Shows itemized breakdown (Liquid, Bottle, Cap, Label, Box, Transport) & Total Price"
               >
                 <Eye className="w-3.5 h-3.5" />
                 Customer Proposal (PDF)
@@ -97,7 +98,7 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
                     ? 'bg-amber-500 text-slate-950 shadow font-bold'
                     : 'text-slate-400 hover:text-amber-300'
                 }`}
-                title="Internal Cost Sheet: Shows bottle, cap, label, labour, carton breakdown & margins"
+                title="Internal Cost Sheet: Shows factory cost breakdown, labour & profit margins"
               >
                 <EyeOff className="w-3.5 h-3.5" />
                 Internal Cost Sheet
@@ -136,7 +137,7 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
           <div className="bg-emerald-500/10 border-b border-emerald-500/20 px-4 py-2 text-xs text-emerald-300 flex items-center gap-2 no-print">
             <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
             <span>
-              <strong>Customer-Facing Mode Active:</strong> Internal cost breakdown (Bottle, Cap, Label, Labour, Carton, Margins) is <strong>hidden</strong>. Only your final quoted price per unit is printed on the PDF.
+              <strong>Customer Proposal View:</strong> Itemized component breakdown (Liquid, Bottle, Cap, Label, Box, Transport) summing to Total Unit Price.
             </span>
           </div>
         )}
@@ -155,7 +156,7 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
         {/* ========================================================================= */}
         <div 
           id="printable-quotation" 
-          className="overflow-y-auto p-6 sm:p-8 bg-white text-slate-900 font-sans text-xs leading-normal"
+          className="overflow-y-auto p-6 sm:p-8 print:p-0 print:m-0 bg-white text-slate-900 font-sans text-xs leading-normal"
         >
           {/* Header */}
           <div className="flex flex-col sm:flex-row justify-between items-start border-b-2 border-slate-900 pb-4 gap-4">
@@ -237,9 +238,6 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
                   </p>
                 )}
               </div>
-              <div className="mt-1 text-slate-500 text-[10px]">
-                Manufactured under standard ISO/GMP chemical safety protocols
-              </div>
             </div>
           </div>
 
@@ -247,50 +245,86 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
           {/* PRODUCT & PRICING TABLE                                                   */}
           {/* ========================================================================= */}
           {viewMode === 'customer' ? (
-            /* 1. CUSTOMER-FACING VIEW (Final Quoted Price ONLY - No Cost Breakdown) */
+            /* 1. CUSTOMER-FACING VIEW (Itemized Cost Breakdown + Total Price Per Unit) */
             <div className="mb-4 overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
-                  <tr className="border-b-2 border-slate-900 bg-slate-100 text-slate-800 font-black uppercase tracking-wider text-[10px]">
-                    <th className="py-2 px-2.5 w-10 text-center">#</th>
-                    <th className="py-2 px-2.5">Product Description & Packaging</th>
-                    <th className="py-2 px-2.5 text-center w-28">Pack Size</th>
-                    <th className="py-2 px-2.5 text-center w-28">Minimum Order</th>
-                    <th className="py-2 px-2.5 text-right w-36">Quoted Price Per Unit</th>
+                  <tr className="border-b-2 border-slate-900 bg-slate-100 text-slate-800 font-bold uppercase tracking-wider text-[9px]">
+                    <th className="py-2 px-1.5 w-7 text-center">#</th>
+                    <th className="py-2 px-2 min-w-[150px]">Product & Pack Size</th>
+                    <th className="py-2 px-1.5 text-right whitespace-nowrap">Liquid Cost</th>
+                    <th className="py-2 px-1.5 text-right whitespace-nowrap">Bottle</th>
+                    <th className="py-2 px-1.5 text-right whitespace-nowrap">Cap/Pump</th>
+                    <th className="py-2 px-1.5 text-right whitespace-nowrap">Label</th>
+                    {quotation.items.some(it => (it.labour_cost || 0) > 0) && (
+                      <th className="py-2 px-1.5 text-right whitespace-nowrap">Labour</th>
+                    )}
+                    <th className="py-2 px-1.5 text-right whitespace-nowrap">Box/Carton</th>
+                    <th className="py-2 px-1.5 text-right whitespace-nowrap">Transport</th>
+                    <th className="py-2 px-2 text-right bg-emerald-100/90 text-emerald-950 font-black whitespace-nowrap min-w-[95px]">
+                      TOTAL PRICE
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
-                  {quotation.items.map((item, idx) => (
-                    <tr key={item.id || idx} className="hover:bg-slate-50/50">
-                      <td className="py-2.5 px-2.5 text-center font-mono font-bold text-slate-400">
-                        {idx + 1}
-                      </td>
-                      <td className="py-2.5 px-2.5">
-                        <span className="font-bold text-slate-950 text-xs block">
-                          {item.product_name}
-                        </span>
-                        {item.notes && (
-                          <span className="text-[10px] text-slate-500 italic block mt-0.5">
-                            {item.notes}
+                  {quotation.items.map((item, idx) => {
+                    const hasAnyLabour = quotation.items.some(it => (it.labour_cost || 0) > 0);
+                    const totalUnit = item.quoted_price_per_unit || item.total_cost_per_unit;
+
+                    return (
+                      <tr key={item.id || idx} className="hover:bg-slate-50/50">
+                        <td className="py-2.5 px-1.5 text-center font-mono font-bold text-slate-400 text-[10px]">
+                          {idx + 1}
+                        </td>
+                        <td className="py-2.5 px-2">
+                          <span className="font-bold text-slate-950 text-xs block leading-tight">
+                            {item.product_name}
                           </span>
+                          <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-500 font-medium">
+                            <span>Pack: <strong className="text-slate-700">{item.size || 'Standard'}</strong></span>
+                            <span>•</span>
+                            <span>MOQ: <strong className="text-slate-700">{item.moq || quotation.moq}</strong></span>
+                          </div>
+                          {item.notes && (
+                            <span className="text-[10px] text-slate-500 italic block mt-0.5">
+                              {item.notes}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-1.5 text-right font-mono text-slate-700 whitespace-nowrap">
+                          {formatPKR(item.product_cost)}
+                        </td>
+                        <td className="py-2.5 px-1.5 text-right font-mono text-slate-700 whitespace-nowrap">
+                          {formatPKR(item.bottle_cost)}
+                        </td>
+                        <td className="py-2.5 px-1.5 text-right font-mono text-slate-700 whitespace-nowrap">
+                          {formatPKR(item.cap_cost)}
+                        </td>
+                        <td className="py-2.5 px-1.5 text-right font-mono text-slate-700 whitespace-nowrap">
+                          {formatPKR(item.label_cost)}
+                        </td>
+                        {hasAnyLabour && (
+                          <td className="py-2.5 px-1.5 text-right font-mono text-slate-700 whitespace-nowrap">
+                            {formatPKR(item.labour_cost || 0)}
+                          </td>
                         )}
-                      </td>
-                      <td className="py-2.5 px-2.5 text-center font-semibold text-slate-700">
-                        {item.size || 'Standard Pack'}
-                      </td>
-                      <td className="py-2.5 px-2.5 text-center font-mono font-semibold text-slate-700">
-                        {item.moq || quotation.moq || 'As agreed'}
-                      </td>
-                      <td className="py-2.5 px-2.5 text-right">
-                        <span className="text-sm font-black font-mono text-emerald-800 block">
-                          {formatPKR(item.quoted_price_per_unit)}
-                        </span>
-                        <span className="text-[9px] text-slate-500 uppercase font-semibold">
-                          Per Unit (Ex-Factory)
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                        <td className="py-2.5 px-1.5 text-right font-mono text-slate-700 whitespace-nowrap">
+                          {formatPKR(item.carton_cost)}
+                        </td>
+                        <td className="py-2.5 px-1.5 text-right font-mono text-slate-700 whitespace-nowrap">
+                          {formatPKR(item.transport_cost || 0)}
+                        </td>
+                        <td className="py-2.5 px-2 text-right bg-emerald-50/70 whitespace-nowrap">
+                          <span className="text-xs font-black font-mono text-emerald-900 block">
+                            {formatPKR(totalUnit)}
+                          </span>
+                          <span className="text-[8px] text-slate-500 uppercase font-bold block">
+                            Per Unit Ex-Factory
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -305,12 +339,13 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
                   <tr className="border-b-2 border-slate-900 bg-slate-100 text-slate-800 font-bold uppercase tracking-wider text-[9px]">
                     <th className="py-1.5 px-1.5">#</th>
                     <th className="py-1.5 px-1.5">Product & Size</th>
-                    <th className="py-1.5 px-1.5 text-right">Chemical</th>
+                    <th className="py-1.5 px-1.5 text-right">Liquid</th>
                     <th className="py-1.5 px-1.5 text-right">Bottle</th>
                     <th className="py-1.5 px-1.5 text-right">Cap/Pump</th>
                     <th className="py-1.5 px-1.5 text-right">Label</th>
-                    <th className="py-1.5 px-1.5 text-right">Labour</th>
                     <th className="py-1.5 px-1.5 text-right">Carton</th>
+                    <th className="py-1.5 px-1.5 text-right">Transport</th>
+                    <th className="py-1.5 px-1.5 text-right">Labour</th>
                     <th className="py-1.5 px-1.5 text-right bg-slate-200/80 font-black">Total Cost</th>
                     <th className="py-1.5 px-1.5 text-right bg-emerald-100/70 font-black">Quoted Price</th>
                     <th className="py-1.5 px-1.5 text-right font-black">Margin</th>
@@ -334,8 +369,9 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
                         <td className="py-1.5 px-1.5 text-right text-slate-600">{formatPKR(item.bottle_cost)}</td>
                         <td className="py-1.5 px-1.5 text-right text-slate-600">{formatPKR(item.cap_cost)}</td>
                         <td className="py-1.5 px-1.5 text-right text-slate-600">{formatPKR(item.label_cost)}</td>
-                        <td className="py-1.5 px-1.5 text-right text-slate-600">{formatPKR(item.labour_cost)}</td>
                         <td className="py-1.5 px-1.5 text-right text-slate-600">{formatPKR(item.carton_cost)}</td>
+                        <td className="py-1.5 px-1.5 text-right text-slate-600">{formatPKR(item.transport_cost || 0)}</td>
+                        <td className="py-1.5 px-1.5 text-right text-slate-600">{formatPKR(item.labour_cost)}</td>
                         <td className="py-1.5 px-1.5 text-right font-black text-slate-900 bg-slate-50">
                           {formatPKR(item.total_cost_per_unit)}
                         </td>
