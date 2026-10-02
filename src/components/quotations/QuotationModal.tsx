@@ -63,9 +63,8 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
       label_cost: 6,
       labour_cost: 0,
       carton_cost: 5,
-      transport_cost: 4,
-      total_cost_per_unit: 90,
-      quoted_price_per_unit: 90,
+      total_cost_per_unit: 86,
+      quoted_price_per_unit: 86,
       moq: '1,000 Bottles',
       notes: ''
     }
@@ -115,7 +114,6 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
           label_cost: 0,
           labour_cost: 0,
           carton_cost: 0,
-          transport_cost: 0,
           total_cost_per_unit: 0,
           quoted_price_per_unit: 0,
         }
@@ -155,9 +153,8 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
           label_cost: 6,
           labour_cost: 0,
           carton_cost: 5,
-          transport_cost: 4,
-          total_cost_per_unit: 90,
-          quoted_price_per_unit: 90,
+          total_cost_per_unit: 86,
+          quoted_price_per_unit: 86,
           moq: '1,000 Bottles',
           notes: ''
         }
@@ -183,15 +180,14 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
       const updated = [...prev];
       const item = { ...updated[index], [field]: value };
 
-      // Auto-sum the cost breakdown items into total_cost_per_unit
+      // Auto-sum the cost breakdown items into total_cost_per_unit (Liquid + Bottle + Cap + Label + Box + Labour)
       const pCost = Number(item.product_cost || 0);
       const bCost = Number(item.bottle_cost || 0);
       const capCost = Number(item.cap_cost || 0);
       const lCost = Number(item.label_cost || 0);
       const labCost = Number(item.labour_cost || 0);
       const cCost = Number(item.carton_cost || 0);
-      const tCost = Number(item.transport_cost || 0);
-      const sum = Number((pCost + bCost + capCost + lCost + labCost + cCost + tCost).toFixed(2));
+      const sum = Number((pCost + bCost + capCost + lCost + labCost + cCost).toFixed(2));
       item.total_cost_per_unit = sum;
 
       // Keep quoted_price_per_unit synced if user hasn't explicitly customized it
@@ -217,7 +213,6 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
         label_cost: 0,
         labour_cost: 0,
         carton_cost: 0,
-        transport_cost: 0,
         total_cost_per_unit: 0,
         quoted_price_per_unit: 0,
         moq: moq,
@@ -574,8 +569,8 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                       </button>
                     </div>
 
-                    {/* Cost Inputs Grid (7 Cost Components) */}
-                    <div className="grid grid-cols-2 sm:grid-cols-7 gap-2 text-xs">
+                    {/* Cost Inputs Grid (Cost Components) */}
+                    <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 text-xs">
                       <div>
                         <label className="text-[10px] text-slate-400 block mb-0.5 truncate" title="Liquid chemical product bulk cost per unit">
                           Liquid Cost
@@ -648,21 +643,6 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
                           step="any"
                           value={item.carton_cost === 0 ? '' : item.carton_cost}
                           onChange={(e) => updateLineItem(idx, 'carton_cost', parseFloat(e.target.value) || 0)}
-                          placeholder="0"
-                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-xs text-right font-mono font-semibold text-slate-200 focus:border-cyan-500 focus:outline-none"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="text-[10px] text-slate-400 block mb-0.5 truncate" title="Transportation / delivery freight cost per unit">
-                          Transport Cost
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          step="any"
-                          value={item.transport_cost === 0 ? '' : item.transport_cost}
-                          onChange={(e) => updateLineItem(idx, 'transport_cost', parseFloat(e.target.value) || 0)}
                           placeholder="0"
                           className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-xs text-right font-mono font-semibold text-slate-200 focus:border-cyan-500 focus:outline-none"
                         />

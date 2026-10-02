@@ -3381,8 +3381,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const lCost = Number(item.label_cost || 0);
       const labCost = Number(item.labour_cost || 0);
       const cCost = Number(item.carton_cost || 0);
-      const tCost = Number(item.transport_cost || 0);
-      const totalCost = Number((pCost + bCost + capCost + lCost + labCost + cCost + tCost).toFixed(2));
+      const totalCost = Number((pCost + bCost + capCost + lCost + labCost + cCost).toFixed(2));
       const quotedPrice = Number(item.quoted_price_per_unit || 0) > 0 ? Number(item.quoted_price_per_unit) : totalCost;
       return {
         ...item,
@@ -3393,7 +3392,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         label_cost: lCost,
         labour_cost: labCost,
         carton_cost: cCost,
-        transport_cost: tCost,
         total_cost_per_unit: totalCost,
         quoted_price_per_unit: quotedPrice,
       };

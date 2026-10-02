@@ -85,7 +85,7 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
                     ? 'bg-emerald-500 text-slate-950 shadow font-bold'
                     : 'text-slate-400 hover:text-white'
                 }`}
-                title="Customer-facing proposal: Shows itemized breakdown (Liquid, Bottle, Cap, Label, Box, Transport) & Total Price"
+                title="Customer-facing proposal: Shows itemized breakdown (Liquid, Bottle, Cap, Label, Box) & Total Price"
               >
                 <Eye className="w-3.5 h-3.5" />
                 Customer Proposal (PDF)
@@ -137,7 +137,7 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
           <div className="bg-emerald-500/10 border-b border-emerald-500/20 px-4 py-2 text-xs text-emerald-300 flex items-center gap-2 no-print">
             <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
             <span>
-              <strong>Customer Proposal View:</strong> Itemized component breakdown (Liquid, Bottle, Cap, Label, Box, Transport) summing to Total Unit Price.
+              <strong>Customer Proposal View:</strong> Itemized component breakdown (Liquid, Bottle, Cap, Label, Box) summing to Total Unit Price.
             </span>
           </div>
         )}
@@ -260,7 +260,6 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
                       <th className="py-2 px-1.5 text-right whitespace-nowrap">Labour</th>
                     )}
                     <th className="py-2 px-1.5 text-right whitespace-nowrap">Box/Carton</th>
-                    <th className="py-2 px-1.5 text-right whitespace-nowrap">Transport</th>
                     <th className="py-2 px-2 text-right bg-emerald-100/90 text-emerald-950 font-black whitespace-nowrap min-w-[95px]">
                       TOTAL PRICE
                     </th>
@@ -311,9 +310,6 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
                         <td className="py-2.5 px-1.5 text-right font-mono text-slate-700 whitespace-nowrap">
                           {formatPKR(item.carton_cost)}
                         </td>
-                        <td className="py-2.5 px-1.5 text-right font-mono text-slate-700 whitespace-nowrap">
-                          {formatPKR(item.transport_cost || 0)}
-                        </td>
                         <td className="py-2.5 px-2 text-right bg-emerald-50/70 whitespace-nowrap">
                           <span className="text-xs font-black font-mono text-emerald-900 block">
                             {formatPKR(totalUnit)}
@@ -344,7 +340,6 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
                     <th className="py-1.5 px-1.5 text-right">Cap/Pump</th>
                     <th className="py-1.5 px-1.5 text-right">Label</th>
                     <th className="py-1.5 px-1.5 text-right">Carton</th>
-                    <th className="py-1.5 px-1.5 text-right">Transport</th>
                     <th className="py-1.5 px-1.5 text-right">Labour</th>
                     <th className="py-1.5 px-1.5 text-right bg-slate-200/80 font-black">Total Cost</th>
                     <th className="py-1.5 px-1.5 text-right bg-emerald-100/70 font-black">Quoted Price</th>
@@ -370,7 +365,6 @@ export const QuotationViewModal: React.FC<QuotationViewModalProps> = ({
                         <td className="py-1.5 px-1.5 text-right text-slate-600">{formatPKR(item.cap_cost)}</td>
                         <td className="py-1.5 px-1.5 text-right text-slate-600">{formatPKR(item.label_cost)}</td>
                         <td className="py-1.5 px-1.5 text-right text-slate-600">{formatPKR(item.carton_cost)}</td>
-                        <td className="py-1.5 px-1.5 text-right text-slate-600">{formatPKR(item.transport_cost || 0)}</td>
                         <td className="py-1.5 px-1.5 text-right text-slate-600">{formatPKR(item.labour_cost)}</td>
                         <td className="py-1.5 px-1.5 text-right font-black text-slate-900 bg-slate-50">
                           {formatPKR(item.total_cost_per_unit)}
