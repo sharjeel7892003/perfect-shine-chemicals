@@ -64,6 +64,18 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
     const labourRate = Number(sale.labour_rate_per_bottle || 0);
     const discount = Number(sale.discount || 0);
 
+    // Pre-index master product formulation costs by ID and normalized name
+    // (ensuring 1 consistent per-liter cost is applied regardless of pack/bottle size)
+    const productMasterCostMap = new Map<string, number>();
+    products.forEach(p => {
+      const cPrice = Number(p.cost_price || 0);
+      if (cPrice > 0) {
+        if (p.id) productMasterCostMap.set(p.id, cPrice);
+        const norm = (p.name || '').toLowerCase().replace(/[\(\)\-\_]/g, ' ').replace(/\s+/g, ' ').trim();
+        if (norm) productMasterCostMap.set(norm, cPrice);
+      }
+    });
+
     const lineBreakdowns: LineItemProfitBreakdown[] = sale.items.map((item, idx) => {
       const isItemPL = Boolean(item.is_private_label || isPL);
       const isRawMaterial = item.item_type === 'raw_material' || Boolean(item.raw_material_id);
@@ -85,7 +97,8 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
 
       if (isItemPL && !isRawMaterial) {
         // --- PRIVATE LABEL LIQUID SALES ---
-        // For Private Label, chemical products are billed and costed per Liter.
+        // For Private Label, chemical formulations have ONE consistent cost per Liter,
+        // regardless of whether the product is bottled into 250ml, 450ml, 1L, or 25L cans.
         const bottleCount = Number(item.bottle_qty || item.quantity || item.pack_quantity || 0);
         const sizeMultiplier = Number(item.size_in_base_unit || 1);
 
@@ -121,11 +134,23 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
           unitSelling = Number((lineRev / actualLiters).toFixed(2));
         }
 
-        // Unit cost per liter (formulation cost)
-        if (resolvedUnitCost <= 0) {
-          if (prod?.cost_price && prod.cost_price > 0) {
-            resolvedUnitCost = Number(prod.cost_price);
-            costSource = 'Formulation Rate (/L)';
+        // 1. Resolve ONE consistent formulation cost per Liter for this product:
+        const normItemName = (item.product_name || '').toLowerCase().replace(/[\(\)\-\_]/g, ' ').replace(/\s+/g, ' ').trim();
+        const masterFormulationCost = (item.product_id && productMasterCostMap.get(item.product_id)) ||
+                                      productMasterCostMap.get(normItemName) ||
+                                      (prod && Number(prod.cost_price || 0) > 0 ? Number(prod.cost_price) : 0);
+
+        if (masterFormulationCost > 0) {
+          resolvedUnitCost = Number(masterFormulationCost.toFixed(2));
+          costSource = 'Formulation Rate (/L)';
+        } else if (resolvedUnitCost > 0) {
+          // If product master cost was not found, check if snapshot unit_cost was stored as bottle-cost
+          // (e.g. 40.46 for 250ml bottle) and normalize it back to 1 full Liter
+          if (sizeMultiplier > 0 && sizeMultiplier < 1) {
+            resolvedUnitCost = Number((resolvedUnitCost / sizeMultiplier).toFixed(2));
+            costSource = 'Normalized Snapshot (/L)';
+          } else {
+            costSource = 'Invoice Snapshot (/L)';
           }
         } else {
           costSource = 'Formulation Rate (/L)';

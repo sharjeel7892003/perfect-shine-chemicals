@@ -268,9 +268,16 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
         }
         actualQty = Number(actualLiters.toFixed(2));
 
-        if (unitCost <= 0) {
-          const prod = products.find(p => p.id === item.product_id);
-          unitCost = prod ? Number(prod.cost_price || 0) : 0;
+        const normItemName = (item.product_name || '').toLowerCase().replace(/[\(\)\-\_]/g, ' ').replace(/\s+/g, ' ').trim();
+        const prod = products.find(p => 
+          (item.product_id && p.id === item.product_id) || 
+          p.name.toLowerCase() === item.product_name.toLowerCase() ||
+          (p.name || '').toLowerCase().replace(/[\(\)\-\_]/g, ' ').replace(/\s+/g, ' ').trim() === normItemName
+        );
+        if (prod && Number(prod.cost_price || 0) > 0) {
+          unitCost = Number(prod.cost_price);
+        } else if (sizeMultiplier > 0 && sizeMultiplier < 1 && unitCost > 0) {
+          unitCost = Number((unitCost / sizeMultiplier).toFixed(2));
         }
       } else {
         if (unitCost <= 0) {
