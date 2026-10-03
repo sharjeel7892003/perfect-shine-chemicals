@@ -245,18 +245,46 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
 
   filteredSales.forEach(sale => {
     grossBilledSales += sale.total_amount;
+    const isPL = sale.invoice_type === 'private_label' || sale.is_private_label || sale.items.some(i => i.is_private_label);
     sale.items.forEach(item => {
+      const isItemPL = Boolean(item.is_private_label || isPL);
+      const isRawMaterial = item.item_type === 'raw_material' || Boolean(item.raw_material_id);
+
       let unitCost = Number(item.unit_cost) || 0;
-      if (unitCost <= 0) {
-        if (item.raw_material_id) {
-          const rm = rawMaterials.find(m => m.id === item.raw_material_id);
-          unitCost = rm ? Number(rm.cost_per_unit || 0) : 0;
-        } else {
+      let actualQty = Number(item.quantity || 1);
+
+      if (isItemPL && !isRawMaterial) {
+        const bottleCount = Number(item.bottle_qty || item.quantity || item.pack_quantity || 0);
+        const sizeMultiplier = Number(item.size_in_base_unit || 1);
+        let actualLiters = Number(item.liters_qty || 0);
+        if (actualLiters <= 0 && Number(item.base_quantity || 0) > 0) {
+          actualLiters = Number(item.base_quantity);
+        }
+        if (actualLiters <= 0 && bottleCount > 0 && sizeMultiplier > 0) {
+          actualLiters = bottleCount * sizeMultiplier;
+        }
+        if (actualLiters <= 0) {
+          actualLiters = Number(item.quantity || 1);
+        }
+        actualQty = Number(actualLiters.toFixed(2));
+
+        if (unitCost <= 0) {
           const prod = products.find(p => p.id === item.product_id);
-          unitCost = prod ? Number(prod.cost_price || 0) * (item.size_in_base_unit || 1) : 0;
+          unitCost = prod ? Number(prod.cost_price || 0) : 0;
+        }
+      } else {
+        if (unitCost <= 0) {
+          if (item.raw_material_id) {
+            const rm = rawMaterials.find(m => m.id === item.raw_material_id);
+            unitCost = rm ? Number(rm.cost_per_unit || 0) : 0;
+          } else {
+            const prod = products.find(p => p.id === item.product_id);
+            unitCost = prod ? Number(prod.cost_price || 0) * (item.size_in_base_unit || 1) : 0;
+          }
         }
       }
-      const itemCost = unitCost * item.quantity;
+
+      const itemCost = Number((unitCost * actualQty).toFixed(2));
       grossCOGS += itemCost;
 
       if (!productProfitMap[item.product_name]) {
@@ -269,7 +297,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
         };
       }
 
-      productProfitMap[item.product_name].qtySold += item.quantity;
+      productProfitMap[item.product_name].qtySold += actualQty;
       productProfitMap[item.product_name].revenue += item.subtotal;
       productProfitMap[item.product_name].cost += itemCost;
       productProfitMap[item.product_name].profit += (item.subtotal - itemCost);

@@ -33,6 +33,7 @@ export interface LineItemProfitBreakdown {
   isPrivateLabel?: boolean;
   quantity: number;
   unit: string;
+  containerDetail?: string;
   unitSellingPrice: number;
   lineRevenue: number;
   unitCost: number;
@@ -64,19 +65,99 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
     const discount = Number(sale.discount || 0);
 
     const lineBreakdowns: LineItemProfitBreakdown[] = sale.items.map((item, idx) => {
-      const qty = Number(item.quantity || item.pack_quantity || 1);
-      const unitSelling = Number(item.unit_price || 0);
-      const lineRev = Number(item.subtotal !== undefined ? item.subtotal : (qty * unitSelling).toFixed(2));
+      const isItemPL = Boolean(item.is_private_label || isPL);
+      const isRawMaterial = item.item_type === 'raw_material' || Boolean(item.raw_material_id);
+
+      const prod = products.find(p => p.id === item.product_id || p.name.toLowerCase() === item.product_name.toLowerCase());
+      const pack = prod?.pack_sizes?.find(ps => ps.id === item.pack_size_id || ps.name === item.pack_size_name);
+
+      let qty = Number(item.quantity || item.pack_quantity || 1);
+      let unit = item.unit || 'units';
+      let unitSelling = Number(item.unit_price || 0);
+      let lineRev = Number(item.subtotal !== undefined ? item.subtotal : (qty * unitSelling).toFixed(2));
 
       // Resolve Cost Basis
       let resolvedUnitCost = Number(item.unit_cost || 0);
       let costSource = 'Invoice Snapshot';
       let chemicalPortion: number | undefined = undefined;
       let packagingPortion: number | undefined = undefined;
+      let containerDetail: string | undefined = undefined;
 
-      const prod = products.find(p => p.id === item.product_id || p.name.toLowerCase() === item.product_name.toLowerCase());
-      const pack = prod?.pack_sizes?.find(ps => ps.id === item.pack_size_id || ps.name === item.pack_size_name);
+      if (isItemPL && !isRawMaterial) {
+        // --- PRIVATE LABEL LIQUID SALES ---
+        // For Private Label, chemical products are billed and costed per Liter.
+        const bottleCount = Number(item.bottle_qty || item.quantity || item.pack_quantity || 0);
+        const sizeMultiplier = Number(item.size_in_base_unit || 1);
 
+        let actualLiters = Number(item.liters_qty || 0);
+        if (actualLiters <= 0 && Number(item.base_quantity || 0) > 0) {
+          actualLiters = Number(item.base_quantity);
+        }
+        if (actualLiters <= 0 && bottleCount > 0 && sizeMultiplier > 0) {
+          actualLiters = bottleCount * sizeMultiplier;
+        }
+        if (actualLiters <= 0) {
+          actualLiters = Number(item.quantity || 1);
+        }
+        actualLiters = Number(actualLiters.toFixed(2));
+
+        qty = actualLiters;
+        unit = 'Liters';
+
+        // Packaging / container breakdown context for display
+        if (item.box_qty !== undefined && item.box_qty > 0) {
+          const bPerBox = item.bottles_per_box ? ` (${item.bottles_per_box}/bx)` : '';
+          containerDetail = `${item.box_qty} boxes${bPerBox} • ${bottleCount} btls`;
+        } else if (bottleCount > 1) {
+          containerDetail = `${bottleCount} bottles (${sizeMultiplier}L each)`;
+        } else if (sizeMultiplier > 1) {
+          containerDetail = `${bottleCount || 1} × ${sizeMultiplier}L container`;
+        }
+
+        // Selling rate per liter
+        if (item.rate_per_liter !== undefined && item.rate_per_liter > 0) {
+          unitSelling = Number(item.rate_per_liter);
+        } else if (actualLiters > 0 && lineRev > 0) {
+          unitSelling = Number((lineRev / actualLiters).toFixed(2));
+        }
+
+        // Unit cost per liter (formulation cost)
+        if (resolvedUnitCost <= 0) {
+          if (prod?.cost_price && prod.cost_price > 0) {
+            resolvedUnitCost = Number(prod.cost_price);
+            costSource = 'Formulation Rate (/L)';
+          }
+        } else {
+          costSource = 'Formulation Rate (/L)';
+        }
+
+        const totalCost = Number((resolvedUnitCost * actualLiters).toFixed(2));
+        const profit = Number((lineRev - totalCost).toFixed(2));
+        const marginPercent = lineRev > 0 ? Number(((profit / lineRev) * 100).toFixed(1)) : 0;
+        const markupPercent = totalCost > 0 ? Number(((profit / totalCost) * 100).toFixed(1)) : 0;
+
+        return {
+          id: item.id || String(idx),
+          name: item.product_name,
+          packSizeName: item.pack_size_name,
+          isPrivateLabel: true,
+          quantity: actualLiters,
+          unit,
+          containerDetail,
+          unitSellingPrice: unitSelling,
+          lineRevenue: lineRev,
+          unitCost: resolvedUnitCost,
+          totalCost,
+          profit,
+          marginPercent,
+          markupPercent,
+          costSource,
+          chemicalPortion,
+          packagingPortion
+        };
+      }
+
+      // --- OWN BRAND / RAW MATERIAL SALES ---
       if (prod && pack) {
         chemicalPortion = Number(((pack.size_in_base_unit || item.size_in_base_unit || 1) * Number(prod.cost_price || 0)).toFixed(2));
         packagingPortion = Number(
@@ -114,9 +195,9 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
         id: item.id || String(idx),
         name: item.product_name,
         packSizeName: item.pack_size_name,
-        isPrivateLabel: item.is_private_label || isPL,
+        isPrivateLabel: false,
         quantity: qty,
-        unit: item.unit || 'units',
+        unit: item.unit || (pack ? 'packs' : 'units'),
         unitSellingPrice: unitSelling,
         lineRevenue: lineRev,
         unitCost: resolvedUnitCost,
@@ -396,19 +477,28 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
                             </span>
                           </div>
                         </td>
-                        <td className="py-3 px-3 text-right font-mono font-bold text-white print:text-slate-900">
-                          {line.quantity}
+                        <td className="py-3 px-3 text-right">
+                          <div className="font-mono font-bold text-white print:text-slate-900">
+                            {line.quantity} {line.unit === 'Liters' ? 'L' : line.unit}
+                          </div>
+                          {line.containerDetail && (
+                            <div className="text-[10px] text-slate-400 print:text-slate-600 font-normal">
+                              {line.containerDetail}
+                            </div>
+                          )}
                         </td>
                         <td className="py-3 px-3 text-right font-mono text-slate-300 print:text-slate-800">
-                          {formatPKR(line.unitSellingPrice)}
+                          <div>{formatPKR(line.unitSellingPrice)}</div>
+                          <div className="text-[10px] text-slate-500">per {line.unit === 'Liters' ? 'L' : (line.packSizeName || 'unit')}</div>
                         </td>
                         <td className="py-3 px-3 text-right font-mono font-bold text-white print:text-slate-900">
                           {formatPKR(line.lineRevenue)}
                         </td>
                         <td className="py-3 px-3 text-right font-mono text-slate-400 print:text-slate-700">
-                          {formatPKR(line.unitCost)}
+                          <div>{formatPKR(line.unitCost)}</div>
+                          <div className="text-[10px] text-slate-500">per {line.unit === 'Liters' ? 'L' : (line.packSizeName || 'unit')}</div>
                         </td>
-                        <td className="py-3 px-3 text-right font-mono text-slate-400 print:text-slate-700">
+                        <td className="py-3 px-3 text-right font-mono text-slate-400 print:text-slate-700 font-semibold">
                           {formatPKR(line.totalCost)}
                         </td>
                         <td className="py-3 px-3 text-right font-mono font-bold">
@@ -454,7 +544,7 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
                   • <strong>Own Brand:</strong> True Unit Cost combining bulk formulation liquid and packaging items (bottles, caps, cartons).
                 </p>
                 <p className="leading-relaxed mt-0.5">
-                  • <strong>Private Label:</strong> Component-based cost structure (chemical bulk liquid + packaging containers) saved at invoice generation.
+                  • <strong>Private Label:</strong> Formulation liquid cost calculated per Liter multiplied by actual volume sold (Liters). Contract packing labour billed separately.
                 </p>
               </div>
             </div>
