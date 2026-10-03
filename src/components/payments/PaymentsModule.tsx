@@ -1276,11 +1276,12 @@ export const PaymentsModule: React.FC = () => {
               </label>
               <input
                 type="number"
-                min="1"
+                min="0.01"
+                step="any"
                 required
                 value={custPayAmount || ''}
                 onChange={(e) => setCustPayAmount(parseFloat(e.target.value) || 0)}
-                placeholder="0"
+                placeholder="0.00"
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base font-mono font-bold text-white focus:outline-none focus:border-emerald-500"
               />
             </div>
@@ -1422,11 +1423,12 @@ export const PaymentsModule: React.FC = () => {
               </label>
               <input
                 type="number"
-                min="1"
+                min="0.01"
+                step="any"
                 required
                 value={suppPayAmount || ''}
                 onChange={(e) => setSuppPayAmount(parseFloat(e.target.value) || 0)}
-                placeholder="0"
+                placeholder="0.00"
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base font-mono font-bold text-white focus:outline-none focus:border-emerald-500"
               />
             </div>
@@ -1543,11 +1545,12 @@ export const PaymentsModule: React.FC = () => {
               </label>
               <input
                 type="number"
-                min="1"
+                min="0.01"
+                step="any"
                 required
                 value={capitalAmount || ''}
                 onChange={(e) => setCapitalAmount(parseFloat(e.target.value) || 0)}
-                placeholder="0"
+                placeholder="0.00"
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base font-mono font-bold text-white focus:outline-none focus:border-indigo-500"
               />
             </div>
@@ -1655,11 +1658,12 @@ export const PaymentsModule: React.FC = () => {
               </label>
               <input
                 type="number"
-                min="1"
+                min="0.01"
+                step="any"
                 required
                 value={withdrawalAmount || ''}
                 onChange={(e) => setWithdrawalAmount(parseFloat(e.target.value) || 0)}
-                placeholder="0"
+                placeholder="0.00"
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base font-mono font-bold text-white focus:outline-none focus:border-amber-500"
               />
             </div>
@@ -1772,11 +1776,12 @@ export const PaymentsModule: React.FC = () => {
               </label>
               <input
                 type="number"
-                min="1"
+                min="0.01"
+                step="any"
                 required
                 value={advanceAmount || ''}
                 onChange={(e) => setAdvanceAmount(parseFloat(e.target.value) || 0)}
-                placeholder="0"
+                placeholder="0.00"
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-base font-mono font-bold text-white focus:outline-none focus:border-cyan-500"
               />
             </div>

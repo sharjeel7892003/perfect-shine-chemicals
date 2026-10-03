@@ -640,6 +640,7 @@ export const PurchasesModule: React.FC = () => {
                       <input
                         type="number"
                         min="0"
+                        step="any"
                         placeholder="Rate"
                         required
                         value={item.unit_cost || ''}
@@ -737,6 +738,7 @@ export const PurchasesModule: React.FC = () => {
                 <input
                   type="number"
                   min="0"
+                  step="any"
                   max={totalMaterialAmount}
                   value={amountPaid || ''}
                   onChange={(e) => setAmountPaid(parseFloat(e.target.value) || 0)}

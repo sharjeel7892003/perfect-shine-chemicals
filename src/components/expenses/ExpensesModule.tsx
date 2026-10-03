@@ -1013,7 +1013,7 @@ END $$;`;
               <label className="block text-slate-400 font-medium mb-1">Amount (PKR) *</label>
               <input
                 type="number"
-                min="1"
+                min="0.01"
                 step="any"
                 required
                 value={expenseAmount}
@@ -1112,7 +1112,7 @@ END $$;`;
                 <label className="block text-slate-400 font-medium mb-1">Confirm Amount (PKR) *</label>
                 <input
                   type="number"
-                  min="1"
+                  min="0.01"
                   step="any"
                   value={postingCustomAmount}
                   onChange={(e) => setPostingCustomAmount(Number(e.target.value))}
@@ -1210,7 +1210,7 @@ END $$;`;
               <label className="block text-slate-400 font-medium mb-1">Default Monthly Amount (PKR) *</label>
               <input
                 type="number"
-                min="1"
+                min="0.01"
                 step="any"
                 required
                 value={recAmount}

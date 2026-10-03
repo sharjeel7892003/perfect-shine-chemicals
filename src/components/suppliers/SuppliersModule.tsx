@@ -515,7 +515,8 @@ export const SuppliersModule: React.FC = () => {
             </label>
             <input
               type="number"
-              min="1"
+              min="0.01"
+              step="any"
               required
               value={paymentAmount || ''}
               onChange={(e) => setPaymentAmount(parseFloat(e.target.value) || 0)}

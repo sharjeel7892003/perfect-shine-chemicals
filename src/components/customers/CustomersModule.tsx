@@ -448,6 +448,7 @@ export const CustomersModule: React.FC = () => {
               <input
                 type="number"
                 min="0"
+                step="any"
                 value={formData.credit_limit}
                 onChange={(e) => setFormData({ ...formData, credit_limit: parseFloat(e.target.value) || 0 })}
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono"
@@ -551,7 +552,8 @@ export const CustomersModule: React.FC = () => {
             </label>
             <input
               type="number"
-              min="1"
+              min="0.01"
+              step="any"
               required
               value={paymentAmount || ''}
               onChange={(e) => setPaymentAmount(parseFloat(e.target.value) || 0)}

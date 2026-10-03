@@ -1535,6 +1535,7 @@ export const SalesModule: React.FC = () => {
                   <input
                     type="number"
                     min="0"
+                    step="any"
                     value={discountAmount || ''}
                     onChange={(e) => setDiscountAmount(parseFloat(e.target.value) || 0)}
                     placeholder="0"
@@ -1574,7 +1575,8 @@ export const SalesModule: React.FC = () => {
                       <span className="text-slate-400 font-mono text-[11px]">PKR</span>
                       <input
                         type="number"
-                        min="1"
+                        min="0.01"
+                        step="any"
                         max={Math.min(availableAdvance, totalAmount)}
                         value={advanceAmountToApply || ''}
                         onChange={(e) => {
@@ -1637,6 +1639,7 @@ export const SalesModule: React.FC = () => {
                   <input
                     type="number"
                     min="0"
+                    step="any"
                     max={totalAmount}
                     value={amountPaid || ''}
                     onChange={(e) => setAmountPaid(parseFloat(e.target.value) || 0)}
