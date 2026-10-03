@@ -19,7 +19,8 @@ import {
   AlertTriangle,
   Loader2,
   UserCheck,
-  RotateCcw
+  RotateCcw,
+  TrendingUp
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -32,6 +33,7 @@ import { Modal } from '../common/Modal';
 import { InvoiceModal } from './InvoiceModal';
 import { CreditNoteModal } from './CreditNoteModal';
 import { ProcessReturnModal } from './ProcessReturnModal';
+import { InvoiceProfitModal } from './InvoiceProfitModal';
 
 export const SalesModule: React.FC = () => {
   const { products, rawMaterials, customers, sales, salesReturns, payments, createSale, deleteSaleInvoice, deleteSalesReturnRecord } = useApp();
@@ -48,6 +50,7 @@ export const SalesModule: React.FC = () => {
 
   const [activeSubTab, setActiveSubTab] = useState<'pos' | 'history' | 'returns'>('pos');
   const [selectedInvoice, setSelectedInvoice] = useState<Sale | null>(null);
+  const [profitReportSale, setProfitReportSale] = useState<Sale | null>(null);
   const [deleteConfirmSale, setDeleteConfirmSale] = useState<Sale | null>(null);
   const [isReturnModalOpen, setIsReturnModalOpen] = useState(false);
   const [returnTargetSale, setReturnTargetSale] = useState<Sale | null>(null);
@@ -1792,6 +1795,15 @@ export const SalesModule: React.FC = () => {
                             <span>Print / PDF</span>
                           </button>
 
+                          <button
+                            onClick={() => setProfitReportSale(sale)}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 border border-purple-500/20 text-xs font-semibold transition-colors"
+                            title="View Profit Breakdown & Margins for this Invoice"
+                          >
+                            <TrendingUp className="w-3.5 h-3.5" />
+                            <span>Profit</span>
+                          </button>
+
                           {isOwner ? (
                             <button
                               onClick={() => setDeleteConfirmSale(sale)}
@@ -2017,6 +2029,15 @@ export const SalesModule: React.FC = () => {
             setSelectedInvoice(null);
             setDeleteConfirmSale(target);
           } : undefined}
+        />
+      )}
+
+      {/* Internal Invoice Profit Report Modal */}
+      {profitReportSale && (
+        <InvoiceProfitModal
+          isOpen={Boolean(profitReportSale)}
+          onClose={() => setProfitReportSale(null)}
+          sale={profitReportSale}
         />
       )}
 

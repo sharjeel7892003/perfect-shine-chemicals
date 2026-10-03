@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Sale } from '../../types';
 import { formatPKR, formatDate } from '../../utils/formatters';
-import { Printer, X, Trash2, Award } from 'lucide-react';
+import { Printer, X, Trash2, Award, TrendingUp } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { printElement } from '../../utils/printHelper';
+import { InvoiceProfitModal } from './InvoiceProfitModal';
 
 interface InvoiceModalProps {
   sale: Sale | null;
@@ -13,6 +14,7 @@ interface InvoiceModalProps {
 
 export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDelete }) => {
   const { allUsers } = useAuth();
+  const [showProfitModal, setShowProfitModal] = useState<boolean>(false);
   if (!sale) return null;
 
   const handlePrint = () => {
@@ -100,6 +102,15 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDel
                 <span>Delete & Reverse</span>
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => setShowProfitModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 text-purple-400 border border-purple-500/30 font-bold text-xs transition-colors"
+              title="Internal view: Inspect profit breakdown & margins for this invoice"
+            >
+              <TrendingUp className="w-3.5 h-3.5" />
+              <span>View Profit Report</span>
+            </button>
             <button
               onClick={handlePrint}
               className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs shadow-md transition-colors"
@@ -398,6 +409,13 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDel
           </div>
         </div>
       </div>
+
+      {/* Internal Management Profit Audit Report Modal */}
+      <InvoiceProfitModal
+        isOpen={showProfitModal}
+        onClose={() => setShowProfitModal(false)}
+        sale={sale}
+      />
     </div>
   );
 };
