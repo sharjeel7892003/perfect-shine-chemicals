@@ -377,32 +377,47 @@ export const PaymentsModule: React.FC = () => {
         credit: 0,
         balance: 0,
       });
-      // If sale had immediate payment at checkout
-      if (sale.amount_paid > 0) {
-        rows.push({
-          date: sale.date,
-          ref: `${sale.invoice_number} (Pay)`,
-          description: `Payment received at invoice generation`,
-          method: sale.payment_method,
-          debit: 0,
-          credit: sale.amount_paid,
-          balance: 0,
-        });
-      }
     });
 
-    // Get all direct payments recorded (balance settlements & advances)
-    const custPayments = payments.filter(p => p.customer_id === ledgerCustomerId && (p.related_to === 'customer_balance' || p.related_to === 'customer_advance'));
+    // Get all customer payments (invoice-linked checkout payments, balance settlements & advances)
+    // Matches canonical financialEngine.ts to prevent double counting applied advances
+    const custPayments = payments.filter(
+      p =>
+        p.customer_id === ledgerCustomerId &&
+        (p.related_to === 'sale' || p.related_to === 'customer_balance' || p.related_to === 'customer_advance')
+    );
     custPayments.forEach(pay => {
       rows.push({
         date: pay.date,
-        ref: pay.transaction_ref || pay.reference_no || (pay.related_to === 'customer_advance' ? 'ADV' : 'REC'),
-        description: pay.notes || (pay.related_to === 'customer_advance' ? 'Customer advance deposit' : 'Payment receipt voucher'),
+        ref: pay.transaction_ref || pay.reference_no || (pay.related_to === 'customer_advance' ? 'ADV' : pay.related_to === 'sale' ? 'INV-PAY' : 'REC'),
+        description: pay.notes || (pay.related_to === 'customer_advance' ? 'Customer advance deposit' : pay.related_to === 'sale' ? 'Payment received at invoice checkout' : 'Payment receipt voucher'),
         method: pay.payment_method,
         debit: 0,
         credit: pay.amount,
         balance: 0,
       });
+    });
+
+    // Fallback: If any legacy sale had fresh cash paid on invoice but was not entered into payments table,
+    // and was NOT settled via an existing advance deposit, include it so no cash receipt is lost:
+    custSales.forEach(sale => {
+      const hasAdvanceApplied = Number(sale.advance_amount_applied || 0) > 0 ||
+                                Boolean(sale.advance_received_date) ||
+                                Boolean(sale.notes && sale.notes.includes('advance_received_date'));
+      const hasLinkedPayment = custPayments.some(
+        p => p.reference_no === sale.invoice_number || p.reference_id === sale.id || (p.notes && p.notes.includes(sale.invoice_number))
+      );
+      if (!hasLinkedPayment && !hasAdvanceApplied && Number(sale.amount_paid || 0) > 0) {
+        rows.push({
+          date: sale.date,
+          ref: `${sale.invoice_number} (Pay)`,
+          description: `Payment received at invoice checkout`,
+          method: sale.payment_method,
+          debit: 0,
+          credit: Number(sale.amount_paid || 0),
+          balance: 0,
+        });
+      }
     });
 
     // Get all sales returns for this customer
