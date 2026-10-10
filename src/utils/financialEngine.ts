@@ -55,10 +55,11 @@ export interface OverallFinancialMetrics {
   // OUTFLOWS BREAKDOWN
   totalPurchasesSpend: number;
   purchaseDisbursements: number;
+  transportDisbursements: number;
   operatingExpenses: number;
   ownerWithdrawals: number;
   salesReturnRefunds?: number;
-  totalDisbursements: number; // Sum of all Outflows: purchaseDisbursements + operatingExpenses + ownerWithdrawals + salesReturnRefunds
+  totalDisbursements: number; // Sum of all Outflows: purchaseDisbursements + transportDisbursements + operatingExpenses + ownerWithdrawals + salesReturnRefunds
   
   // NET CASH POSITION
   netCashPosition: number; // totalCashCollected - totalDisbursements
@@ -424,17 +425,33 @@ export const calculateFinancialMetrics = (data: {
     );
   }
 
+  // 4C. Transport / Freight Disbursements for Purchase Trips (paid to transporter)
+  let transportDisbursements = 0;
+  if (!supplierId || supplierId === 'all') {
+    transportDisbursements = Number(
+      boundedPayments
+        .filter(p => p.related_to === 'transport')
+        .reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
+        .toFixed(2)
+    );
+  }
+
   // 5. Operating Expenses
+  // Transport costs allocated to purchase trips are part of raw material landed costs (COGS)
+  // and must NOT be double-counted as separate operating expenses.
   const filteredExpenses = expenses.filter(
-    e => !(e as any).is_archived && !(e as any).is_deleted && isDateInBounds(e.date, startDate, endDate)
+    e => !(e as any).is_archived && 
+         !(e as any).is_deleted && 
+         isDateInBounds(e.date, startDate, endDate) &&
+         !e.description?.includes('Purchase Trip') // Prevent double counting trip transport
   );
   const operatingExpenses = Number(
     filteredExpenses.reduce((acc, e) => acc + (Number(e.amount) || 0), 0).toFixed(2)
   );
 
-  // Total Disbursements = Purchases Paid + Operating Expenses + Owner Withdrawals + Sales Return Cash Refunds
+  // Total Disbursements = Purchases Paid + Transport Paid + Operating Expenses + Owner Withdrawals + Sales Return Cash Refunds
   const totalDisbursements = Number(
-    (purchaseDisbursements + operatingExpenses + ownerWithdrawals + salesReturnRefunds).toFixed(2)
+    (purchaseDisbursements + transportDisbursements + operatingExpenses + ownerWithdrawals + salesReturnRefunds).toFixed(2)
   );
 
   // Net Cash Position = Total Cash Collected - Total Disbursements
@@ -454,6 +471,7 @@ export const calculateFinancialMetrics = (data: {
     totalOutstandingAdvances,
     totalPurchasesSpend,
     purchaseDisbursements,
+    transportDisbursements,
     operatingExpenses,
     ownerWithdrawals,
     salesReturnRefunds,

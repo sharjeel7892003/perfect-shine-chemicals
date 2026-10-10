@@ -15,7 +15,13 @@ import {
   Scale,
   Layers,
   ArrowRight,
-  Info
+  Info,
+  Check,
+  CheckSquare,
+  Square,
+  Wallet,
+  CreditCard,
+  DollarSign
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -27,13 +33,31 @@ import { PurchaseTripModal } from './PurchaseTripModal';
 import { PurchaseTripDetailModal } from './PurchaseTripDetailModal';
 
 export const PurchasesModule: React.FC = () => {
-  const { suppliers, products, rawMaterials, purchases, purchaseTrips, createPurchase, deletePurchaseInvoice } = useApp();
+  const { 
+    suppliers, 
+    products, 
+    rawMaterials, 
+    purchases, 
+    purchaseTrips, 
+    createPurchase, 
+    deletePurchaseInvoice,
+    markPurchasesAsPaid 
+  } = useApp();
   const { currentUser, isOwner, canManagePurchases } = useAuth();
 
   // Active view tab: 'pos' (individual purchase orders) or 'trips' (multi-vendor shared transport runs)
   const [activeTab, setActiveTab] = useState<'pos' | 'trips'>('pos');
   const [searchTerm, setSearchTerm] = useState('');
   
+  // Selection and Bulk Mark as Paid State
+  const [selectedPurchaseIds, setSelectedPurchaseIds] = useState<string[]>([]);
+  const [isMarkPaidModalOpen, setIsMarkPaidModalOpen] = useState(false);
+  const [purchasesToSettle, setPurchasesToSettle] = useState<Purchase[]>([]);
+  const [settleMethod, setSettleMethod] = useState<PaymentMethod>('cash');
+  const [settleDate, setSettleDate] = useState<string>(getTodayDateString());
+  const [settleNotes, setSettleNotes] = useState('');
+  const [isSettling, setIsSettling] = useState(false);
+
   // Modals state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isTripModalOpen, setIsTripModalOpen] = useState(false);
@@ -53,7 +77,7 @@ export const PurchasesModule: React.FC = () => {
   // Single Purchase Form State
   const [purchaseDate, setPurchaseDate] = useState(getTodayDateString());
   const [supplierId, setSupplierId] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('bank');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [paymentStatus, setPaymentStatus] = useState<'paid' | 'partial' | 'unpaid'>('paid');
   const [amountPaid, setAmountPaid] = useState<number>(0);
   const [singleFreightCost, setSingleFreightCost] = useState<number>(0);
@@ -203,6 +227,70 @@ export const PurchasesModule: React.FC = () => {
     (t.vehicle_or_driver && t.vehicle_or_driver.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
+  // Selection & Bulk Mark as Paid logic
+  const handleToggleSelectPurchase = (id: string) => {
+    setSelectedPurchaseIds(prev => 
+      prev.includes(id) ? prev.filter(pId => pId !== id) : [...prev, id]
+    );
+  };
+
+  const handleSelectAllPurchases = () => {
+    if (selectedPurchaseIds.length === filteredPurchases.length) {
+      setSelectedPurchaseIds([]);
+    } else {
+      setSelectedPurchaseIds(filteredPurchases.map(p => p.id));
+    }
+  };
+
+  const selectedUnpaidPurchases = filteredPurchases.filter(
+    p => selectedPurchaseIds.includes(p.id) && p.payment_status !== 'paid'
+  );
+  
+  const selectedTotalDue = selectedUnpaidPurchases.reduce((sum, p) => {
+    return sum + Math.max(0, p.total_amount - (p.amount_paid || 0));
+  }, 0);
+
+  const handleOpenMarkPaidForSingle = (purchase: Purchase) => {
+    setPurchasesToSettle([purchase]);
+    setSettleMethod('cash');
+    setSettleDate(getTodayDateString());
+    setSettleNotes(`Payment settlement for PO ${purchase.invoice_number}`);
+    setIsMarkPaidModalOpen(true);
+  };
+
+  const handleOpenMarkPaidForSelected = () => {
+    if (selectedUnpaidPurchases.length === 0) {
+      alert('None of the selected purchases have an unpaid balance.');
+      return;
+    }
+    setPurchasesToSettle(selectedUnpaidPurchases);
+    setSettleMethod('cash');
+    setSettleDate(getTodayDateString());
+    setSettleNotes(`Bulk settlement for ${selectedUnpaidPurchases.length} purchases`);
+    setIsMarkPaidModalOpen(true);
+  };
+
+  const handleConfirmMarkPaid = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (purchasesToSettle.length === 0) return;
+    setIsSettling(true);
+    try {
+      const ids = purchasesToSettle.map(p => p.id);
+      const res = await markPurchasesAsPaid(ids, settleMethod, settleDate, settleNotes);
+      alert(res.message);
+      setIsMarkPaidModalOpen(false);
+      setSelectedPurchaseIds(prev => prev.filter(id => !ids.includes(id)));
+      if (selectedPurchaseDetails) {
+        const refreshed = purchases.find(p => p.id === selectedPurchaseDetails.id);
+        if (refreshed) setSelectedPurchaseDetails({ ...refreshed, payment_status: 'paid', amount_paid: refreshed.total_amount });
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Failed to settle purchases');
+    } finally {
+      setIsSettling(false);
+    }
+  };
+
   return (
     <div className="space-y-6 pb-12">
       {/* Header */}
@@ -213,7 +301,7 @@ export const PurchasesModule: React.FC = () => {
             <span>Supplier Purchases & Procurement</span>
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            Procure raw materials, manage multi-vendor Purchase Trips with shared freight allocation, and track landed costs.
+            Procure raw materials, manage multi-vendor Purchase Trips with on-the-spot payment recording, and settle vendor bills.
           </p>
         </div>
 
@@ -265,7 +353,7 @@ export const PurchasesModule: React.FC = () => {
           }`}
         >
           <Truck className="w-4 h-4" />
-          <span>Purchase Trips & Freight Allocation ({purchaseTrips.length})</span>
+          <span>Purchase Trips & Shared Freight ({purchaseTrips.length})</span>
           {purchaseTrips.length > 0 && (
             <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-mono">
               {purchaseTrips.length}
@@ -277,7 +365,7 @@ export const PurchasesModule: React.FC = () => {
       {/* VIEW A: Purchase Orders Table */}
       {activeTab === 'pos' && (
         <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="relative w-full sm:w-80">
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input
@@ -289,13 +377,69 @@ export const PurchasesModule: React.FC = () => {
               />
             </div>
 
-            <span className="text-xs text-slate-400">{filteredPurchases.length} POs Found</span>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-slate-400">{filteredPurchases.length} POs Found</span>
+              {canManagePurchases && filteredPurchases.some(p => p.payment_status !== 'paid') && (
+                <button
+                  type="button"
+                  onClick={handleSelectAllPurchases}
+                  className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold underline"
+                >
+                  {selectedPurchaseIds.length === filteredPurchases.length ? 'Deselect All' : 'Select All'}
+                </button>
+              )}
+            </div>
           </div>
+
+          {/* Bulk Action Bar when items selected */}
+          {selectedPurchaseIds.length > 0 && (
+            <div className="p-3 bg-gradient-to-r from-emerald-950/60 to-slate-900 border border-emerald-500/40 rounded-xl flex flex-wrap items-center justify-between gap-3 shadow-lg">
+              <div className="flex items-center gap-3 text-xs text-white">
+                <span className="flex items-center gap-1.5 font-bold text-emerald-400">
+                  <CheckSquare className="w-4 h-4" />
+                  <span>{selectedPurchaseIds.length} purchase(s) selected</span>
+                </span>
+                <span>•</span>
+                <span>
+                  Unpaid Balance Due: <strong className="font-mono text-amber-300 font-bold">{formatPKR(selectedTotalDue)}</strong>
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {selectedUnpaidPurchases.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleOpenMarkPaidForSelected}
+                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20 transition-all active:scale-95"
+                  >
+                    <Wallet className="w-3.5 h-3.5 stroke-[2.5]" />
+                    <span>Mark Selected as Paid ({selectedUnpaidPurchases.length})</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSelectedPurchaseIds([])}
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs font-medium"
+                >
+                  Deselect All
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead>
                 <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+                  <th className="py-3 px-3 w-8">
+                    <input
+                      type="checkbox"
+                      checked={filteredPurchases.length > 0 && selectedPurchaseIds.length === filteredPurchases.length}
+                      onChange={handleSelectAllPurchases}
+                      className="rounded border-slate-700 text-emerald-500 focus:ring-emerald-400"
+                      title="Select / Deselect all"
+                    />
+                  </th>
                   <th className="py-3 px-3">PO Number</th>
                   <th className="py-3 px-3">Date</th>
                   <th className="py-3 px-3">Supplier</th>
@@ -311,15 +455,29 @@ export const PurchasesModule: React.FC = () => {
               <tbody className="divide-y divide-slate-800/60">
                 {filteredPurchases.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="py-8 text-center text-slate-500">
+                    <td colSpan={11} className="py-8 text-center text-slate-500">
                       No purchase records found
                     </td>
                   </tr>
                 ) : (
                   filteredPurchases.map((p) => {
                     const totalAllocatedFreight = p.freight_cost || p.items.reduce((sum, it) => sum + (it.allocated_freight || 0), 0);
+                    const isSelected = selectedPurchaseIds.includes(p.id);
+                    const remainingDue = Math.max(0, p.total_amount - (p.amount_paid || 0));
+
                     return (
-                      <tr key={p.id} className="hover:bg-slate-800/40 transition-colors">
+                      <tr 
+                        key={p.id} 
+                        className={`transition-colors ${isSelected ? 'bg-emerald-950/20' : 'hover:bg-slate-800/40'}`}
+                      >
+                        <td className="py-3 px-3">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => handleToggleSelectPurchase(p.id)}
+                            className="rounded border-slate-700 text-emerald-500 focus:ring-emerald-400"
+                          />
+                        </td>
                         <td className="py-3 px-3 font-mono">
                           <div className="font-bold text-white">{p.invoice_number}</div>
                           {p.trip_number && (
@@ -346,6 +504,11 @@ export const PurchasesModule: React.FC = () => {
                         </td>
                         <td className="py-3 px-3 text-right font-mono text-emerald-400 whitespace-nowrap">
                           {formatPKR(p.amount_paid)}
+                          {remainingDue > 0 && (
+                            <span className="block text-[10px] text-amber-400/90 font-mono">
+                              Due: {formatPKR(remainingDue)}
+                            </span>
+                          )}
                         </td>
                         <td className="py-3 px-3 text-center">
                           <Badge
@@ -357,6 +520,18 @@ export const PurchasesModule: React.FC = () => {
                         <td className="py-3 px-3 capitalize text-slate-400">{p.payment_method}</td>
                         <td className="py-3 px-3 text-right">
                           <div className="flex items-center justify-end gap-1.5">
+                            {/* Quick Mark as Paid Button */}
+                            {p.payment_status !== 'paid' && canManagePurchases && (
+                              <button
+                                onClick={() => handleOpenMarkPaidForSingle(p)}
+                                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 text-xs font-bold transition-all active:scale-95 shadow-sm"
+                                title={`Mark PO ${p.invoice_number} as Paid and record Cash Outflow`}
+                              >
+                                <Wallet className="w-3.5 h-3.5 text-emerald-400" />
+                                <span>Mark Paid</span>
+                              </button>
+                            )}
+
                             <button
                               onClick={() => setSelectedPurchaseDetails(p)}
                               className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-colors"
@@ -365,6 +540,7 @@ export const PurchasesModule: React.FC = () => {
                               <Eye className="w-3.5 h-3.5 text-emerald-400" />
                               <span>View</span>
                             </button>
+
                             {isOwner ? (
                               <button
                                 onClick={() => {
@@ -377,16 +553,7 @@ export const PurchasesModule: React.FC = () => {
                                 <Trash2 className="w-3.5 h-3.5" />
                                 <span>Delete</span>
                               </button>
-                            ) : (
-                              <button
-                                disabled
-                                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/40 text-slate-600 border border-slate-800 text-xs cursor-not-allowed opacity-50"
-                                title="Admin role required to delete and reverse PO"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                                <span>Delete</span>
-                              </button>
-                            )}
+                            ) : null}
                           </div>
                         </td>
                       </tr>
@@ -459,6 +626,11 @@ export const PurchasesModule: React.FC = () => {
                 ) : (
                   filteredTrips.map((trip) => {
                     const uniqueVendors = Array.from(new Set(trip.items.map(i => i.supplier_name)));
+                    const transportPaid = trip.transport_amount_paid !== undefined 
+                      ? Number(trip.transport_amount_paid) 
+                      : (trip.transport_payment_status === 'unpaid' ? 0 : Number(trip.total_transport_cost));
+                    const transportStatus = trip.transport_payment_status || (transportPaid >= trip.total_transport_cost ? 'paid' : transportPaid > 0 ? 'partial' : 'unpaid');
+
                     return (
                       <tr key={trip.id} className="hover:bg-slate-800/40 transition-colors">
                         <td className="py-3 px-3 font-bold text-white whitespace-nowrap">
@@ -482,8 +654,11 @@ export const PurchasesModule: React.FC = () => {
                         <td className="py-3 px-3 text-right text-slate-300 whitespace-nowrap">
                           {formatPKR(trip.total_material_cost)}
                         </td>
-                        <td className="py-3 px-3 text-right text-amber-400 font-bold whitespace-nowrap">
-                          {formatPKR(trip.total_transport_cost)}
+                        <td className="py-3 px-3 text-right whitespace-nowrap">
+                          <span className="text-amber-400 font-bold block">{formatPKR(trip.total_transport_cost)}</span>
+                          <span className="text-[10px] uppercase font-sans text-slate-400">
+                            {transportStatus} ({trip.transport_payment_method})
+                          </span>
                         </td>
                         <td className="py-3 px-3 text-right text-emerald-400 font-black whitespace-nowrap">
                           {formatPKR(trip.grand_total)}
@@ -492,7 +667,7 @@ export const PurchasesModule: React.FC = () => {
                           <button
                             onClick={() => setSelectedTripDetails(trip)}
                             className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-bold transition-all"
-                            title="View Trip Breakdown and Landed Cost Per Material"
+                            title="View Trip Breakdown, Payments, and Landed Costs"
                           >
                             <Scale className="w-3.5 h-3.5" />
                             <span>View Breakdown</span>
@@ -508,95 +683,95 @@ export const PurchasesModule: React.FC = () => {
         </div>
       )}
 
-      {/* Single Purchase Order Modal (with Freight / Additional Cost field) */}
+      {/* Record Single Purchase Modal */}
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         title="Record Single Supplier Purchase"
-        subtitle="For single-vendor purchases with direct freight. Landed costs and stock balances update automatically."
+        subtitle="Log material arrival from a single vendor with direct freight."
         maxWidth="2xl"
       >
         <form onSubmit={handleCreatePurchase} className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
-                Select Supplier / Vendor *
-              </label>
-              <select
-                required
-                value={supplierId}
-                onChange={(e) => setSupplierId(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
-              >
-                <option value="">Choose Supplier...</option>
-                {activeSuppliers.map(s => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} ({s.raw_material_type}) • Balance: {formatPKR(s.current_balance)}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase mb-1 flex items-center gap-1.5">
-                <Calendar className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Purchase / PO Date *</span>
+                Purchase Date *
               </label>
               <input
                 type="date"
                 required
                 value={purchaseDate}
                 onChange={(e) => setPurchaseDate(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
               />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Supplier / Vendor *
+              </label>
+              <select
+                required
+                value={supplierId}
+                onChange={(e) => setSupplierId(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+              >
+                <option value="">Select Supplier...</option>
+                {activeSuppliers.map(s => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.raw_material_type})
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
-          {/* Itemized list */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-bold text-slate-400 uppercase">
-                Purchase Items (Raw Materials or Products)
+          {/* Items Section */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-300 uppercase">
+                Inventory Items Received *
               </label>
               <button
                 type="button"
                 onClick={handleAddItemRow}
-                className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1"
+                className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 flex items-center gap-1"
               >
-                <Plus className="w-3.5 h-3.5" /> Add Item Row
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Item</span>
               </button>
             </div>
 
-            <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
               {items.map((item, idx) => (
-                <div key={idx} className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/60 space-y-2">
-                  <div className="grid grid-cols-12 gap-2">
+                <div key={idx} className="p-2.5 bg-slate-950/60 rounded-xl border border-slate-800 space-y-2">
+                  <div className="grid grid-cols-12 gap-2 items-center">
                     <div className="col-span-5">
                       <select
-                        value={item.raw_material_id ? `rm-${item.raw_material_id}` : (item.product_id ? `prod-${item.product_id}` : '')}
+                        required
+                        value={item.raw_material_id || item.product_id || ''}
                         onChange={(e) => {
                           const val = e.target.value;
-                          if (val.startsWith('rm-')) {
-                            handleItemChange(idx, 'raw_material_id', val.replace('rm-', ''));
-                          } else if (val.startsWith('prod-')) {
-                            handleItemChange(idx, 'product_id', val.replace('prod-', ''));
+                          const isRM = activeRawMaterials.some(m => m.id === val);
+                          if (isRM) {
+                            handleItemChange(idx, 'raw_material_id', val);
                           } else {
-                            handleItemChange(idx, 'product_or_material_name', '');
+                            handleItemChange(idx, 'product_id', val);
                           }
                         }}
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white"
                       >
-                        <option value="">Select Raw Material / Product</option>
-                        <optgroup label="🧪 Chemical Raw Materials">
+                        <option value="">Select Inventory Item...</option>
+                        <optgroup label="Raw Materials">
                           {activeRawMaterials.map(rm => (
-                            <option key={rm.id} value={`rm-${rm.id}`}>
+                            <option key={rm.id} value={rm.id}>
                               {rm.name} ({rm.unit})
                             </option>
                           ))}
                         </optgroup>
-                        <optgroup label="📦 Finished Products">
+                        <optgroup label="Finished Products">
                           {activeProducts.map(p => (
-                            <option key={p.id} value={`prod-${p.id}`}>
+                            <option key={p.id} value={p.id}>
                               {p.name} ({p.base_unit || p.unit})
                             </option>
                           ))}
@@ -706,7 +881,7 @@ export const PurchasesModule: React.FC = () => {
                   onChange={(e) => handlePaymentStatusChange(e.target.value as any)}
                   className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white"
                 >
-                  <option value="paid">Full Paid</option>
+                  <option value="paid">Full Paid (Spot Payment)</option>
                   <option value="partial">Partial Payment</option>
                   <option value="unpaid">Credit / Unpaid</option>
                 </select>
@@ -721,8 +896,8 @@ export const PurchasesModule: React.FC = () => {
                   onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
                   className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white"
                 >
-                  <option value="bank">Bank Transfer (HBL)</option>
                   <option value="cash">Cash Voucher</option>
+                  <option value="bank">Bank Transfer (HBL)</option>
                   <option value="jazzcash">JazzCash</option>
                   <option value="easypaisa">EasyPaisa</option>
                   <option value="cheque">Cheque</option>
@@ -809,6 +984,27 @@ export const PurchasesModule: React.FC = () => {
               </div>
             </div>
 
+            {/* Payment Summary in Detail Modal */}
+            <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 flex items-center justify-between">
+              <div>
+                <span className="text-slate-400 block text-[10px] uppercase">Payment Status</span>
+                <Badge variant={selectedPurchaseDetails.payment_status === 'paid' ? 'emerald' : selectedPurchaseDetails.payment_status === 'partial' ? 'amber' : 'rose'}>
+                  {selectedPurchaseDetails.payment_status}
+                </Badge>
+              </div>
+              <div className="text-right">
+                <span className="text-slate-400 block text-[10px] uppercase">Paid vs Due</span>
+                <span className="font-mono text-emerald-400 font-bold">
+                  {formatPKR(selectedPurchaseDetails.amount_paid)}
+                </span>
+                {selectedPurchaseDetails.payment_status !== 'paid' && (
+                  <span className="text-amber-400 font-mono block text-[11px]">
+                    Remaining: {formatPKR(Math.max(0, selectedPurchaseDetails.total_amount - (selectedPurchaseDetails.amount_paid || 0)))}
+                  </span>
+                )}
+              </div>
+            </div>
+
             <div>
               <h4 className="font-bold text-slate-400 uppercase text-[10px] tracking-wider mb-2">
                 Purchased Inventory Items Received
@@ -844,14 +1040,29 @@ export const PurchasesModule: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex justify-end pt-2 border-t border-slate-800">
-              <button
-                type="button"
-                onClick={() => setSelectedPurchaseDetails(null)}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold"
-              >
-                Close
-              </button>
+            <div className="flex justify-between items-center pt-2 border-t border-slate-800">
+              {selectedPurchaseDetails.payment_status !== 'paid' && canManagePurchases && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleOpenMarkPaidForSingle(selectedPurchaseDetails);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20"
+                >
+                  <Wallet className="w-3.5 h-3.5" />
+                  <span>Settle & Mark as Paid</span>
+                </button>
+              )}
+
+              <div className="ml-auto">
+                <button
+                  type="button"
+                  onClick={() => setSelectedPurchaseDetails(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </Modal>
@@ -919,6 +1130,135 @@ export const PurchasesModule: React.FC = () => {
               )}
             </div>
           </div>
+        </Modal>
+      )}
+
+      {/* Settle / Mark as Paid Modal (Single or Bulk) */}
+      {isMarkPaidModalOpen && (
+        <Modal
+          isOpen={isMarkPaidModalOpen}
+          onClose={() => setIsMarkPaidModalOpen(false)}
+          title={`Record Outflow Payment: ${purchasesToSettle.length} Purchase Order(s)`}
+          subtitle="Creates real disbursement voucher(s) in Cash Book, deducts supplier payables, and updates Net Cash Position."
+          maxWidth="lg"
+        >
+          <form onSubmit={handleConfirmMarkPaid} className="space-y-4">
+            {/* Purchase orders being settled */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+                Purchases to be Settled
+              </label>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                {purchasesToSettle.map(p => {
+                  const due = Math.max(0, p.total_amount - (p.amount_paid || 0));
+                  return (
+                    <div 
+                      key={p.id}
+                      className="p-2.5 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-between text-xs"
+                    >
+                      <div>
+                        <div className="font-bold text-white font-mono flex items-center gap-2">
+                          <span>{p.invoice_number}</span>
+                          {p.trip_number && (
+                            <span className="text-[10px] text-emerald-400 font-sans">({p.trip_number})</span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          {p.supplier_name} • {formatDate(p.date)}
+                        </div>
+                      </div>
+
+                      <div className="text-right font-mono">
+                        <span className="text-amber-400 font-bold block text-sm">
+                          {formatPKR(due)}
+                        </span>
+                        <span className="text-[10px] text-slate-500">
+                          Total: {formatPKR(p.total_amount)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Total Settlement Amount */}
+            <div className="p-3 bg-emerald-950/40 border border-emerald-500/30 rounded-xl flex items-center justify-between">
+              <span className="text-xs font-bold text-white uppercase flex items-center gap-1.5">
+                <Wallet className="w-4 h-4 text-emerald-400" />
+                <span>Total Cash Outflow to Record:</span>
+              </span>
+              <span className="text-base font-black text-emerald-300 font-mono">
+                {formatPKR(purchasesToSettle.reduce((sum, p) => sum + Math.max(0, p.total_amount - (p.amount_paid || 0)), 0))}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase mb-1 flex items-center gap-1">
+                  <CreditCard className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Payment Method *</span>
+                </label>
+                <select
+                  value={settleMethod}
+                  onChange={(e) => setSettleMethod(e.target.value as PaymentMethod)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                >
+                  <option value="cash">Cash Counter</option>
+                  <option value="bank">Bank Transfer (HBL)</option>
+                  <option value="jazzcash">JazzCash</option>
+                  <option value="easypaisa">EasyPaisa</option>
+                  <option value="cheque">Cheque</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase mb-1 flex items-center gap-1">
+                  <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Payment Date *</span>
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={settleDate}
+                  onChange={(e) => setSettleDate(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Payment Voucher Notes (Optional)
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. Paid in cash at delivery"
+                value={settleNotes}
+                onChange={(e) => setSettleNotes(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 placeholder-slate-600"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                disabled={isSettling}
+                onClick={() => setIsMarkPaidModalOpen(false)}
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isSettling}
+                className="flex items-center gap-1.5 px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-lg shadow-emerald-500/25 transition-all"
+              >
+                {isSettling && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>Confirm Payment & Record Outflow</span>
+              </button>
+            </div>
+          </form>
         </Modal>
       )}
 

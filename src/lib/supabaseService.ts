@@ -237,8 +237,17 @@ export const supabaseService = {
       // 4B. Normalized Purchase Trips
       const normalizedPurchaseTrips: PurchaseTrip[] = (tripRes?.data || []).map((t: any) => ({
         ...t,
+        total_transport_cost: Number(t.total_transport_cost || 0),
+        transport_payment_status: t.transport_payment_status || 'paid',
+        transport_payment_method: t.transport_payment_method || 'cash',
+        transport_amount_paid: t.transport_amount_paid !== undefined ? Number(t.transport_amount_paid) : Number(t.total_transport_cost || 0),
+        transport_payment_date: t.transport_payment_date || t.date,
         items: (t.purchase_trip_items || t.items || []).map((ti: any) => ({
           ...ti,
+          payment_status: ti.payment_status || 'paid',
+          amount_paid: ti.amount_paid !== undefined ? Number(ti.amount_paid) : Number(ti.subtotal || 0),
+          payment_method: ti.payment_method || 'cash',
+          payment_date: ti.payment_date || t.date,
           allocated_freight: Number(ti.allocated_freight || 0),
           landed_cost: Number(ti.landed_cost || 0),
           total_landed_cost: Number(ti.total_landed_cost || 0),
@@ -1062,12 +1071,15 @@ export const supabaseService = {
     const validId = ensureUUID(trip.id);
     trip.id = validId;
 
-    const payload = {
+    const payload: any = {
       id: validId,
       trip_number: trip.trip_number,
       date: trip.date || new Date().toISOString(),
       total_transport_cost: Number(trip.total_transport_cost || 0),
+      transport_payment_status: trip.transport_payment_status || 'paid',
       transport_payment_method: trip.transport_payment_method || 'cash',
+      transport_amount_paid: Number(trip.transport_amount_paid !== undefined ? trip.transport_amount_paid : trip.total_transport_cost || 0),
+      transport_payment_date: trip.transport_payment_date || trip.date || new Date().toISOString(),
       transport_notes: trip.transport_notes || '',
       vehicle_or_driver: trip.vehicle_or_driver || '',
       include_pcs_in_weight_allocation: Boolean(trip.include_pcs_in_weight_allocation),
@@ -1079,7 +1091,15 @@ export const supabaseService = {
     };
 
     try {
-      const { error: tripError } = await supabase.from('purchase_trips').upsert(payload);
+      let { error: tripError } = await supabase.from('purchase_trips').upsert(payload);
+      if (tripError && (tripError.message?.includes('transport_payment') || tripError.code === '42703')) {
+        // Fallback without extended payment columns if not yet migrated
+        delete payload.transport_payment_status;
+        delete payload.transport_amount_paid;
+        delete payload.transport_payment_date;
+        const retry = await supabase.from('purchase_trips').upsert(payload);
+        tripError = retry.error;
+      }
       if (tripError) {
         console.warn('Supabase upsertPurchaseTrip notice (table may need migration):', tripError.message);
         return trip;
@@ -1099,6 +1119,10 @@ export const supabaseService = {
           quantity: Number(item.quantity || 0),
           unit_cost: Number(item.unit_cost || 0),
           subtotal: Number(item.subtotal || 0),
+          payment_status: item.payment_status || 'paid',
+          amount_paid: Number(item.amount_paid !== undefined ? item.amount_paid : item.subtotal || 0),
+          payment_method: item.payment_method || 'cash',
+          payment_date: item.payment_date || trip.date || new Date().toISOString(),
           is_weight_allocated: Boolean(item.is_weight_allocated),
           allocation_percentage: Number(item.allocation_percentage || 0),
           allocated_freight: Number(item.allocated_freight || 0),
@@ -1107,7 +1131,12 @@ export const supabaseService = {
           purchase_id: isValidUUID(item.purchase_id) ? item.purchase_id : null
         }));
 
-        const { error: itemsError } = await supabase.from('purchase_trip_items').insert(itemsToInsert);
+        let { error: itemsError } = await supabase.from('purchase_trip_items').insert(itemsToInsert);
+        if (itemsError && (itemsError.message?.includes('payment') || itemsError.code === '42703')) {
+          const fallbackItems = itemsToInsert.map(({ payment_status, amount_paid, payment_method, payment_date, ...rest }: any) => rest);
+          const retryItems = await supabase.from('purchase_trip_items').insert(fallbackItems);
+          itemsError = retryItems.error;
+        }
         if (itemsError) {
           console.warn('Supabase purchase_trip_items insert warning:', itemsError.message);
         }

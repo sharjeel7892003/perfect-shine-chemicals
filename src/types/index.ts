@@ -361,6 +361,10 @@ export interface PurchaseTripItem {
   quantity: number;
   unit_cost: number;
   subtotal: number;
+  payment_status?: 'paid' | 'partial' | 'unpaid';
+  amount_paid?: number;
+  payment_method?: PaymentMethod;
+  payment_date?: string;
   is_weight_allocated: boolean;
   allocation_percentage: number;
   allocated_freight: number;
@@ -374,7 +378,10 @@ export interface PurchaseTrip {
   trip_number: string; // e.g. "TRIP-260925-1042"
   date: string;
   total_transport_cost: number;
+  transport_payment_status?: 'paid' | 'partial' | 'unpaid';
   transport_payment_method: PaymentMethod;
+  transport_amount_paid?: number;
+  transport_payment_date?: string;
   transport_notes?: string;
   vehicle_or_driver?: string;
   include_pcs_in_weight_allocation?: boolean;
@@ -441,7 +448,7 @@ export interface RecurringExpense {
 
 export interface Payment {
   id: string;
-  related_to: 'sale' | 'purchase' | 'customer_balance' | 'supplier_balance' | 'expense' | 'capital_injection' | 'owner_withdrawal' | 'customer_advance' | 'sales_return_refund';
+  related_to: 'sale' | 'purchase' | 'customer_balance' | 'supplier_balance' | 'expense' | 'capital_injection' | 'owner_withdrawal' | 'customer_advance' | 'sales_return_refund' | 'transport';
   reference_id?: string;
   reference_no?: string;
   customer_id?: string;

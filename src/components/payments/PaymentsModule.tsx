@@ -341,11 +341,12 @@ export const PaymentsModule: React.FC = () => {
     const matchesType = 
       typeFilter === 'all' || 
       (typeFilter === 'inflow' && (p.related_to === 'sale' || p.related_to === 'customer_balance' || p.related_to === 'capital_injection' || p.related_to === 'customer_advance')) ||
-      (typeFilter === 'outflow' && (p.related_to === 'purchase' || p.related_to === 'supplier_balance' || p.related_to === 'expense' || p.related_to === 'owner_withdrawal' || p.related_to === 'sales_return_refund')) ||
+      (typeFilter === 'outflow' && (p.related_to === 'purchase' || p.related_to === 'supplier_balance' || p.related_to === 'expense' || p.related_to === 'owner_withdrawal' || p.related_to === 'sales_return_refund' || p.related_to === 'transport')) ||
       (typeFilter === 'capital' && p.related_to === 'capital_injection') ||
       (typeFilter === 'drawings' && p.related_to === 'owner_withdrawal') ||
       (typeFilter === 'advance' && p.related_to === 'customer_advance') ||
-      (typeFilter === 'expense' && p.related_to === 'expense');
+      (typeFilter === 'expense' && p.related_to === 'expense') ||
+      (typeFilter === 'transport' && p.related_to === 'transport');
 
     return matchesSearch && matchesChannel && matchesType;
   });
@@ -757,6 +758,9 @@ export const PaymentsModule: React.FC = () => {
               <div className="text-[10px] text-slate-400 mt-1.5 flex flex-wrap gap-x-2">
                 <span>Purchases: <strong className="text-slate-300 font-mono">{formatPKR(financialMetrics.purchaseDisbursements)}</strong></span>
                 <span>• Exp: <strong className="text-amber-300 font-mono">{formatPKR(financialMetrics.operatingExpenses)}</strong></span>
+                {financialMetrics.transportDisbursements > 0 && (
+                  <span>• Freight: <strong className="text-orange-400 font-mono">{formatPKR(financialMetrics.transportDisbursements)}</strong></span>
+                )}
                 {financialMetrics.ownerWithdrawals > 0 && (
                   <span>• Draw: <strong className="text-rose-400 font-mono">{formatPKR(financialMetrics.ownerWithdrawals)}</strong></span>
                 )}
@@ -817,11 +821,12 @@ export const PaymentsModule: React.FC = () => {
                 >
                   <option value="all">All Inflow & Outflow</option>
                   <option value="inflow">All Inflow (Sales, Capital, Advances)</option>
-                  <option value="outflow">All Outflow (Suppliers, Expenses, Drawings)</option>
+                  <option value="outflow">All Outflow (Suppliers, Expenses, Drawings, Freight)</option>
                   <option value="capital">Owner Capital Injections (+)</option>
                   <option value="drawings">Owner Withdrawals (-)</option>
                   <option value="advance">Customer Advances (+)</option>
                   <option value="expense">Operating Overheads (-)</option>
+                  <option value="transport">Purchase Trip Freight / Transport (-)</option>
                 </select>
 
                 <select
@@ -865,6 +870,7 @@ export const PaymentsModule: React.FC = () => {
                       const isWithdrawal = p.related_to === 'owner_withdrawal';
                       const isAdvance = p.related_to === 'customer_advance';
                       const isReturnRefund = p.related_to === 'sales_return_refund';
+                      const isTransport = p.related_to === 'transport';
                       const isInflow = p.related_to === 'sale' || p.related_to === 'customer_balance' || isCapital || isAdvance;
                       const isExpense = p.related_to === 'expense';
 
@@ -878,6 +884,8 @@ export const PaymentsModule: React.FC = () => {
                         ? `${p.customer_name || 'Customer'} (Sales Return Cash Refund)`
                         : isExpense 
                         ? `Overhead: ${p.reference_no || 'Expense'}` 
+                        : isTransport
+                        ? `Transporter / Freight (${p.reference_no || 'Trip Transport'})`
                         : (p.customer_name || p.supplier_name || 'Walk-in Retail');
 
                       const badgeVariant = isCapital 
@@ -890,6 +898,8 @@ export const PaymentsModule: React.FC = () => {
                         ? 'rose'
                         : isExpense 
                         ? 'amber' 
+                        : isTransport
+                        ? 'amber'
                         : (isInflow ? 'emerald' : 'rose');
 
                       const badgeText = isCapital 
@@ -902,6 +912,8 @@ export const PaymentsModule: React.FC = () => {
                         ? 'Return Refund (-)'
                         : isExpense 
                         ? 'Expense (-)' 
+                        : isTransport
+                        ? 'Freight (-)'
                         : (isInflow ? 'Receipt (+)' : 'Disbursement (-)');
 
                       return (

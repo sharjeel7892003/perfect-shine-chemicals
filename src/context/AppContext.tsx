@@ -198,6 +198,19 @@ interface AppContextType {
     warningDetails?: string[]; 
     message: string 
   }>;
+  markPurchasesAsPaid: (
+    purchaseIds: string[],
+    paymentMethod: PaymentMethod,
+    paymentDate: string,
+    notes?: string
+  ) => Promise<{ success: boolean; updatedCount: number; totalPaid: number; message: string }>;
+  markTripTransportAsPaid: (
+    tripId: string,
+    paymentMethod: PaymentMethod,
+    paymentDate: string,
+    amount?: number,
+    notes?: string
+  ) => Promise<{ success: boolean; message: string }>;
   
   recordPayment: (paymentData: Omit<Payment, 'id' | 'created_at'>) => Promise<Payment>;
   deletePayment: (paymentId: string) => Promise<void>;
@@ -404,11 +417,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setSuppliers(reconciledSuppliers);
         setSales(cloudData.sales || []);
         setPurchases(cloudData.purchases || []);
-        const syncedTrips = (cloudData as any).purchaseTrips || [];
-        setPurchaseTrips(syncedTrips);
-        if (typeof window !== 'undefined' && syncedTrips.length > 0) {
+        let effectiveTrips = (cloudData as any).purchaseTrips || [];
+        if (effectiveTrips.length === 0 && typeof window !== 'undefined') {
           try {
-            localStorage.setItem('psc_local_purchase_trips', JSON.stringify(syncedTrips));
+            const cached = localStorage.getItem('psc_local_purchase_trips');
+            if (cached) effectiveTrips = JSON.parse(cached);
+          } catch {}
+        }
+        setPurchaseTrips(effectiveTrips);
+        if (typeof window !== 'undefined' && effectiveTrips.length > 0) {
+          try {
+            localStorage.setItem('psc_local_purchase_trips', JSON.stringify(effectiveTrips));
           } catch {}
         }
         let effectivePackingRuns = (cloudData as any).packingRuns || [];
@@ -2696,6 +2715,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const createdPOs: Purchase[] = [];
+    const createdPayments: Payment[] = [];
     const updatedTripItems = [...tripData.items];
 
     for (const [sId, sItems] of itemsBySupplier.entries()) {
@@ -2705,6 +2725,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const poFreight = sItems.reduce((sum, it) => sum + it.allocated_freight, 0);
       const poInvoiceNumber = generateInvoiceNumber('PO');
       const poId = generateId();
+
+      // Calculate total paid across sItems for this supplier
+      const poAmountPaid = sItems.reduce((sum, it) => {
+        if (it.payment_status === 'unpaid') return sum;
+        if (it.payment_status === 'partial') return sum + (Number(it.amount_paid) || 0);
+        // Default or 'paid': full subtotal or amount_paid if explicitly given
+        return sum + (it.amount_paid !== undefined && Number(it.amount_paid) > 0 ? Number(it.amount_paid) : it.subtotal);
+      }, 0);
+
+      const isFullyPaid = poAmountPaid >= poTotal && poTotal > 0;
+      const isPartial = poAmountPaid > 0 && poAmountPaid < poTotal;
+      const poPaymentStatus: 'paid' | 'partial' | 'unpaid' = isFullyPaid ? 'paid' : isPartial ? 'partial' : 'unpaid';
+      const poPaymentMethod = sItems.find(it => it.payment_method)?.payment_method || 'cash';
+      const poPaymentDate = sItems.find(it => it.payment_date)?.payment_date || tripDate;
 
       const purchaseItems: PurchaseItem[] = sItems.map(it => ({
         id: generateId(),
@@ -2737,9 +2771,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         date: tripDate,
         items: purchaseItems,
         total_amount: poTotal,
-        amount_paid: 0,
-        payment_status: 'unpaid',
-        payment_method: 'bank',
+        amount_paid: poAmountPaid,
+        payment_status: poPaymentStatus,
+        payment_method: poPaymentMethod,
         freight_cost: poFreight,
         trip_id: tripId,
         trip_number: tripNumber,
@@ -2750,9 +2784,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const savedPO = await supabaseService.upsertPurchase(po);
       createdPOs.push(savedPO);
 
-      // Update supplier balance
-      if (supp && poTotal > 0) {
-        const nextBal = (supp.current_balance || 0) + poTotal;
+      // Create Payment voucher in Cash Book (payments table) if any amount was paid
+      if (poAmountPaid > 0) {
+        const pay: Payment = {
+          id: generateId(),
+          related_to: 'purchase',
+          reference_id: poId,
+          reference_no: poInvoiceNumber,
+          supplier_id: sId !== 'unknown' ? sId : undefined,
+          supplier_name: supplierName,
+          amount: poAmountPaid,
+          payment_method: poPaymentMethod,
+          notes: `Payment to ${supplierName} for PO ${poInvoiceNumber} (Purchase Trip ${tripNumber})`,
+          date: poPaymentDate,
+          created_at: now,
+        };
+        const savedPay = await supabaseService.upsertPayment(pay);
+        createdPayments.push(savedPay);
+      }
+
+      // Update supplier balance: ONLY unpaid balance increases payable! Fully paid leaves zero payable!
+      const unpaid = Math.max(0, poTotal - poAmountPaid);
+      if (supp && unpaid > 0) {
+        const nextBal = (supp.current_balance || 0) + unpaid;
         const updatedSupp = { ...supp, current_balance: nextBal, updated_at: now };
         await supabaseService.upsertSupplier(updatedSupp);
         setSuppliers(prev => prev.map(s => s.id === supp.id ? updatedSupp : s));
@@ -2828,24 +2882,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setRawMaterials(currentRMs);
     setRawMaterialMovements(prev => [...newMovements, ...prev]);
 
-    // 3. Automatically record Transportation Expense in Cash Book / Expenses
-    if (tripData.total_transport_cost > 0) {
+    // 3. Record Transportation payment in Cash Book / Payments (paid to transporter)
+    // NOTE: Transport cost is already allocated into raw material landed cost for costing (COGS).
+    // It must NOT also be logged as an operating expense in expenses table, or cash/P&L will be double counted.
+    const transportStatus = tripData.transport_payment_status || 'paid';
+    const transportTotal = Number(tripData.total_transport_cost || 0);
+    const transportAmountPaid = transportStatus === 'unpaid'
+      ? 0
+      : (tripData.transport_amount_paid !== undefined ? Number(tripData.transport_amount_paid) : transportTotal);
+
+    if (transportAmountPaid > 0) {
       try {
-        const transportExpense: Expense = {
+        const transportPayment: Payment = {
           id: generateId(),
-          date: tripDate,
-          category: 'Transport',
-          description: `Transportation for Purchase Trip ${tripNumber}${tripData.vehicle_or_driver ? ` (${tripData.vehicle_or_driver})` : ''} - Shared across ${updatedTripItems.length} materials`,
-          amount: tripData.total_transport_cost,
+          related_to: 'transport',
+          reference_id: tripId,
+          reference_no: tripNumber,
+          amount: transportAmountPaid,
           payment_method: tripData.transport_payment_method || 'cash',
-          recorded_by_name: tripData.created_by || 'Purchase Manager',
+          notes: `Transportation freight for Purchase Trip ${tripNumber}${tripData.vehicle_or_driver ? ` (${tripData.vehicle_or_driver})` : ''}`,
+          date: tripData.transport_payment_date || tripDate,
           created_at: now,
         };
-        await supabaseService.upsertExpense(transportExpense);
-        setExpenses(prev => [transportExpense, ...prev]);
-      } catch (expErr) {
-        console.warn('Could not auto-record trip transport expense:', expErr);
+        const savedTransportPay = await supabaseService.upsertPayment(transportPayment);
+        createdPayments.push(savedTransportPay);
+      } catch (payErr) {
+        console.warn('Could not record trip transport payment voucher:', payErr);
       }
+    }
+
+    if (createdPayments.length > 0) {
+      setPayments(prev => [...createdPayments, ...prev]);
     }
 
     // 4. Save the Purchase Trip record
@@ -2853,6 +2920,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...tripData,
       id: tripId,
       trip_number: tripNumber,
+      transport_payment_status: transportStatus,
+      transport_amount_paid: transportAmountPaid,
+      transport_payment_method: tripData.transport_payment_method || 'cash',
+      transport_payment_date: tripData.transport_payment_date || tripDate,
       items: updatedTripItems,
       created_at: now,
     };
@@ -2967,6 +3038,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setExpenses(prev => prev.filter(e => !tripExpenses.some(te => te.id === e.id)));
     }
 
+    // 3B. Delete associated payments for linked POs and trip transport
+    const associatedPayments = payments.filter(p => 
+      (p.reference_id && linkedPOs.some(po => po.id === p.reference_id)) ||
+      (p.reference_no && linkedPOs.some(po => po.invoice_number === p.reference_no)) ||
+      p.reference_id === tripId ||
+      p.reference_no === targetTrip.trip_number ||
+      (p.related_to === 'transport' && (p.reference_id === tripId || p.reference_no === targetTrip.trip_number))
+    );
+    for (const pay of associatedPayments) {
+      try {
+        await supabaseService.deletePayment(pay.id);
+      } catch {}
+    }
+    if (associatedPayments.length > 0) {
+      setPayments(prev => prev.filter(p => !associatedPayments.some(ap => ap.id === p.id)));
+    }
+
     // 4. Delete the trip itself
     await supabaseService.deletePurchaseTrip(tripId);
     setPurchaseTrips(prev => {
@@ -2992,6 +3080,192 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return {
       success: true,
       message: `Purchase trip ${targetTrip.trip_number} successfully deleted and inventory reversed.`
+    };
+  };
+
+  // ==============================================================================
+  // SETTLEMENT / MARK AS PAID (INDIVIDUAL OR BULK)
+  // ==============================================================================
+  const markPurchasesAsPaid = async (
+    purchaseIds: string[],
+    paymentMethod: PaymentMethod,
+    paymentDate: string,
+    notes?: string
+  ): Promise<{ success: boolean; updatedCount: number; totalPaid: number; message: string }> => {
+    if (!purchaseIds || purchaseIds.length === 0) {
+      return { success: false, updatedCount: 0, totalPaid: 0, message: 'No purchases selected.' };
+    }
+
+    const now = new Date().toISOString();
+    const effectiveDate = paymentDate || now;
+    let totalPaid = 0;
+    let updatedCount = 0;
+    const newPayments: Payment[] = [];
+    let updatedPurchases = [...purchases];
+    let updatedSuppliersList = [...suppliers];
+    let updatedTripsList = [...purchaseTrips];
+
+    for (const pId of purchaseIds) {
+      const poIdx = updatedPurchases.findIndex(p => p.id === pId);
+      if (poIdx === -1) continue;
+      const po = updatedPurchases[poIdx];
+
+      const previousPaid = Number(po.amount_paid || 0);
+      const remainingDue = Math.max(0, Number(po.total_amount) - previousPaid);
+
+      if (remainingDue <= 0 && po.payment_status === 'paid') {
+        continue;
+      }
+
+      const paymentToRecord = remainingDue > 0 ? remainingDue : Number(po.total_amount);
+
+      // Create Payment voucher in Cash Book (payments table)
+      const pay: Payment = {
+        id: generateId(),
+        related_to: 'purchase',
+        reference_id: po.id,
+        reference_no: po.invoice_number,
+        supplier_id: po.supplier_id,
+        supplier_name: po.supplier_name,
+        amount: paymentToRecord,
+        payment_method: paymentMethod,
+        notes: notes || `Payment settlement for PO ${po.invoice_number}${po.trip_number ? ` (Trip ${po.trip_number})` : ''}`,
+        date: effectiveDate,
+        created_at: now,
+      };
+
+      const savedPay = await supabaseService.upsertPayment(pay);
+      newPayments.push(savedPay);
+      totalPaid += paymentToRecord;
+      updatedCount++;
+
+      // Update Purchase record
+      const updatedPO: Purchase = {
+        ...po,
+        amount_paid: Number(po.total_amount),
+        payment_status: 'paid',
+        payment_method: paymentMethod,
+      };
+      await supabaseService.upsertPurchase(updatedPO);
+      updatedPurchases[poIdx] = updatedPO;
+
+      // Update supplier balance
+      if (po.supplier_id && remainingDue > 0) {
+        const suppIdx = updatedSuppliersList.findIndex(s => s.id === po.supplier_id);
+        if (suppIdx !== -1) {
+          const supp = updatedSuppliersList[suppIdx];
+          const nextBal = Math.max(0, (supp.current_balance || 0) - remainingDue);
+          const updatedSupp = { ...supp, current_balance: nextBal, updated_at: now };
+          await supabaseService.upsertSupplier(updatedSupp);
+          updatedSuppliersList[suppIdx] = updatedSupp;
+        }
+      }
+
+      // If linked to a purchase trip, update the trip's items payment_status
+      if (po.trip_id) {
+        const tripIdx = updatedTripsList.findIndex(t => t.id === po.trip_id);
+        if (tripIdx !== -1) {
+          const trip = updatedTripsList[tripIdx];
+          const updatedItems = trip.items.map(it => {
+            if (it.purchase_id === po.id || (it.supplier_id === po.supplier_id && it.trip_id === po.trip_id)) {
+              return {
+                ...it,
+                payment_status: 'paid' as const,
+                amount_paid: it.subtotal,
+                payment_method: paymentMethod,
+                payment_date: effectiveDate,
+              };
+            }
+            return it;
+          });
+          const updatedTrip = { ...trip, items: updatedItems };
+          await supabaseService.upsertPurchaseTrip(updatedTrip);
+          updatedTripsList[tripIdx] = updatedTrip;
+        }
+      }
+    }
+
+    if (newPayments.length > 0) {
+      setPayments(prev => [...newPayments, ...prev]);
+      setPurchases(updatedPurchases);
+      setSuppliers(updatedSuppliersList);
+      setPurchaseTrips(updatedTripsList);
+
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('psc_local_purchase_trips', JSON.stringify(updatedTripsList));
+        } catch {}
+      }
+    }
+
+    return {
+      success: true,
+      updatedCount,
+      totalPaid,
+      message: `Successfully marked ${updatedCount} purchase(s) as Paid. Created payment voucher(s) totaling PKR ${totalPaid.toLocaleString()}.`,
+    };
+  };
+
+  const markTripTransportAsPaid = async (
+    tripId: string,
+    paymentMethod: PaymentMethod,
+    paymentDate: string,
+    amount?: number,
+    notes?: string
+  ): Promise<{ success: boolean; message: string }> => {
+    const trip = purchaseTrips.find(t => t.id === tripId);
+    if (!trip) return { success: false, message: 'Trip not found.' };
+
+    const totalFee = Number(trip.total_transport_cost || 0);
+    const previousPaid = Number(trip.transport_amount_paid || 0);
+    const amountToPay = amount !== undefined ? amount : Math.max(0, totalFee - previousPaid);
+    const now = new Date().toISOString();
+    const effectiveDate = paymentDate || now;
+
+    if (amountToPay <= 0 && trip.transport_payment_status === 'paid') {
+      return { success: false, message: 'Transport cost is already fully paid.' };
+    }
+
+    const pay: Payment = {
+      id: generateId(),
+      related_to: 'transport',
+      reference_id: trip.id,
+      reference_no: trip.trip_number,
+      amount: amountToPay,
+      payment_method: paymentMethod,
+      notes: notes || `Transport freight settlement for Trip ${trip.trip_number}${trip.vehicle_or_driver ? ` (${trip.vehicle_or_driver})` : ''}`,
+      date: effectiveDate,
+      created_at: now,
+    };
+
+    const savedPay = await supabaseService.upsertPayment(pay);
+    setPayments(prev => [savedPay, ...prev]);
+
+    const newAmountPaid = previousPaid + amountToPay;
+    const newStatus = newAmountPaid >= totalFee ? 'paid' : 'partial';
+
+    const updatedTrip: PurchaseTrip = {
+      ...trip,
+      transport_payment_status: newStatus,
+      transport_amount_paid: newAmountPaid,
+      transport_payment_method: paymentMethod,
+      transport_payment_date: effectiveDate,
+    };
+
+    await supabaseService.upsertPurchaseTrip(updatedTrip);
+    setPurchaseTrips(prev => {
+      const nextList = prev.map(t => t.id === tripId ? updatedTrip : t);
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('psc_local_purchase_trips', JSON.stringify(nextList));
+        } catch {}
+      }
+      return nextList;
+    });
+
+    return {
+      success: true,
+      message: `Transport fee of PKR ${amountToPay.toLocaleString()} marked as paid via ${paymentMethod}.`,
     };
   };
 
@@ -3624,6 +3898,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         purchaseTrips,
         createPurchaseTrip,
         deletePurchaseTripRecord,
+        markPurchasesAsPaid,
+        markTripTransportAsPaid,
         recordPayment,
         deletePayment,
         recordCapitalInjection,
