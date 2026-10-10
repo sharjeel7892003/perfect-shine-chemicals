@@ -33,6 +33,11 @@ import {
 } from '../types';
 import { generateInvoiceNumber, formatPKR } from '../utils/formatters';
 import { allocateTripFreight, calculateWeightedAverageLandedCost } from '../utils/freightAllocation';
+import { 
+  resolveNextRawMaterialCost, 
+  findLatestPurchaseRate, 
+  ACTIVE_RAW_MATERIAL_COSTING_METHOD 
+} from '../utils/costingPolicy';
 import { getNextBatchNumberForProduct, getNextPackingRunNumber } from '../utils/batchNumber';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { supabaseService } from '../lib/supabaseService';
@@ -2421,17 +2426,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const nextStk = prevStk + Number(item.quantity);
           const itemLandedCost = item.landed_cost || (item.quantity > 0 ? Number((Number(item.unit_cost) + (Number(item.allocated_freight || 0) / Number(item.quantity))).toFixed(2)) : item.unit_cost);
           
-          const newAvgCost = calculateWeightedAverageLandedCost(
-            prevStk,
-            Number(rm.cost_per_unit || 0),
-            Number(item.quantity),
-            itemLandedCost
-          );
+          const nextCost = resolveNextRawMaterialCost({
+            currentStock: prevStk,
+            currentCostPerUnit: Number(rm.cost_per_unit || 0),
+            incomingQuantity: Number(item.quantity),
+            incomingLandedCost: itemLandedCost,
+            incomingPurchaseDate: savedPurchase.date,
+            existingPurchases: purchases,
+            rawMaterialId: rm.id,
+          });
 
           const updatedRm = { 
             ...rm, 
             current_stock: nextStk, 
-            cost_per_unit: newAvgCost, 
+            cost_per_unit: nextCost, 
             updated_at: new Date().toISOString() 
           };
           updatedRawMaterials[rmIdx] = updatedRm;
@@ -2569,7 +2577,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (rm) {
           const prevStk = Number(rm.current_stock);
           const nextStk = Math.max(0, prevStk - Number(item.quantity));
-          const updatedRm = { ...rm, current_stock: nextStk, updated_at: now };
+          const remainingPurchases = purchases.filter(p => p.id !== purchaseId);
+          const latestRate = ACTIVE_RAW_MATERIAL_COSTING_METHOD === 'latest_purchase_price'
+            ? findLatestPurchaseRate(rm.id, remainingPurchases)
+            : null;
+          const updatedCost = latestRate !== null ? latestRate : rm.cost_per_unit;
+
+          const updatedRm = { ...rm, current_stock: nextStk, cost_per_unit: updatedCost, updated_at: now };
           await supabaseService.upsertRawMaterial(updatedRm);
 
           const rmMvt: RawMaterialMovement = {
@@ -2772,17 +2786,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const batchLandedRate = totalBatchQty > 0 ? (totalBatchLandedValuation / totalBatchQty) : prevRate;
 
         const nextStk = prevStk + totalBatchQty;
-        const newWeightedRate = calculateWeightedAverageLandedCost(
-          prevStk,
-          prevRate,
-          totalBatchQty,
-          batchLandedRate
-        );
+        const nextCost = resolveNextRawMaterialCost({
+          currentStock: prevStk,
+          currentCostPerUnit: prevRate,
+          incomingQuantity: totalBatchQty,
+          incomingLandedCost: batchLandedRate,
+          incomingPurchaseDate: tripDate,
+          existingPurchases: purchases,
+          rawMaterialId: rm.id,
+        });
 
         const updatedRm: RawMaterial = {
           ...rm,
           current_stock: nextStk,
-          cost_per_unit: newWeightedRate,
+          cost_per_unit: nextCost,
           updated_at: now,
         };
         currentRMs[rmIdx] = updatedRm;
@@ -3374,7 +3391,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       quotNumber = `QT-${year}-${String(count).padStart(4, '0')}`;
     }
 
+    const isStandardUnitPrice = quotationData.quotation_type === 'standard_unit_price';
+
     const items: QuotationLineItem[] = (quotationData.items || []).map(item => {
+      if (isStandardUnitPrice) {
+        const bottlesPerBox = Number(item.bottles_per_box || 0);
+        const unitRate = Number(item.unit_rate !== undefined ? item.unit_rate : (item.quoted_price_per_unit || 0));
+        const boxRate = bottlesPerBox > 0 ? Number((bottlesPerBox * unitRate).toFixed(2)) : 0;
+        const qtyBottles = Number(item.quantity_bottles || 0);
+        const qtyBoxes = bottlesPerBox > 0 ? Number((qtyBottles / bottlesPerBox).toFixed(2)) : Number(item.quantity_boxes || 0);
+        const lineTotal = Number((qtyBottles * unitRate).toFixed(2));
+
+        return {
+          ...item,
+          id: item.id || generateId(),
+          product_cost: 0,
+          bottle_cost: 0,
+          cap_cost: 0,
+          label_cost: 0,
+          labour_cost: 0,
+          carton_cost: 0,
+          total_cost_per_unit: unitRate,
+          quoted_price_per_unit: unitRate,
+          bottles_per_box: bottlesPerBox,
+          unit_rate: unitRate,
+          box_rate: boxRate,
+          quantity_bottles: qtyBottles,
+          quantity_boxes: qtyBoxes,
+          line_total: lineTotal,
+        };
+      }
+
       const pCost = Number(item.product_cost || 0);
       const bCost = Number(item.bottle_cost || 0);
       const capCost = Number(item.cap_cost || 0);
@@ -3401,6 +3448,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...quotationData,
       id: validId,
       quotation_number: quotNumber,
+      quotation_type: quotationData.quotation_type || 'private_label',
       items,
       date: quotationData.date || new Date().toISOString().split('T')[0],
       validity_period: quotationData.validity_period || 'Valid for 15 days',
@@ -3472,6 +3520,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const duplicatedData: Omit<Quotation, 'id' | 'created_at'> = {
       ...original,
       quotation_number: newNumber,
+      quotation_type: original.quotation_type || 'private_label',
       date: new Date().toISOString().split('T')[0],
       status: 'pending',
       items: original.items.map(item => ({

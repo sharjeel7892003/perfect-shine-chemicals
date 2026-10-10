@@ -1650,7 +1650,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
             <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
               <span className="text-xs font-semibold text-teal-400 uppercase">Raw Materials & Packaging</span>
               <p className="text-2xl font-black text-teal-400 mt-2 font-mono">{formatPKR(totalRawValuation)}</p>
-              <p className="text-xs text-slate-500 mt-1">Chemicals & pcs-based packaging</p>
+              <p className="text-xs text-slate-500 mt-1">Chemicals & packaging (valued at latest purchase price)</p>
             </div>
 
             <div className="p-5 rounded-2xl bg-slate-900 border border-slate-800">
@@ -1715,7 +1715,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="text-base font-bold text-white">Raw Materials & Packaging Asset Valuation</h3>
-                <p className="text-xs text-slate-400 mt-0.5">Chemicals (kg/liter) and packaging materials like bottles, caps, and cartons (pcs)</p>
+                <p className="text-xs text-slate-400 mt-0.5">Chemicals (kg/liter) and packaging materials like bottles, caps, and cartons (pcs) • <span className="text-teal-400 font-medium">Valued at latest purchase price</span></p>
               </div>
               <span className="text-sm font-black font-mono text-teal-400 bg-teal-500/10 border border-teal-500/20 px-3 py-1 rounded-xl">
                 Valuation: {formatPKR(totalRawValuation)}
@@ -1729,7 +1729,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
                     <th className="py-3 px-3">Category</th>
                     <th className="py-3 px-3 text-center">Unit</th>
                     <th className="py-3 px-3 text-right">In-Stock Qty</th>
-                    <th className="py-3 px-3 text-right">Cost Rate (PKR)</th>
+                    <th className="py-3 px-3 text-right">Cost Rate (Latest Price)</th>
                     <th className="py-3 px-3 text-right">Total Asset Value</th>
                     <th className="py-3 px-3 text-center">Stock Status</th>
                   </tr>

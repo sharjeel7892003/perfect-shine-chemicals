@@ -480,12 +480,13 @@ export interface DeletionAuditLog {
 // 5. PRICE QUOTATIONS & PROPOSALS ENTITY
 // ==============================================================================
 export type QuotationStatus = 'pending' | 'accepted' | 'rejected' | 'expired';
+export type QuotationType = 'private_label' | 'standard_unit_price';
 
 export interface QuotationLineItem {
   id: string;
   product_name: string; // Product / formula name (e.g. "Car Wash Shampoo")
   size?: string; // Pack size description (e.g. "500ml Bottle", "275ml Bottle", "1 Liter")
-  // Fully manual cost breakdown fields (all uncoupled from BOM/system)
+  // Fully manual cost breakdown fields (Private Label)
   product_cost: number; // Bulk chemical/formulation cost per unit
   bottle_cost: number; // Bottle container cost
   cap_cost: number; // Cap / trigger / pump cost
@@ -497,11 +498,20 @@ export interface QuotationLineItem {
   quoted_price_per_unit: number; // Final selling price quoted to customer
   moq?: string; // Optional line-specific MOQ
   notes?: string;
+
+  // Dedicated Standard Unit Price Quotation fields:
+  bottles_per_box?: number; // Manually entered bottles per box (e.g. 6, 12)
+  unit_rate?: number; // Manually entered PKR per bottle (e.g. 110.50)
+  box_rate?: number; // bottles_per_box * unit_rate (e.g. 660)
+  quantity_bottles?: number; // Total bottles (e.g. 200)
+  quantity_boxes?: number; // Equivalent boxes (e.g. 33.33)
+  line_total?: number; // quantity_bottles * unit_rate (e.g. 22,000)
 }
 
 export interface Quotation {
   id: string;
   quotation_number: string; // e.g. "QT-2026-0001"
+  quotation_type?: QuotationType; // 'private_label' | 'standard_unit_price'
   customer_id?: string; // Optional if existing customer selected
   customer_name: string; // Customer or prospect person name
   company_name?: string; // Company / Brand name

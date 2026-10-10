@@ -397,7 +397,7 @@ export const RawMaterialPurchaseReportView: React.FC<RawMaterialPurchaseReportVi
       ]);
       exportToCSV(`PSC_RM_Vendor_Summary_${materialLabel}_${dateLabel}`, headers, rows);
     } else if (activeSubTab === 'materials_overview') {
-      const headers = ['Chemical / Raw Material', 'Unit', 'Purchases Count', 'Total Qty Procured', 'Total Spent (PKR)', 'Weighted Avg Price (PKR)', 'Lowest Price (PKR)', 'Lowest Vendor', 'Lowest Date', 'Highest Price (PKR)', 'Highest Vendor', 'Highest Date', 'Current Tracked Rate (PKR)'];
+      const headers = ['Chemical / Raw Material', 'Unit', 'Purchases Count', 'Total Qty Procured', 'Total Spent (PKR)', 'Historical Weighted Avg Price (PKR)', 'Lowest Price (PKR)', 'Lowest Vendor', 'Lowest Date', 'Highest Price (PKR)', 'Highest Vendor', 'Highest Date', 'Active Master Rate (Latest Purchase Price) (PKR)'];
       const rows = materialsComparativeSummary.map(m => [
         m.materialName,
         m.unit,
@@ -652,7 +652,7 @@ export const RawMaterialPurchaseReportView: React.FC<RawMaterialPurchaseReportVi
                 </span>
               </div>
               <div>
-                <span className="text-[10px] uppercase font-bold text-slate-400 block">Active Master Rate</span>
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">Active Master Rate (Latest Price)</span>
                 <span className="text-base font-black text-emerald-400 font-mono">
                   {formatPKR(materialAnalytics.currentCost)} / {materialAnalytics.commonUnit}
                 </span>
@@ -674,12 +674,12 @@ export const RawMaterialPurchaseReportView: React.FC<RawMaterialPurchaseReportVi
 
             {/* 2. Weighted Average Price */}
             <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Weighted Average Price Paid</span>
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Historical Weighted Avg Paid</span>
               <p className="text-xl font-black text-emerald-400 mt-1.5 font-mono">
                 {formatPKR(materialAnalytics.weightedAveragePrice)} <span className="text-xs font-normal text-slate-400">/{materialAnalytics.commonUnit}</span>
               </p>
               <p className="text-[11px] text-slate-400 mt-1">
-                Based on exact volume-weighted formula
+                Volume-weighted average from purchase history
               </p>
             </div>
 
@@ -1003,10 +1003,10 @@ export const RawMaterialPurchaseReportView: React.FC<RawMaterialPurchaseReportVi
                   <th className="py-2.5 px-3 text-center">Orders</th>
                   <th className="py-2.5 px-3 text-right">Total Volume</th>
                   <th className="py-2.5 px-3 text-right">Total Spend</th>
-                  <th className="py-2.5 px-3 text-right">Weighted Avg Price</th>
+                  <th className="py-2.5 px-3 text-right">Weighted Avg Paid (Historical)</th>
                   <th className="py-2.5 px-3 text-right">Lowest Paid</th>
                   <th className="py-2.5 px-3 text-right">Highest Paid</th>
-                  <th className="py-2.5 px-3 text-right">Current Tracked Rate</th>
+                  <th className="py-2.5 px-3 text-right">Active Master Rate (Latest Price)</th>
                   <th className="py-2.5 px-3 text-center">Actions</th>
                 </tr>
               </thead>

@@ -110,4 +110,33 @@ export const formatQuantity = (
   return unit ? `${formatted} ${unit}` : formatted;
 };
 
+/**
+ * Format box quantity breakdown (e.g. "33 boxes + 2 bottles" or "20 boxes")
+ */
+export const formatBoxBreakdown = (
+  totalBottles: number | null | undefined,
+  bottlesPerBox: number | null | undefined
+): string => {
+  const btls = Math.max(0, Math.floor(Number(totalBottles || 0)));
+  const bpb = Math.max(0, Math.floor(Number(bottlesPerBox || 0)));
+
+  if (!bpb || bpb <= 0) {
+    return btls > 0 ? `${btls} bottle${btls === 1 ? '' : 's'}` : '0';
+  }
+  if (!btls || btls <= 0) {
+    return '0 boxes';
+  }
+
+  const fullBoxes = Math.floor(btls / bpb);
+  const remainderBottles = btls % bpb;
+
+  if (remainderBottles === 0) {
+    return `${fullBoxes} box${fullBoxes === 1 ? '' : 'es'}`;
+  }
+  if (fullBoxes === 0) {
+    return `${remainderBottles} bottle${remainderBottles === 1 ? '' : 's'}`;
+  }
+  return `${fullBoxes} box${fullBoxes === 1 ? '' : 'es'} + ${remainderBottles} bottle${remainderBottles === 1 ? '' : 's'}`;
+};
+
 
