@@ -165,9 +165,6 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDel
               <p className="text-xs text-slate-600 mt-0.5">
                 Date: {formatDate(sale.date)}
               </p>
-              <p className="text-xs text-slate-700 font-medium">
-                Issued By: <span className="font-semibold text-slate-900">{getIssuedByName()}</span>
-              </p>
             </div>
           </div>
 

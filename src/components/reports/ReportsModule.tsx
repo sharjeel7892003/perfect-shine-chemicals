@@ -22,7 +22,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
-  FlaskConical
+  FlaskConical,
+  Building2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -40,8 +41,10 @@ import {
 } from '../../utils/financialEngine';
 import { ProductionReportView } from './ProductionReportView';
 import { RawMaterialPurchaseReportView } from './RawMaterialPurchaseReportView';
+import { CommissionReportView } from './CommissionReportView';
+import { calculateMonthlyCommissionSummary } from '../../utils/commissionEngine';
 
-export type ReportType = 'sales' | 'purchases' | 'rm_purchases' | 'profit' | 'production' | 'receivables' | 'payables' | 'valuation';
+export type ReportType = 'sales' | 'purchases' | 'rm_purchases' | 'profit' | 'commission' | 'production' | 'receivables' | 'payables' | 'valuation';
 
 interface ReportsModuleProps {
   initialReport?: ReportType;
@@ -59,7 +62,10 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
     expenses,
     productionBatches,
     rawMaterials,
-    salesReturns = []
+    salesReturns = [],
+    salespersons = [],
+    monthlyCommissionClosures = [],
+    commissionPayments = []
   } = useApp();
   const { isOwner, allUsers } = useAuth();
 
@@ -365,8 +371,37 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
   });
   const sortedExpenseCategories = Object.values(expensesByCategoryMap).sort((a, b) => b.amount - a.amount);
 
-  // NET PROFIT = Gross Profit - Operating Expenses
-  const netProfit = estimatedGrossProfit - totalOperatingExpenses;
+  // Calculate accrued sales commission for the timeframe
+  const uniqueMonthsInPeriod = Array.from(new Set([
+    ...filteredSales.map(s => s.date.slice(0, 7)),
+    ...filteredOperatingExpenses.map(e => e.date.slice(0, 7))
+  ])).filter(Boolean);
+
+  let totalSalesCommissionExpense = 0;
+  uniqueMonthsInPeriod.forEach(mKey => {
+    const closedSnapshot = monthlyCommissionClosures.find(c => c.month === mKey && c.is_closed);
+    if (closedSnapshot) {
+      totalSalesCommissionExpense += Number(closedSnapshot.total_commission || 0);
+    } else {
+      const mSummary = calculateMonthlyCommissionSummary({
+        monthKey: mKey,
+        sales,
+        salesReturns,
+        expenses,
+        salespersons,
+        commissionPayments,
+        closure: null,
+        products,
+        rawMaterials,
+        includeDepreciation: false
+      });
+      totalSalesCommissionExpense += Number(mSummary.total_commission || 0);
+    }
+  });
+  totalSalesCommissionExpense = Number(totalSalesCommissionExpense.toFixed(2));
+
+  // NET PROFIT = Gross Profit - Operating Expenses - Accrued Sales Commission
+  const netProfit = Number((estimatedGrossProfit - totalOperatingExpenses - totalSalesCommissionExpense).toFixed(2));
   const netMarginPercent = profitRevenue > 0 ? ((netProfit / profitRevenue) * 100).toFixed(1) : '0';
 
 
@@ -709,6 +744,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
       case 'purchases': return 'Purchases & Procurement Report';
       case 'rm_purchases': return 'Raw Material Purchase History & Procurement Report';
       case 'profit': return 'Profit & Loss (P&L) Statement';
+      case 'commission': return 'Sales Commission & Net Profit Payout Report';
       case 'production':
         if (productionSubView === 'period') return `Production Period Summary (${periodGrouping.toUpperCase()})`;
         if (productionSubView === 'raw_materials') return 'Raw Material Consumption Audit Report';
@@ -803,6 +839,21 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
           <span>Profit & Loss (P&L)</span>
         </button>
 
+        {isOwner && (
+          <button
+            onClick={() => setActiveReport('commission')}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+              activeReport === 'commission' ? 'bg-indigo-500 text-white shadow-md' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <Users className="w-4 h-4 text-indigo-400" />
+            <span>Sales Commission</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[9px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-bold">
+              Payouts
+            </span>
+          </button>
+        )}
+
         <button
           onClick={() => setActiveReport('production')}
           className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
@@ -829,7 +880,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
             activeReport === 'payables' ? 'bg-emerald-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
           }`}
         >
-          <Building2Icon className="w-4 h-4" />
+          <Building2 className="w-4 h-4" />
           <span>Outstanding Payables</span>
         </button>
 
@@ -1280,56 +1331,63 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
       {activeReport === 'profit' && (
         <div className="space-y-6">
           {/* Executive P&L KPI Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
             {/* 1. Revenue */}
             <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">1. Net Revenue</span>
-              <p className="text-xl font-black text-white mt-1.5 font-mono">{formatPKR(profitRevenue)}</p>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                {returnRevenue > 0 ? `Gross ${formatPKR(grossBilledSales)} (-${formatPKR(returnRevenue)} returns)` : `${filteredSales.length} Sales Invoices`}
+              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">1. Net Revenue</span>
+              <p className="text-lg font-black text-white mt-1 font-mono">{formatPKR(profitRevenue)}</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                {returnRevenue > 0 ? `Gross ${formatPKR(grossBilledSales)} (-${formatPKR(returnRevenue)} ret)` : `${filteredSales.length} Invoices`}
               </p>
             </div>
 
             {/* 2. COGS */}
             <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
-              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">2. Less: COGS (Net)</span>
-              <p className="text-xl font-black text-slate-300 mt-1.5 font-mono">- {formatPKR(profitCOGS)}</p>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                {returnCOGS > 0 ? `Gross cost -${formatPKR(grossCOGS)} (+${formatPKR(returnCOGS)} restocked)` : 'Raw chemicals & bottles'}
+              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">2. Less: COGS</span>
+              <p className="text-lg font-black text-slate-300 mt-1 font-mono">- {formatPKR(profitCOGS)}</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                {returnCOGS > 0 ? `Cost -${formatPKR(grossCOGS)} (+${formatPKR(returnCOGS)})` : 'Raw materials & packaging'}
               </p>
             </div>
 
             {/* 3. Gross Profit */}
             <div className="p-4 rounded-2xl bg-slate-900 border border-emerald-500/30">
-              <span className="text-[11px] font-semibold text-emerald-400 uppercase tracking-wider">3. Gross Profit</span>
-              <p className="text-xl font-black text-emerald-400 mt-1.5 font-mono">{formatPKR(estimatedGrossProfit)}</p>
-              <p className="text-[11px] text-emerald-300/80 mt-0.5">Margin: <strong>{grossMarginPercent}%</strong></p>
+              <span className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider">3. Gross Profit</span>
+              <p className="text-lg font-black text-emerald-400 mt-1 font-mono">{formatPKR(estimatedGrossProfit)}</p>
+              <p className="text-[10px] text-emerald-300/80 mt-0.5">Margin: <strong>{grossMarginPercent}%</strong></p>
             </div>
 
             {/* 4. Operating Expenses */}
             <div className="p-4 rounded-2xl bg-slate-900 border border-rose-500/30">
-              <span className="text-[11px] font-semibold text-rose-400 uppercase tracking-wider">4. Less: Overheads</span>
-              <p className="text-xl font-black text-rose-400 mt-1.5 font-mono">- {formatPKR(totalOperatingExpenses)}</p>
-              <p className="text-[11px] text-rose-300/80 mt-0.5">{filteredOperatingExpenses.length} Expense items</p>
+              <span className="text-[10px] font-semibold text-rose-400 uppercase tracking-wider">4. Less: Overheads</span>
+              <p className="text-lg font-black text-rose-400 mt-1 font-mono">- {formatPKR(totalOperatingExpenses)}</p>
+              <p className="text-[10px] text-rose-300/80 mt-0.5">{filteredOperatingExpenses.length} Expense items</p>
             </div>
 
-            {/* 5. Net Profit */}
+            {/* 5. Sales Commission (Accrued) */}
+            <div className="p-4 rounded-2xl bg-slate-900 border border-amber-500/30">
+              <span className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider">5. Less: Commission</span>
+              <p className="text-lg font-black text-amber-400 mt-1 font-mono">- {formatPKR(totalSalesCommissionExpense)}</p>
+              <p className="text-[10px] text-amber-300/80 mt-0.5">Accrued team payouts</p>
+            </div>
+
+            {/* 6. Net Profit */}
             <div className={`p-4 rounded-2xl border ${
               netProfit >= 0 
                 ? 'bg-gradient-to-br from-emerald-950/80 to-slate-900 border-emerald-500/40' 
                 : 'bg-gradient-to-br from-rose-950/80 to-slate-900 border-rose-500/40'
             }`}>
-              <span className={`text-[11px] font-bold uppercase tracking-wider ${
+              <span className={`text-[10px] font-bold uppercase tracking-wider ${
                 netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'
               }`}>
-                5. Net Profit (Actual)
+                6. Net Profit (Owner)
               </span>
-              <p className={`text-xl font-black mt-1.5 font-mono ${
+              <p className={`text-lg font-black mt-1 font-mono ${
                 netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'
               }`}>
                 {formatPKR(netProfit)}
               </p>
-              <p className="text-[11px] text-slate-300 mt-0.5">
+              <p className="text-[10px] text-slate-300 mt-0.5">
                 Net Margin: <strong>{netMarginPercent}%</strong>
               </p>
             </div>
@@ -1441,6 +1499,18 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
                 )}
               </div>
 
+              {/* SECTION D: ACCRUED SALES COMMISSION */}
+              <div className="space-y-1.5 pt-2">
+                <div className="flex items-center justify-between font-bold text-white uppercase tracking-wider text-[11px] bg-slate-800/60 p-2.5 rounded-xl">
+                  <span>D. Sales Commission (Accrued Payout Expense)</span>
+                  <span className="font-mono text-amber-400 font-black">- {formatPKR(totalSalesCommissionExpense)}</span>
+                </div>
+                <div className="px-4 py-2 flex items-center justify-between text-slate-300">
+                  <span className="pl-3">• Earned by sales team after overhead coverage (accrual for invoices in period)</span>
+                  <span className="font-mono text-amber-400">- {formatPKR(totalSalesCommissionExpense)}</span>
+                </div>
+              </div>
+
               {/* NET PROFIT FINAL TOTAL STATEMENT BANNER */}
               <div className={`p-5 rounded-2xl border flex items-center justify-between mt-6 ${
                 netProfit >= 0 
@@ -1518,6 +1588,11 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
             </div>
           </div>
         </div>
+      )}
+
+      {/* ================= REPORT: SALES COMMISSION REPORT ================= */}
+      {activeReport === 'commission' && isOwner && (
+        <CommissionReportView />
       )}
 
       {/* ================= REPORT: PRODUCTION BATCHES ================= */}

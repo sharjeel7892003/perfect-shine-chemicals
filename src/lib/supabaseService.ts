@@ -20,7 +20,10 @@ import {
   SalesReturn,
   SalesReturnItem,
   PackingRun,
-  Quotation
+  Quotation,
+  Salesperson,
+  MonthlyCommissionClosure,
+  CommissionPayment
 } from '../types';
 import { ensureUUID, isValidUUID } from '../utils/uuid';
 
@@ -59,7 +62,10 @@ export const supabaseService = {
         tripRes,
         returnsRes,
         packingRes,
-        quotRes
+        quotRes,
+        salespersonsRes,
+        closuresRes,
+        commPayRes
       ] = await Promise.all([
         supabase.from('products').select('*').order('created_at', { ascending: false }),
         supabase.from('customers').select('*').order('created_at', { ascending: false }),
@@ -79,7 +85,10 @@ export const supabaseService = {
         Promise.resolve(supabase.from('purchase_trips').select('*, purchase_trip_items(*)').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
         Promise.resolve(supabase.from('sales_returns').select('*, sales_return_items(*)').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
         Promise.resolve(supabase.from('packing_runs').select('*').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
-        Promise.resolve(supabase.from('quotations').select('*').order('created_at', { ascending: false })).catch(() => ({ data: [], error: null } as any))
+        Promise.resolve(supabase.from('quotations').select('*').order('created_at', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
+        Promise.resolve(supabase.from('salespersons').select('*').order('name', { ascending: true })).catch(() => ({ data: [], error: null } as any)),
+        Promise.resolve(supabase.from('monthly_commission_closures').select('*').order('month', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
+        Promise.resolve(supabase.from('commission_payments').select('*').order('payment_date', { ascending: false })).catch(() => ({ data: [], error: null } as any))
       ]);
 
 
@@ -199,6 +208,15 @@ export const supabaseService = {
           };
         });
 
+        const spMap = new Map<string, string>();
+        ((salespersonsRes?.data || []) as any[]).forEach(sp => {
+          if (sp.id && sp.name) spMap.set(sp.id, sp.name);
+        });
+
+        const salespersonName = s.salesperson_id
+          ? (spMap.get(s.salesperson_id) || profMap.get(s.salesperson_id) || 'Staff')
+          : 'Staff';
+
         return {
           ...s,
           invoice_type,
@@ -209,7 +227,7 @@ export const supabaseService = {
           labour_total_amount,
           advance_received_date,
           items: enrichedItems,
-          salesperson_name: s.salesperson_id ? (profMap.get(s.salesperson_id) || 'Staff') : 'Staff'
+          salesperson_name: salespersonName
         };
       });
 
@@ -354,6 +372,9 @@ export const supabaseService = {
         purchaseTrips: normalizedPurchaseTrips,
         packingRuns: ((packingRes?.data || []) as PackingRun[]),
         quotations: ((quotRes?.data || []) as Quotation[]),
+        salespersons: ((salespersonsRes?.data || []) as Salesperson[]),
+        monthlyCommissionClosures: ((closuresRes?.data || []) as MonthlyCommissionClosure[]),
+        commissionPayments: ((commPayRes?.data || []) as CommissionPayment[]),
       };
     } catch (err: any) {
       console.error('Failed to fetch from Supabase:', err);
@@ -787,7 +808,7 @@ export const supabaseService = {
       amount_paid: Number(sale.amount_paid || 0),
       payment_status: sale.payment_status || 'unpaid',
       payment_method: sale.payment_method || 'cash',
-      salesperson_id: isValidUUID(sale.salesperson_id) ? sale.salesperson_id : null,
+      salesperson_id: sale.salesperson_id && sale.salesperson_id !== 'none' ? sale.salesperson_id : null,
       notes: notesPayload
     };
 
@@ -1633,5 +1654,135 @@ export const supabaseService = {
     } catch (e) {
       console.warn('Failed to delete quotation from cloud:', e);
     }
+  },
+
+  // ============================================================================
+  // SALES COMMISSION SYSTEM: SALESPERSONS, CLOSURES & COMMISSION PAYMENTS
+  // ============================================================================
+  async upsertSalesperson(salesperson: Salesperson): Promise<Salesperson> {
+    if (!isSupabaseConfigured || !supabase) return salesperson;
+    try {
+      assertOnline();
+      const payload = {
+        id: salesperson.id,
+        name: salesperson.name,
+        commission_rate: Number(salesperson.commission_rate ?? 10.0),
+        is_active: Boolean(salesperson.is_active),
+        updated_at: new Date().toISOString()
+      };
+      const { data, error } = await supabase.from('salespersons').upsert(payload).select().single();
+      if (error) {
+        console.warn('Supabase upsertSalesperson notice:', error.message);
+      } else if (data) {
+        return data as Salesperson;
+      }
+    } catch (e) {
+      console.warn('Local fallback active for salespersons:', e);
+    }
+    return salesperson;
+  },
+
+  async deleteSalesperson(id: string): Promise<void> {
+    if (!isSupabaseConfigured || !supabase) return;
+    try {
+      assertOnline();
+      await supabase.from('salespersons').delete().eq('id', id);
+    } catch (e) {
+      console.warn('Failed to delete salesperson from cloud:', e);
+    }
+  },
+
+  async upsertMonthlyCommissionClosure(closure: MonthlyCommissionClosure): Promise<MonthlyCommissionClosure> {
+    if (!isSupabaseConfigured || !supabase) return closure;
+    try {
+      assertOnline();
+      const payload = {
+        month: closure.month,
+        is_closed: closure.is_closed,
+        closed_at: closure.closed_at || new Date().toISOString(),
+        closed_by: closure.closed_by || null,
+        closed_by_name: closure.closed_by_name || null,
+        total_gross_profit: Number(closure.total_gross_profit || 0),
+        total_expenses: Number(closure.total_expenses || 0),
+        coverage_factor: Number(closure.coverage_factor || 0),
+        total_commission: Number(closure.total_commission || 0),
+        owner_remaining_profit: Number(closure.owner_remaining_profit || 0),
+        include_depreciation: Boolean(closure.include_depreciation),
+        snapshots: closure.snapshots || [],
+        notes: closure.notes || null,
+        updated_at: new Date().toISOString()
+      };
+      const { data, error } = await supabase.from('monthly_commission_closures').upsert(payload).select().single();
+      if (error) {
+        console.warn('Supabase upsertMonthlyCommissionClosure notice:', error.message);
+      } else if (data) {
+        return data as MonthlyCommissionClosure;
+      }
+    } catch (e) {
+      console.warn('Local fallback active for commission closure:', e);
+    }
+    return closure;
+  },
+
+  async deleteMonthlyCommissionClosure(month: string): Promise<void> {
+    if (!isSupabaseConfigured || !supabase) return;
+    try {
+      assertOnline();
+      await supabase.from('monthly_commission_closures').delete().eq('month', month);
+    } catch (e) {
+      console.warn('Failed to delete commission closure from cloud:', e);
+    }
+  },
+
+  async upsertCommissionPayment(payment: CommissionPayment): Promise<CommissionPayment> {
+    if (!isSupabaseConfigured || !supabase) return payment;
+    try {
+      assertOnline();
+      const payload = {
+        id: payment.id,
+        salesperson_id: payment.salesperson_id,
+        salesperson_name: payment.salesperson_name,
+        month: payment.month,
+        amount: Number(payment.amount || 0),
+        payment_method: payment.payment_method || 'cash',
+        payment_date: payment.payment_date,
+        payment_id: payment.payment_id || null,
+        notes: payment.notes || null,
+        recorded_by: payment.recorded_by || null,
+        recorded_by_name: payment.recorded_by_name || null
+      };
+      const { data, error } = await supabase.from('commission_payments').upsert(payload).select().single();
+      if (error) {
+        console.warn('Supabase upsertCommissionPayment notice:', error.message);
+      } else if (data) {
+        return data as CommissionPayment;
+      }
+    } catch (e) {
+      console.warn('Local fallback active for commission payment:', e);
+    }
+    return payment;
+  },
+
+  async deleteCommissionPayment(id: string): Promise<void> {
+    if (!isSupabaseConfigured || !supabase) return;
+    try {
+      assertOnline();
+      await supabase.from('commission_payments').delete().eq('id', id);
+    } catch (e) {
+      console.warn('Failed to delete commission payment from cloud:', e);
+    }
+  },
+
+  async updateSaleSalesperson(saleId: string, salespersonId: string | null): Promise<void> {
+    if (!isSupabaseConfigured || !supabase) return;
+    try {
+      assertOnline();
+      await supabase.from('sales').update({
+        salesperson_id: salespersonId && salespersonId !== 'none' ? salespersonId : null
+      }).eq('id', saleId);
+    } catch (e) {
+      console.warn('Failed to update salesperson on sale:', e);
+    }
   }
 };
+

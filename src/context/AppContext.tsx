@@ -29,7 +29,10 @@ import {
   PackagingItem,
   Quotation,
   QuotationLineItem,
-  QuotationStatus
+  QuotationStatus,
+  Salesperson,
+  MonthlyCommissionClosure,
+  CommissionPayment
 } from '../types';
 import { generateInvoiceNumber, formatPKR } from '../utils/formatters';
 import { allocateTripFreight, calculateWeightedAverageLandedCost } from '../utils/freightAllocation';
@@ -71,6 +74,9 @@ interface AppContextType {
   expenses: Expense[];
   recurringExpenses: RecurringExpense[];
   deletionLogs: DeletionAuditLog[];
+  salespersons: Salesperson[];
+  monthlyCommissionClosures: MonthlyCommissionClosure[];
+  commissionPayments: CommissionPayment[];
   
   // Cloud & Connectivity Status
   isLoadingCloudData: boolean;
@@ -232,6 +238,16 @@ interface AppContextType {
   duplicateQuotation: (id: string) => Promise<Quotation>;
   deleteQuotation: (id: string) => Promise<void>;
 
+  // Sales Commission Actions
+  addSalesperson: (sp: Omit<Salesperson, 'id'>) => Promise<Salesperson>;
+  updateSalesperson: (id: string, updates: Partial<Salesperson>) => Promise<Salesperson>;
+  deleteSalesperson: (id: string) => Promise<void>;
+  closeCommissionMonth: (closure: MonthlyCommissionClosure) => Promise<MonthlyCommissionClosure>;
+  reopenCommissionMonth: (month: string) => Promise<void>;
+  paySalesCommission: (payout: Omit<CommissionPayment, 'id'>, user: Profile) => Promise<CommissionPayment>;
+  updateSaleSalesperson: (saleId: string, salespersonId: string | null) => Promise<void>;
+  isMonthClosed: (dateStr?: string) => boolean;
+
   // Helper
   resetToDefaultData: () => Promise<void>;
 }
@@ -304,6 +320,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [recurringExpenses, setRecurringExpenses] = useState<RecurringExpense[]>([]);
   const [deletionLogs, setDeletionLogs] = useState<DeletionAuditLog[]>([]);
+
+  // Sales Commission States
+  const DEFAULT_INITIAL_SALESPERSONS: Salesperson[] = [
+    { id: 'sp_sharjeel_initial', name: 'Sharjeel', commission_rate: 10, is_active: true },
+    { id: 'sp_aqeel_initial', name: 'Aqeel', commission_rate: 10, is_active: true },
+    { id: 'sp_ilyas_initial', name: 'Ilyas', commission_rate: 10, is_active: true },
+  ];
+  const [salespersons, setSalespersons] = useState<Salesperson[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('psc_local_salespersons');
+        if (cached) return JSON.parse(cached);
+      } catch {}
+    }
+    return DEFAULT_INITIAL_SALESPERSONS;
+  });
+  const [monthlyCommissionClosures, setMonthlyCommissionClosures] = useState<MonthlyCommissionClosure[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('psc_local_closures');
+        if (cached) return JSON.parse(cached);
+      } catch {}
+    }
+    return [];
+  });
+  const [commissionPayments, setCommissionPayments] = useState<CommissionPayment[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem('psc_local_comm_payments');
+        if (cached) return JSON.parse(cached);
+      } catch {}
+    }
+    return [];
+  });
 
   // Cloud status states
   const [isLoadingCloudData, setIsLoadingCloudData] = useState<boolean>(true);
@@ -454,6 +504,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (typeof window !== 'undefined' && effectiveQuotations.length > 0) {
           try {
             localStorage.setItem('psc_local_quotations', JSON.stringify(effectiveQuotations));
+          } catch {}
+        }
+
+        // Sales Commission Data Sync
+        const loadedSalespersons = (cloudData as any).salespersons || [];
+        const effectiveSalespersons = loadedSalespersons.length > 0 ? loadedSalespersons : DEFAULT_INITIAL_SALESPERSONS;
+        setSalespersons(effectiveSalespersons);
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem('psc_local_salespersons', JSON.stringify(effectiveSalespersons));
+          } catch {}
+        }
+
+        const loadedClosures = (cloudData as any).monthlyCommissionClosures || [];
+        setMonthlyCommissionClosures(loadedClosures);
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem('psc_local_closures', JSON.stringify(loadedClosures));
+          } catch {}
+        }
+
+        const loadedCommPayments = (cloudData as any).commissionPayments || [];
+        setCommissionPayments(loadedCommPayments);
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem('psc_local_comm_payments', JSON.stringify(loadedCommPayments));
           } catch {}
         }
         setStockMovements(cloudData.stockMovements || []);
@@ -1892,6 +1968,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteSaleInvoice = async (saleId: string, user: Profile): Promise<{ success: boolean; message: string }> => {
     const targetSale = sales.find(s => s.id === saleId);
     if (!targetSale) return { success: false, message: 'Sale invoice not found.' };
+
+    if (isMonthClosed(targetSale.date)) {
+      return {
+        success: false,
+        message: `Cannot delete invoice ${targetSale.invoice_number} because commission for month ${targetSale.date.slice(0, 7)} has been closed. Please reopen the month before modifying invoices.`
+      };
+    }
 
     const linkedReturns = salesReturns.filter(r => r.sale_id === saleId || r.invoice_number === targetSale.invoice_number);
     if (linkedReturns.length > 0) {
@@ -3529,6 +3612,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const target = expenses.find(e => e.id === id);
     if (!target) return { success: false, message: 'Expense not found.' };
 
+    if (isMonthClosed(target.date)) {
+      return {
+        success: false,
+        message: `Cannot delete expense "${target.category}" because commission for month ${target.date.slice(0, 7)} has been closed. Please reopen the month before modifying expenses.`
+      };
+    }
+
     await supabaseService.deleteExpense(id);
     setExpenses(prev => prev.filter(e => e.id !== id));
 
@@ -3825,6 +3915,142 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // ==============================================================================
+  // SALES COMMISSION SYSTEM ACTIONS
+  // ==============================================================================
+  const isMonthClosed = useCallback((dateStr?: string): boolean => {
+    if (!dateStr) return false;
+    const monthKey = dateStr.slice(0, 7);
+    return monthlyCommissionClosures.some(c => c.month === monthKey && c.is_closed);
+  }, [monthlyCommissionClosures]);
+
+  const addSalesperson = async (sp: Omit<Salesperson, 'id'>): Promise<Salesperson> => {
+    const newSp: Salesperson = {
+      ...sp,
+      id: generateId(),
+      commission_rate: Number(sp.commission_rate ?? 10.0),
+      is_active: sp.is_active ?? true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    const saved = await supabaseService.upsertSalesperson(newSp);
+    setSalespersons(prev => {
+      const next = [...prev.filter(s => s.id !== saved.id), saved];
+      try { localStorage.setItem('psc_local_salespersons', JSON.stringify(next)); } catch {}
+      return next;
+    });
+    return saved;
+  };
+
+  const updateSalesperson = async (id: string, updates: Partial<Salesperson>): Promise<Salesperson> => {
+    const existing = salespersons.find(s => s.id === id);
+    if (!existing) throw new Error('Salesperson not found');
+    const updated: Salesperson = {
+      ...existing,
+      ...updates,
+      updated_at: new Date().toISOString()
+    };
+    const saved = await supabaseService.upsertSalesperson(updated);
+    setSalespersons(prev => {
+      const next = prev.map(s => s.id === id ? saved : s);
+      try { localStorage.setItem('psc_local_salespersons', JSON.stringify(next)); } catch {}
+      return next;
+    });
+    return saved;
+  };
+
+  const deleteSalesperson = async (id: string): Promise<void> => {
+    await supabaseService.deleteSalesperson(id);
+    setSalespersons(prev => {
+      const next = prev.filter(s => s.id !== id);
+      try { localStorage.setItem('psc_local_salespersons', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+
+  const closeCommissionMonth = async (closure: MonthlyCommissionClosure): Promise<MonthlyCommissionClosure> => {
+    const saved = await supabaseService.upsertMonthlyCommissionClosure(closure);
+    setMonthlyCommissionClosures(prev => {
+      const next = [saved, ...prev.filter(c => c.month !== closure.month)];
+      try { localStorage.setItem('psc_local_closures', JSON.stringify(next)); } catch {}
+      return next;
+    });
+    return saved;
+  };
+
+  const reopenCommissionMonth = async (month: string): Promise<void> => {
+    await supabaseService.deleteMonthlyCommissionClosure(month);
+    setMonthlyCommissionClosures(prev => {
+      const next = prev.filter(c => c.month !== month);
+      try { localStorage.setItem('psc_local_closures', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+
+  const paySalesCommission = async (payout: Omit<CommissionPayment, 'id'>, user: Profile): Promise<CommissionPayment> => {
+    const paymentId = generateId();
+    const commPayId = generateId();
+
+    // 1. Create cash outflow voucher in payments (Cash Book)
+    const cashOutflow: Payment = {
+      id: paymentId,
+      related_to: 'sales_commission',
+      reference_id: payout.salesperson_id,
+      reference_no: 'Sales Commission',
+      amount: Number(payout.amount),
+      payment_method: payout.payment_method,
+      date: payout.payment_date,
+      notes: `Sales Commission payment for ${payout.salesperson_name} (${payout.month})`,
+      created_by: user.name,
+      created_at: new Date().toISOString()
+    };
+    const savedCashPayment = await supabaseService.upsertPayment(cashOutflow);
+    setPayments(prev => [savedCashPayment, ...prev.filter(p => p.id !== savedCashPayment.id)]);
+
+    // 2. Create commission_payments record
+    const commPayment: CommissionPayment = {
+      ...payout,
+      id: commPayId,
+      payment_id: savedCashPayment.id,
+      recorded_by: user.id,
+      recorded_by_name: user.name,
+      created_at: new Date().toISOString()
+    };
+    const savedCommPayment = await supabaseService.upsertCommissionPayment(commPayment);
+    setCommissionPayments(prev => {
+      const next = [savedCommPayment, ...prev.filter(p => p.id !== savedCommPayment.id)];
+      try { localStorage.setItem('psc_local_comm_payments', JSON.stringify(next)); } catch {}
+      return next;
+    });
+
+    return savedCommPayment;
+  };
+
+  const updateSaleSalesperson = async (saleId: string, salespersonId: string | null): Promise<void> => {
+    const target = sales.find(s => s.id === saleId);
+    if (!target) throw new Error('Sale invoice not found');
+
+    if (isMonthClosed(target.date)) {
+      throw new Error(`Cannot modify invoice ${target.invoice_number} because month ${target.date.slice(0, 7)} is closed. Please reopen the month first.`);
+    }
+
+    const effectiveSpId = salespersonId && salespersonId !== 'none' ? salespersonId : null;
+    const spObj = effectiveSpId ? salespersons.find(s => s.id === effectiveSpId) : undefined;
+    const spName = spObj ? spObj.name : 'None';
+
+    await supabaseService.updateSaleSalesperson(saleId, effectiveSpId);
+    setSales(prev => prev.map(s => {
+      if (s.id === saleId) {
+        return {
+          ...s,
+          salesperson_id: effectiveSpId || undefined,
+          salesperson_name: spName
+        };
+      }
+      return s;
+    }));
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -3916,6 +4142,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateQuotationStatus,
         duplicateQuotation,
         deleteQuotation,
+        salespersons,
+        monthlyCommissionClosures,
+        commissionPayments,
+        addSalesperson,
+        updateSalesperson,
+        deleteSalesperson,
+        closeCommissionMonth,
+        reopenCommissionMonth,
+        paySalesCommission,
+        updateSaleSalesperson,
+        isMonthClosed,
         resetToDefaultData,
       }}
     >

@@ -341,12 +341,13 @@ export const PaymentsModule: React.FC = () => {
     const matchesType = 
       typeFilter === 'all' || 
       (typeFilter === 'inflow' && (p.related_to === 'sale' || p.related_to === 'customer_balance' || p.related_to === 'capital_injection' || p.related_to === 'customer_advance')) ||
-      (typeFilter === 'outflow' && (p.related_to === 'purchase' || p.related_to === 'supplier_balance' || p.related_to === 'expense' || p.related_to === 'owner_withdrawal' || p.related_to === 'sales_return_refund' || p.related_to === 'transport')) ||
+      (typeFilter === 'outflow' && (p.related_to === 'purchase' || p.related_to === 'supplier_balance' || p.related_to === 'expense' || p.related_to === 'owner_withdrawal' || p.related_to === 'sales_return_refund' || p.related_to === 'transport' || p.related_to === 'sales_commission')) ||
       (typeFilter === 'capital' && p.related_to === 'capital_injection') ||
       (typeFilter === 'drawings' && p.related_to === 'owner_withdrawal') ||
       (typeFilter === 'advance' && p.related_to === 'customer_advance') ||
       (typeFilter === 'expense' && p.related_to === 'expense') ||
-      (typeFilter === 'transport' && p.related_to === 'transport');
+      (typeFilter === 'transport' && p.related_to === 'transport') ||
+      (typeFilter === 'commission' && p.related_to === 'sales_commission');
 
     return matchesSearch && matchesChannel && matchesType;
   });
@@ -764,6 +765,9 @@ export const PaymentsModule: React.FC = () => {
                 {financialMetrics.ownerWithdrawals > 0 && (
                   <span>• Draw: <strong className="text-rose-400 font-mono">{formatPKR(financialMetrics.ownerWithdrawals)}</strong></span>
                 )}
+                {(financialMetrics.salesCommissionDisbursements || 0) > 0 && (
+                  <span>• Comm: <strong className="text-purple-400 font-mono">{formatPKR(financialMetrics.salesCommissionDisbursements || 0)}</strong></span>
+                )}
               </div>
             </div>
 
@@ -827,6 +831,7 @@ export const PaymentsModule: React.FC = () => {
                   <option value="advance">Customer Advances (+)</option>
                   <option value="expense">Operating Overheads (-)</option>
                   <option value="transport">Purchase Trip Freight / Transport (-)</option>
+                  <option value="commission">Sales Commission (-)</option>
                 </select>
 
                 <select
@@ -871,6 +876,7 @@ export const PaymentsModule: React.FC = () => {
                       const isAdvance = p.related_to === 'customer_advance';
                       const isReturnRefund = p.related_to === 'sales_return_refund';
                       const isTransport = p.related_to === 'transport';
+                      const isCommission = p.related_to === 'sales_commission';
                       const isInflow = p.related_to === 'sale' || p.related_to === 'customer_balance' || isCapital || isAdvance;
                       const isExpense = p.related_to === 'expense';
 
@@ -882,6 +888,8 @@ export const PaymentsModule: React.FC = () => {
                         ? `${p.customer_name || 'Customer'} (Advance Deposit)`
                         : isReturnRefund
                         ? `${p.customer_name || 'Customer'} (Sales Return Cash Refund)`
+                        : isCommission
+                        ? `Sales Commission: ${p.notes?.split('—')[0]?.replace('Commission payout to ', '').trim() || 'Sales Staff'}`
                         : isExpense 
                         ? `Overhead: ${p.reference_no || 'Expense'}` 
                         : isTransport
@@ -896,6 +904,8 @@ export const PaymentsModule: React.FC = () => {
                         ? 'blue' 
                         : isReturnRefund
                         ? 'rose'
+                        : isCommission
+                        ? 'purple'
                         : isExpense 
                         ? 'amber' 
                         : isTransport
@@ -910,6 +920,8 @@ export const PaymentsModule: React.FC = () => {
                         ? 'Advance (+)' 
                         : isReturnRefund
                         ? 'Return Refund (-)'
+                        : isCommission
+                        ? 'Commission (-)'
                         : isExpense 
                         ? 'Expense (-)' 
                         : isTransport
@@ -920,7 +932,7 @@ export const PaymentsModule: React.FC = () => {
                         <tr key={p.id} className="hover:bg-slate-800/40 transition-colors">
                           <td className="py-3 px-3 text-slate-400 font-mono">{formatDateTime(p.date)}</td>
                           <td className="py-3 px-3 font-bold text-white">
-                            <span className={isCapital ? 'text-indigo-300' : isAdvance ? 'text-cyan-300' : isWithdrawal ? 'text-amber-300' : isExpense ? 'text-amber-300' : 'text-white'}>
+                            <span className={isCapital ? 'text-indigo-300' : isAdvance ? 'text-cyan-300' : isWithdrawal ? 'text-amber-300' : isExpense ? 'text-amber-300' : isCommission ? 'text-purple-300' : 'text-white'}>
                               {partyName}
                             </span>
                           </td>

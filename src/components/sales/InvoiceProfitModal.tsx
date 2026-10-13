@@ -17,7 +17,8 @@ import {
   HelpCircle,
   Layers,
   ArrowUpRight,
-  ArrowDownRight
+  ArrowDownRight,
+  Users
 } from 'lucide-react';
 
 interface InvoiceProfitModalProps {
@@ -51,8 +52,18 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
   onClose,
   sale,
 }) => {
-  const { products, rawMaterials } = useApp();
+  const { products, rawMaterials, salespersons } = useApp();
   const [isPrinting, setIsPrinting] = useState(false);
+
+  const assignedSalesperson = useMemo(() => {
+    if (!sale?.salesperson_id || sale.salesperson_id === 'none') return null;
+    return salespersons.find(sp => sp.id === sale.salesperson_id) || {
+      id: sale.salesperson_id,
+      name: sale.salesperson_name || 'Staff',
+      commission_rate: 10,
+      is_active: true
+    };
+  }, [sale, salespersons]);
 
   // Compute detailed profit and margin analysis
   const analysis = useMemo(() => {
@@ -445,6 +456,45 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
                 Margin on total billed
               </p>
             </div>
+          </div>
+
+          {/* Sales Commission Info Banner (Internal Only) */}
+          <div className="mb-6 p-4 rounded-2xl bg-indigo-950/25 border border-indigo-800/40 print:bg-slate-50 print:border-slate-300 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center shrink-0 print:border-indigo-400">
+                <Users className="w-5 h-5 text-indigo-400 print:text-indigo-700" />
+              </div>
+              <div>
+                <span className="text-[10px] font-bold text-indigo-300 uppercase tracking-widest block print:text-slate-600">
+                  Salesperson & Commission (Internal Admin View)
+                </span>
+                <p className="text-sm font-black text-white print:text-slate-900">
+                  Salesperson: <span className="text-indigo-400 print:text-indigo-800">{assignedSalesperson ? assignedSalesperson.name : 'None (No Commission)'}</span>
+                  {assignedSalesperson && (
+                    <span className="text-xs text-slate-400 print:text-slate-600 font-normal ml-2">
+                      (Commission Rate: {assignedSalesperson.commission_rate}%)
+                    </span>
+                  )}
+                </p>
+              </div>
+            </div>
+            {assignedSalesperson ? (
+              <div className="sm:text-right">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block print:text-slate-600">
+                  Estimated Commission
+                </span>
+                <p className="text-base font-black font-mono text-emerald-400 print:text-emerald-700">
+                  {analysis.netProfit > 0 ? formatPKR(Number(((Number(assignedSalesperson.commission_rate ?? 10) / 100) * analysis.netProfit).toFixed(2))) : formatPKR(0)}
+                </p>
+                <span className="text-[10px] text-slate-500 print:text-slate-500">
+                  Base estimate before monthly overhead coverage factor
+                </span>
+              </div>
+            ) : (
+              <span className="text-xs text-slate-500 italic print:text-slate-600">
+                No salesperson assigned (100% factory profit)
+              </span>
+            )}
           </div>
 
           {/* Line Items Profit Breakdown Table */}

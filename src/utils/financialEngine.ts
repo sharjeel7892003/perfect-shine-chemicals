@@ -59,7 +59,8 @@ export interface OverallFinancialMetrics {
   operatingExpenses: number;
   ownerWithdrawals: number;
   salesReturnRefunds?: number;
-  totalDisbursements: number; // Sum of all Outflows: purchaseDisbursements + transportDisbursements + operatingExpenses + ownerWithdrawals + salesReturnRefunds
+  salesCommissionDisbursements?: number;
+  totalDisbursements: number; // Sum of all Outflows: purchaseDisbursements + transportDisbursements + operatingExpenses + ownerWithdrawals + salesReturnRefunds + salesCommissionDisbursements
   
   // NET CASH POSITION
   netCashPosition: number; // totalCashCollected - totalDisbursements
@@ -449,9 +450,17 @@ export const calculateFinancialMetrics = (data: {
     filteredExpenses.reduce((acc, e) => acc + (Number(e.amount) || 0), 0).toFixed(2)
   );
 
-  // Total Disbursements = Purchases Paid + Transport Paid + Operating Expenses + Owner Withdrawals + Sales Return Cash Refunds
+  // Sales Commission Disbursements (Cash Out via Cash Book)
+  const salesCommissionDisbursements = Number(
+    boundedPayments
+      .filter(p => p.related_to === 'sales_commission')
+      .reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
+      .toFixed(2)
+  );
+
+  // Total Disbursements = Purchases Paid + Transport Paid + Operating Expenses + Owner Withdrawals + Sales Return Cash Refunds + Sales Commission Paid
   const totalDisbursements = Number(
-    (purchaseDisbursements + transportDisbursements + operatingExpenses + ownerWithdrawals + salesReturnRefunds).toFixed(2)
+    (purchaseDisbursements + transportDisbursements + operatingExpenses + ownerWithdrawals + salesReturnRefunds + salesCommissionDisbursements).toFixed(2)
   );
 
   // Net Cash Position = Total Cash Collected - Total Disbursements
@@ -475,6 +484,7 @@ export const calculateFinancialMetrics = (data: {
     operatingExpenses,
     ownerWithdrawals,
     salesReturnRefunds,
+    salesCommissionDisbursements,
     totalDisbursements,
     netCashPosition,
     netCashflow: netCashPosition,

@@ -36,16 +36,30 @@ import { ProcessReturnModal } from './ProcessReturnModal';
 import { InvoiceProfitModal } from './InvoiceProfitModal';
 
 export const SalesModule: React.FC = () => {
-  const { products, rawMaterials, customers, sales, salesReturns, payments, createSale, deleteSaleInvoice, deleteSalesReturnRecord } = useApp();
+  const { 
+    products, 
+    rawMaterials, 
+    customers, 
+    sales, 
+    salesReturns, 
+    payments, 
+    salespersons,
+    createSale, 
+    deleteSaleInvoice, 
+    deleteSalesReturnRecord,
+    updateSaleSalesperson,
+    isMonthClosed
+  } = useApp();
   const { currentUser, allUsers, isOwner, canCreateSale } = useAuth();
 
-  // Dynamically resolve staff member name by looking up salesperson_id in profiles
+  // Dynamically resolve staff member or salesperson name
   const getSalespersonName = (sale: Sale) => {
-    if (sale.salesperson_id) {
-      const match = allUsers.find(u => u.id === sale.salesperson_id);
-      if (match) return match.name;
-    }
-    return sale.salesperson_name || 'Staff';
+    if (!sale.salesperson_id || sale.salesperson_id === 'none') return 'None';
+    const sp = salespersons.find(s => s.id === sale.salesperson_id);
+    if (sp) return sp.name;
+    const match = allUsers.find(u => u.id === sale.salesperson_id);
+    if (match) return match.name;
+    return sale.salesperson_name || 'None';
   };
 
   const [activeSubTab, setActiveSubTab] = useState<'pos' | 'history' | 'returns'>('pos');
@@ -61,8 +75,14 @@ export const SalesModule: React.FC = () => {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Salesperson Edit Modal State
+  const [editingSalespersonSale, setEditingSalespersonSale] = useState<Sale | null>(null);
+  const [newSalespersonId, setNewSalespersonId] = useState<string>('none');
+  const [isUpdatingSalesperson, setIsUpdatingSalesperson] = useState(false);
+
   // POS State
   const [saleDate, setSaleDate] = useState<string>(getTodayDateString());
+  const [selectedSalespersonId, setSelectedSalespersonId] = useState<string>('none');
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
   const [cartItems, setCartItems] = useState<SaleItem[]>([]);
   const [discountAmount, setDiscountAmount] = useState<number>(0);
@@ -604,6 +624,7 @@ export const SalesModule: React.FC = () => {
     setSelectedCustomerId('');
     setSalesNotes('');
     setSaleDate(getTodayDateString());
+    setSelectedSalespersonId('none');
     setIsPrivateLabelOrder(false);
     setClientBrandName('');
     setLabourRatePerBottle(3.5);
@@ -611,6 +632,12 @@ export const SalesModule: React.FC = () => {
 
   const handleCheckout = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const formattedIsoDate = formatSelectedDateToIso(saleDate);
+    if (isMonthClosed(formattedIsoDate)) {
+      alert(`Month ${saleDate.slice(0, 7)} has been closed in the Sales Commission module. Invoices cannot be added to a closed month unless reopened.`);
+      return;
+    }
 
     if (cartItems.length === 0) {
       alert('Please add products to the invoice before checkout.');
@@ -649,10 +676,14 @@ export const SalesModule: React.FC = () => {
     setIsSubmitting(true);
     setSubmitError(null);
     try {
+      const spObj = selectedSalespersonId && selectedSalespersonId !== 'none'
+        ? salespersons.find(s => s.id === selectedSalespersonId)
+        : null;
+
       const newSale = await createSale({
         customer_id: selectedCustomerId || undefined,
         customer_name: customerName,
-        date: formatSelectedDateToIso(saleDate),
+        date: formattedIsoDate,
         items: cartItems.map(item => ({
           ...item,
           is_private_label: isPLSale ? true : item.is_private_label,
@@ -671,7 +702,8 @@ export const SalesModule: React.FC = () => {
         advance_received_date: advanceDate,
         payment_status: paymentStatus,
         payment_method: finalPaymentMethod,
-        salesperson_id: currentUser.id,
+        salesperson_id: spObj ? spObj.id : undefined,
+        salesperson_name: spObj ? spObj.name : 'None',
         notes: salesNotes,
         invoice_type: isPLSale ? 'private_label' : 'standard',
         is_private_label: isPLSale,
@@ -693,6 +725,11 @@ export const SalesModule: React.FC = () => {
 
   const handleConfirmDeleteSale = async () => {
     if (!deleteConfirmSale) return;
+    if (isMonthClosed(deleteConfirmSale.date)) {
+      alert(`Cannot delete invoice ${deleteConfirmSale.invoice_number} because month ${deleteConfirmSale.date.slice(0, 7)} is closed. Please reopen the month from the Commission Report first.`);
+      setDeleteConfirmSale(null);
+      return;
+    }
     setIsDeleting(true);
     try {
       const res = await deleteSaleInvoice(deleteConfirmSale.id, currentUser);
@@ -1549,19 +1586,40 @@ export const SalesModule: React.FC = () => {
                 </div>
               </div>
 
-              {/* Sale Date & Payment Details */}
-              <div className="pt-2">
-                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1 flex items-center gap-1.5">
-                  <Calendar className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Sale / Invoice Date</span>
-                </label>
-                <input
-                  type="date"
-                  required
-                  value={saleDate}
-                  onChange={(e) => setSaleDate(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
-                />
+              {/* Sale Date & Salesperson Details */}
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1 flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Sale / Invoice Date</span>
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={saleDate}
+                    onChange={(e) => setSaleDate(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1 flex items-center gap-1.5">
+                    <UserCheck className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Salesperson (Commission)</span>
+                  </label>
+                  <select
+                    value={selectedSalespersonId}
+                    onChange={(e) => setSelectedSalespersonId(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 font-medium"
+                  >
+                    <option value="none">None (No Commission)</option>
+                    {salespersons.filter(sp => sp.is_active).map(sp => (
+                      <option key={sp.id} value={sp.id}>
+                        {sp.name} ({sp.commission_rate}%)
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               {applyCustomerAdvance && availableAdvance > 0 && (
@@ -1734,9 +1792,22 @@ export const SalesModule: React.FC = () => {
                       <td className="py-3 px-3 text-slate-400">{formatDate(sale.date)}</td>
                       <td className="py-3 px-3 font-medium text-slate-200">{sale.customer_name}</td>
                       <td className="py-3 px-3">
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800/90 text-slate-200 font-medium text-[11px] border border-slate-700/60 whitespace-nowrap">
-                          {getSalespersonName(sale)}
-                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (isMonthClosed(sale.date)) {
+                              alert(`Cannot edit salesperson on invoice ${sale.invoice_number} because month ${sale.date.slice(0, 7)} is closed. Please reopen the month before modifying invoices.`);
+                              return;
+                            }
+                            setEditingSalespersonSale(sale);
+                            setNewSalespersonId(sale.salesperson_id || 'none');
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800/90 hover:bg-slate-700 text-slate-200 hover:text-white font-medium text-[11px] border border-slate-700/60 whitespace-nowrap transition-colors group cursor-pointer"
+                          title="Click to edit salesperson assigned to this invoice"
+                        >
+                          <span>{getSalespersonName(sale)}</span>
+                          <span className="text-[10px] text-slate-500 group-hover:text-indigo-400">✏️</span>
+                        </button>
                       </td>
                       <td className="py-3 px-3 text-slate-300 max-w-xs">
                         <div className="flex items-center gap-1.5 flex-wrap">
@@ -2184,6 +2255,72 @@ export const SalesModule: React.FC = () => {
               >
                 {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 <span>{isDeleting ? 'Reversing...' : 'Confirm Reversal & Adjust Records'}</span>
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Edit Salesperson Modal */}
+      {editingSalespersonSale && (
+        <Modal
+          isOpen={Boolean(editingSalespersonSale)}
+          onClose={() => setEditingSalespersonSale(null)}
+          title={`Edit Salesperson: Invoice ${editingSalespersonSale.invoice_number}`}
+        >
+          <div className="space-y-4">
+            <p className="text-xs text-slate-300">
+              Change the credited salesperson for invoice <strong>{editingSalespersonSale.invoice_number}</strong> ({editingSalespersonSale.customer_name}). Gross profit and commissions will recalculate dynamically.
+            </p>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5">
+                Assign Salesperson
+              </label>
+              <select
+                value={newSalespersonId}
+                onChange={(e) => setNewSalespersonId(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+              >
+                <option value="none">None (No Commission)</option>
+                {salespersons.filter(s => s.is_active).map(sp => (
+                  <option key={sp.id} value={sp.id}>
+                    {sp.name} ({sp.commission_rate}% rate)
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                disabled={isUpdatingSalesperson}
+                onClick={() => setEditingSalespersonSale(null)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isUpdatingSalesperson}
+                onClick={async () => {
+                  setIsUpdatingSalesperson(true);
+                  try {
+                    await updateSaleSalesperson(
+                      editingSalespersonSale.id, 
+                      newSalespersonId === 'none' ? null : newSalespersonId
+                    );
+                    setEditingSalespersonSale(null);
+                  } catch (err: any) {
+                    alert(err?.message || 'Failed to update salesperson');
+                  } finally {
+                    setIsUpdatingSalesperson(false);
+                  }
+                }}
+                className="px-5 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-bold transition-colors flex items-center gap-1.5"
+              >
+                {isUpdatingSalesperson && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>Save Salesperson</span>
               </button>
             </div>
           </div>

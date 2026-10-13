@@ -448,7 +448,7 @@ export interface RecurringExpense {
 
 export interface Payment {
   id: string;
-  related_to: 'sale' | 'purchase' | 'customer_balance' | 'supplier_balance' | 'expense' | 'capital_injection' | 'owner_withdrawal' | 'customer_advance' | 'sales_return_refund' | 'transport';
+  related_to: 'sale' | 'purchase' | 'customer_balance' | 'supplier_balance' | 'expense' | 'capital_injection' | 'owner_withdrawal' | 'customer_advance' | 'sales_return_refund' | 'transport' | 'sales_commission';
   reference_id?: string;
   reference_no?: string;
   customer_id?: string;
@@ -542,4 +542,107 @@ export interface Quotation {
   created_by?: string;
   created_at?: string;
   updated_at?: string;
+}
+
+// ==============================================================================
+// 10. SALES COMMISSION SYSTEM
+// ==============================================================================
+
+export interface Salesperson {
+  id: string;
+  name: string;
+  commission_rate: number; // Percentage e.g. 10.0 for 10%
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface SalespersonInvoiceSummary {
+  sale_id: string;
+  invoice_number: string;
+  date: string;
+  customer_name: string;
+  total_amount: number;
+  revenue: number;
+  cogs: number;
+  gross_profit: number;
+}
+
+export interface SalespersonReturnSummary {
+  return_id: string;
+  credit_note_number: string;
+  date: string;
+  invoice_number: string;
+  returned_revenue: number;
+  returned_cogs: number;
+  gross_profit_deducted: number;
+}
+
+export interface SalespersonCommissionDetail {
+  salesperson_id: string;
+  salesperson_name: string;
+  invoice_count: number;
+  total_sales: number;
+  gross_profit_before_returns: number;
+  returns_gross_profit: number;
+  gross_profit: number; // after returns deduction
+  commission_rate: number;
+  coverage_factor: number;
+  commission_earned: number;
+  commission_paid: number;
+  commission_balance: number;
+  invoices: SalespersonInvoiceSummary[];
+  returns: SalespersonReturnSummary[];
+}
+
+export interface MonthlyCommissionSummary {
+  month: string; // 'YYYY-MM'
+  monthName: string;
+  is_closed: boolean;
+  is_provisional: boolean;
+  closed_at?: string;
+  closed_by_name?: string;
+  total_invoices: number;
+  total_sales_amount: number;
+  total_gross_profit: number;
+  total_expenses: number;
+  profit_before_commission: number;
+  coverage_factor: number;
+  total_commission: number;
+  owner_remaining_profit: number;
+  include_depreciation: boolean;
+  salespeople: SalespersonCommissionDetail[];
+}
+
+export interface MonthlyCommissionClosure {
+  month: string; // 'YYYY-MM'
+  is_closed: boolean;
+  closed_at: string;
+  closed_by?: string;
+  closed_by_name?: string;
+  total_gross_profit: number;
+  total_expenses: number;
+  coverage_factor: number;
+  total_commission: number;
+  owner_remaining_profit: number;
+  include_depreciation: boolean;
+  snapshots: SalespersonCommissionDetail[];
+  notes?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CommissionPayment {
+  id: string;
+  salesperson_id: string;
+  salesperson_name: string;
+  month: string; // 'YYYY-MM'
+  amount: number;
+  payment_method: PaymentMethod;
+  payment_date: string;
+  payment_id?: string; // Reference to payments table
+  notes?: string;
+  recorded_by?: string;
+  recorded_by_name?: string;
+  created_at?: string;
 }
