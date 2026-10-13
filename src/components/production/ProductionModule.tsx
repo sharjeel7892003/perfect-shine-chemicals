@@ -28,6 +28,7 @@ import { getNextBatchNumberForProduct } from '../../utils/batchNumber';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { ProductionReportView } from '../reports/ProductionReportView';
+import { ProductionBatchDeleteModal } from './ProductionBatchDeleteModal';
 
 interface ProductionModuleProps {
   onNavigateToReports?: () => void;
@@ -43,7 +44,7 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
     deleteProductionBatch 
   } = useApp();
   
-  const { currentUser, isOwner, canRecordProduction } = useAuth();
+  const { currentUser, isOwner, canRecordProduction, canDeleteData } = useAuth();
 
   const [activeView, setActiveView] = useState<'batches' | 'report'>('batches');
   const [searchTerm, setSearchTerm] = useState('');
@@ -336,12 +337,9 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
                           <Eye className="w-3.5 h-3.5 text-emerald-400" />
                           <span>BOM Breakdown</span>
                         </button>
-                        {isOwner ? (
+                        {(isOwner || canDeleteData) ? (
                           <button
-                            onClick={() => {
-                              setDeleteConfirmBatch(batch);
-                              setNegativeStockWarning(null);
-                            }}
+                            onClick={() => setDeleteConfirmBatch(batch)}
                             className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs font-semibold transition-colors"
                             title="Delete Batch & Reverse Stock"
                           >
@@ -774,14 +772,13 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
             )}
 
             <div className="flex justify-between items-center pt-2 border-t border-slate-800">
-              {isOwner && (
+              {(isOwner || canDeleteData) && (
                 <button
                   type="button"
                   onClick={() => {
                     const target = selectedBatchDetails;
                     setSelectedBatchDetails(null);
                     setDeleteConfirmBatch(target);
-                    setNegativeStockWarning(null);
                   }}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 font-bold text-xs transition-colors"
                   title="Reverse batch and return consumed materials to stock"
@@ -804,124 +801,10 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
 
       {/* Delete Production Batch Confirmation Modal */}
       {deleteConfirmBatch && (
-        <Modal
-          isOpen={!!deleteConfirmBatch}
-          onClose={() => {
-            setDeleteConfirmBatch(null);
-            setNegativeStockWarning(null);
-          }}
-          title={`Delete & Reverse Batch: ${deleteConfirmBatch.batch_number}`}
-          subtitle="Admin Automated Raw Material Restoration & Finished Stock Deduction"
-        >
-          <div className="space-y-4 text-xs">
-            {/* Warning Block */}
-            {negativeStockWarning && (
-              <div className="p-3.5 rounded-xl bg-rose-500/20 border-2 border-rose-500/40 text-rose-200 space-y-2">
-                <div className="flex items-center gap-1.5 font-bold text-rose-400 text-sm">
-                  <ShieldAlert className="w-5 h-5 shrink-0" />
-                  <span>CRITICAL: Finished Goods Stock Warning!</span>
-                </div>
-                <p className="text-[11px] leading-relaxed">
-                  Reversing this production run will deduct finished goods that have already been dispatched or sold to customers on invoices:
-                </p>
-                <ul className="space-y-1 text-[11px] list-disc pl-5 font-mono text-rose-300">
-                  {negativeStockWarning.map((w, idx) => (
-                    <li key={idx}>{w}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {!negativeStockWarning && (
-              <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 space-y-2">
-                <div className="flex items-center gap-1.5 font-bold text-rose-400">
-                  <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span>Automatic Production Reversal Actions:</span>
-                </div>
-                <ul className="space-y-1.5 text-slate-200 text-[11px] list-disc pl-5">
-                  <li>
-                    <strong>Raw Material Restoration:</strong> Consumed ingredients will be restored back to factory raw inventory:
-                    <div className="mt-1 font-mono text-emerald-400">
-                      {deleteConfirmBatch.raw_materials_consumed?.map(i => `• ${i.raw_material_name}: +${i.quantity_consumed} ${i.unit}`).join(', ')}
-                    </div>
-                  </li>
-                  <li>
-                    <strong>Finished Goods Deduction:</strong> Manufactured output will be subtracted from product warehouse inventory:
-                    <div className="mt-1 font-mono text-rose-400">
-                      • {deleteConfirmBatch.product_name}: -{deleteConfirmBatch.quantity_produced} {deleteConfirmBatch.base_unit}
-                    </div>
-                  </li>
-                </ul>
-              </div>
-            )}
-
-            <p className="text-slate-300">
-              Are you sure you want to permanently cancel and delete production run <strong>{deleteConfirmBatch.batch_number}</strong>? An audit log entry will be saved.
-            </p>
-
-            <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
-              <button
-                type="button"
-                disabled={isDeleting}
-                onClick={() => {
-                  setDeleteConfirmBatch(null);
-                  setNegativeStockWarning(null);
-                }}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              {negativeStockWarning ? (
-                <button
-                  type="button"
-                  disabled={isDeleting}
-                  onClick={async () => {
-                    setIsDeleting(true);
-                    try {
-                      const res = await deleteProductionBatch(deleteConfirmBatch.id, currentUser, true);
-                      alert(res.message);
-                      setDeleteConfirmBatch(null);
-                      setNegativeStockWarning(null);
-                    } catch (err: any) {
-                      alert(err?.message || 'Failed to delete batch');
-                    } finally {
-                      setIsDeleting(false);
-                    }
-                  }}
-                  className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60"
-                >
-                  {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  <span>{isDeleting ? 'Reversing...' : 'Force Delete (Allow Negative Stock)'}</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  disabled={isDeleting}
-                  onClick={async () => {
-                    setIsDeleting(true);
-                    try {
-                      const res = await deleteProductionBatch(deleteConfirmBatch.id, currentUser, false);
-                      if (res.hasNegativeStockWarning && res.warningDetails) {
-                        setNegativeStockWarning(res.warningDetails);
-                      } else {
-                        alert(res.message);
-                        setDeleteConfirmBatch(null);
-                      }
-                    } catch (err: any) {
-                      alert(err?.message || 'Failed to delete batch');
-                    } finally {
-                      setIsDeleting(false);
-                    }
-                  }}
-                  className="px-5 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60"
-                >
-                  {isDeleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  <span>{isDeleting ? 'Reversing...' : 'Confirm Deletion & Reverse Batch'}</span>
-                </button>
-              )}
-            </div>
-          </div>
-        </Modal>
+        <ProductionBatchDeleteModal
+          batch={deleteConfirmBatch}
+          onClose={() => setDeleteConfirmBatch(null)}
+        />
       )}
     </div>
   );

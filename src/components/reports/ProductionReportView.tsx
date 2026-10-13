@@ -15,12 +15,16 @@ import {
   BadgeAlert,
   AlertTriangle,
   Package,
-  ArrowUpRight
+  ArrowUpRight,
+  Trash2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { useAuth } from '../../context/AuthContext';
 import { formatPKR, formatDate } from '../../utils/formatters';
 import { exportToCSV } from '../../utils/batchNumber';
 import { Badge } from '../common/Badge';
+import { ProductionBatch } from '../../types';
+import { ProductionBatchDeleteModal } from '../production/ProductionBatchDeleteModal';
 
 interface ProductionReportViewProps {
   embedded?: boolean;
@@ -28,6 +32,7 @@ interface ProductionReportViewProps {
 
 export const ProductionReportView: React.FC<ProductionReportViewProps> = ({ embedded = false }) => {
   const { productionBatches, products, rawMaterials } = useApp();
+  const { currentUser, isOwner, canDeleteData } = useAuth();
 
   // Filters State
   const [startDate, setStartDate] = useState('');
@@ -37,6 +42,7 @@ export const ProductionReportView: React.FC<ProductionReportViewProps> = ({ embe
   const [productionSubView, setProductionSubView] = useState<'batch' | 'period' | 'raw_materials'>('batch');
   const [periodGrouping, setPeriodGrouping] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   const [expandedBatchId, setExpandedBatchId] = useState<string | null>(null);
+  const [deleteConfirmBatch, setDeleteConfirmBatch] = useState<ProductionBatch | null>(null);
 
   // Quick Date Range Handler
   const handleQuickDate = (type: 'today' | 'this_week' | 'this_month' | 'this_year' | 'all') => {
@@ -588,18 +594,30 @@ export const ProductionReportView: React.FC<ProductionReportViewProps> = ({ embe
                             {batch.supervisor_name || 'Plant Staff'}
                           </td>
                           <td className="py-3 px-3 text-center">
-                            <button
-                              onClick={() => setExpandedBatchId(isExpanded ? null : batch.id)}
-                              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
-                                isExpanded
-                                  ? 'bg-emerald-500 text-slate-950 font-bold'
-                                  : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                              }`}
-                              title="Toggle ingredient consumption breakdown"
-                            >
-                              {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                              <span>{matCount} Materials</span>
-                            </button>
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                onClick={() => setExpandedBatchId(isExpanded ? null : batch.id)}
+                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                                  isExpanded
+                                    ? 'bg-emerald-500 text-slate-950 font-bold'
+                                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                                }`}
+                                title="Toggle ingredient consumption breakdown"
+                              >
+                                {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                                <span>{matCount} Materials</span>
+                              </button>
+                              {(isOwner || canDeleteData) && (
+                                <button
+                                  onClick={() => setDeleteConfirmBatch(batch)}
+                                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs font-semibold transition-colors"
+                                  title="Delete Batch & Reverse Stock"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>Delete</span>
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
 
@@ -923,6 +941,14 @@ export const ProductionReportView: React.FC<ProductionReportViewProps> = ({ embe
             </table>
           </div>
         </div>
+      )}
+
+      {/* Delete Production Batch Confirmation Modal */}
+      {deleteConfirmBatch && (
+        <ProductionBatchDeleteModal
+          batch={deleteConfirmBatch}
+          onClose={() => setDeleteConfirmBatch(null)}
+        />
       )}
     </div>
   );

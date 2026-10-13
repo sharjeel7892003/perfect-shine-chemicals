@@ -749,6 +749,26 @@ export const supabaseService = {
     }
   },
 
+  async reverseProductionBatch(batchId: string, userName: string, userRole: string): Promise<{ success: boolean; message: string; batch_number?: string } | null> {
+    if (!isSupabaseConfigured || !supabase || !isValidUUID(batchId)) return null;
+    assertOnline();
+
+    const { data, error } = await supabase.rpc('reverse_and_delete_production_batch', {
+      p_batch_id: batchId,
+      p_user_name: userName,
+      p_user_role: userRole
+    });
+
+    if (error) {
+      // If PostgreSQL function does not exist yet (before migration is executed), return null so client-side atomic fallback runs
+      if (error.code === '42883' || error.message?.includes('function') || error.code === 'PGRST202') {
+        return null;
+      }
+      throw new Error(error.message);
+    }
+    return data;
+  },
+
   // ============================================================================
   // SALES (INVOICES) & SALE ITEMS
   // ============================================================================
@@ -1279,10 +1299,9 @@ export const supabaseService = {
       ? `[By ${movement.created_by_name}] ${movement.notes || ''}`.trim()
       : (movement.notes || '');
 
-    const payload = {
+    const basePayload: any = {
       id: validId,
       product_id: isValidUUID(movement.product_id) ? movement.product_id : null,
-      product_name: movement.product_name || '',
       movement_type: movement.movement_type,
       quantity: Number(movement.quantity || 0),
       previous_stock: Number(movement.previous_stock || 0),
@@ -1293,12 +1312,19 @@ export const supabaseService = {
       created_by: isValidUUID((movement as any).created_by) ? (movement as any).created_by : null
     };
 
+    let payload = { ...basePayload, product_name: movement.product_name || '' };
     let { error } = await supabase.from('stock_movements').upsert(payload);
+    if (error && (error.code === 'PGRST204' || error.message?.includes('product_name'))) {
+      payload = basePayload;
+      const res = await supabase.from('stock_movements').upsert(payload);
+      error = res.error;
+    }
+
     if (error && (error.code === '23514' || error.message?.includes('check'))) {
       const fallbackPayload = {
         ...payload,
         movement_type: 'adjustment',
-        notes: `[Return] ${notes}`.trim()
+        notes: `[${movement.movement_type === 'production_reversal' ? 'Production Reversal' : 'Adjustment'}] ${notes}`.trim()
       };
       const retry = await supabase.from('stock_movements').upsert(fallbackPayload);
       if (retry.error) {
@@ -1336,12 +1362,10 @@ export const supabaseService = {
 
     let { error } = await supabase.from('raw_material_movements').upsert(payload);
     if (error && (error.message?.includes('raw_material_movements_movement_type_check') || error.code === '23514')) {
-      // The live database check constraint has not yet been migrated to include 'sale_out' / 'resale_out' / 'return'.
-      // Fallback to 'adjustment' so sales and returns never fail, and tag notes
       const fallbackPayload = {
         ...payload,
         movement_type: 'adjustment',
-        notes: `[Return / Resale] ${notes}`.trim()
+        notes: `[${movement.movement_type === 'production_reversal' ? 'Production Reversal' : movement.movement_type}] ${notes}`.trim()
       };
       const retry = await supabase.from('raw_material_movements').upsert(fallbackPayload);
       if (retry.error) {

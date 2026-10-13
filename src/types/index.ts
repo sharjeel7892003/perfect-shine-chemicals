@@ -163,7 +163,7 @@ export interface PackingRun {
 }
 
 // RAW MATERIAL MOVEMENTS
-export type RawMaterialMovementType = 'purchase_in' | 'production_out' | 'packaging_out' | 'sale_out' | 'resale_out' | 'adjustment' | 'wastage' | 'return';
+export type RawMaterialMovementType = 'purchase_in' | 'production_out' | 'production_reversal' | 'packaging_out' | 'sale_out' | 'resale_out' | 'adjustment' | 'wastage' | 'return';
 
 export interface RawMaterialMovement {
   id: string;
@@ -393,7 +393,7 @@ export interface PurchaseTrip {
   created_at?: string;
 }
 
-export type StockMovementType = 'purchase_in' | 'sale_out' | 'adjustment' | 'production' | 'packaging_out' | 'wastage' | 'return';
+export type StockMovementType = 'purchase_in' | 'sale_out' | 'adjustment' | 'production' | 'production_reversal' | 'packaging_out' | 'wastage' | 'return';
 
 export interface StockMovement {
   id: string;

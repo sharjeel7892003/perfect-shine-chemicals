@@ -528,7 +528,7 @@ export const RawMaterialsModule: React.FC<RawMaterialsModuleProps> = ({ onNaviga
                       <td className="py-3 px-3 capitalize">
                         <Badge
                           variant={
-                            rmm.movement_type === 'purchase_in'
+                            rmm.movement_type === 'purchase_in' || rmm.movement_type === 'production_reversal'
                               ? 'emerald'
                               : rmm.movement_type === 'production_out'
                               ? 'blue'
@@ -537,7 +537,11 @@ export const RawMaterialsModule: React.FC<RawMaterialsModuleProps> = ({ onNaviga
                               : 'amber'
                           }
                         >
-                          {rmm.movement_type === 'sale_out' || rmm.movement_type === 'resale_out' ? 'Direct Resale' : rmm.movement_type.replace('_', ' ')}
+                          {rmm.movement_type === 'sale_out' || rmm.movement_type === 'resale_out'
+                            ? 'Direct Resale'
+                            : rmm.movement_type === 'production_reversal'
+                            ? 'Production Reversal'
+                            : rmm.movement_type.replace('_', ' ')}
                         </Badge>
                       </td>
                       <td className="py-3 px-3 text-right font-mono font-bold">

@@ -570,12 +570,14 @@ export const InventoryModule: React.FC = () => {
                           variant={
                             sm.movement_type === 'purchase_in' || sm.movement_type === 'production'
                               ? 'emerald'
+                              : sm.movement_type === 'production_reversal'
+                              ? 'rose'
                               : sm.movement_type === 'sale_out'
                               ? 'blue'
                               : 'amber'
                           }
                         >
-                          {sm.movement_type.replace('_', ' ')}
+                          {sm.movement_type === 'production_reversal' ? 'Production Reversal' : sm.movement_type.replace('_', ' ')}
                         </Badge>
                       </td>
                       <td className="py-3 px-3 text-right font-mono font-bold">

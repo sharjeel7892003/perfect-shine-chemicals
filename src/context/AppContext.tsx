@@ -1031,105 +1031,154 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteProductionBatch = async (
     batchId: string, 
-    user: Profile, 
-    forceAllowNegativeStock: boolean = false
+    user: Profile
   ): Promise<{ success: boolean; hasNegativeStockWarning?: boolean; warningDetails?: string[]; message: string }> => {
     const targetBatch = productionBatches.find(b => b.id === batchId);
     if (!targetBatch) return { success: false, message: 'Production batch not found.' };
 
     const targetProduct = products.find(p => p.id === targetBatch.product_id);
     const currentProdStock = targetProduct ? Number(targetProduct.current_stock) : 0;
-    const wouldBeProdStock = Number((currentProdStock - Number(targetBatch.quantity_produced)).toFixed(4));
+    const batchQtyProduced = Number(targetBatch.quantity_produced);
 
-    const warningDetails: string[] = [];
-    if (wouldBeProdStock < 0) {
-      warningDetails.push(
-        `Finished Product "${targetBatch.product_name}": Current stock is ${currentProdStock} ${targetBatch.base_unit}, but this batch produced ${targetBatch.quantity_produced} ${targetBatch.base_unit}. Stock would become negative (${wouldBeProdStock} ${targetBatch.base_unit}). Output was likely already sold.`
-      );
-    }
-
-    if (warningDetails.length > 0 && !forceAllowNegativeStock) {
+    // SAFETY CHECK: Strictly block if bulk stock is less than batch output
+    if (currentProdStock < batchQtyProduced) {
+      const shortage = Number((batchQtyProduced - currentProdStock).toFixed(4));
       return {
         success: false,
         hasNegativeStockWarning: true,
-        warningDetails,
-        message: 'Reversing this production batch will cause negative finished stock balance.'
+        warningDetails: [
+          `Product "${targetBatch.product_name}": Current bulk stock is ${currentProdStock} ${targetBatch.base_unit}, but this batch produced ${batchQtyProduced} ${targetBatch.base_unit}. Shortfall: ${shortage} ${targetBatch.base_unit} (already packed or sold).`
+        ],
+        message: `Cannot delete batch: Output was already consumed or sold. Current bulk stock is ${currentProdStock} ${targetBatch.base_unit}, but batch produced ${batchQtyProduced} ${targetBatch.base_unit} (missing ${shortage} ${targetBatch.base_unit}). Reversing this batch would drive bulk stock negative.`
       };
     }
 
     const now = new Date().toISOString();
 
-    // 1. Restore consumed raw materials
-    if (targetBatch.raw_materials_consumed) {
-      for (const consumed of targetBatch.raw_materials_consumed) {
-        const rm = rawMaterials.find(m => m.id === consumed.raw_material_id);
-        if (rm) {
-          const prevStk = Number(rm.current_stock);
-          const nextStk = Number((prevStk + Number(consumed.quantity_consumed)).toFixed(4));
-          const updatedRm = { ...rm, current_stock: nextStk, updated_at: now };
-          await supabaseService.upsertRawMaterial(updatedRm);
-
-          const rawMvt: RawMaterialMovement = {
-            id: generateId(),
-            raw_material_id: rm.id,
-            raw_material_name: rm.name,
-            movement_type: 'adjustment',
-            quantity: Number(consumed.quantity_consumed),
-            previous_stock: prevStk,
-            new_stock: nextStk,
-            reference_id: targetBatch.batch_number,
-            notes: `Restored raw material from reversed production batch ${targetBatch.batch_number}`,
-            date: now,
-            created_by_name: user.name,
-          };
-          await supabaseService.upsertRawMaterialMovement(rawMvt);
-        }
+    // 1. Try atomic PostgreSQL RPC execution first
+    try {
+      const rpcResult = await supabaseService.reverseProductionBatch(batchId, user.name, user.role);
+      if (rpcResult && rpcResult.success) {
+        setProductionBatches(prev => prev.filter(b => b.id !== batchId));
+        await loadCloudData();
+        return {
+          success: true,
+          message: rpcResult.message || `Production Batch ${targetBatch.batch_number} reversed and deleted successfully.`
+        };
+      }
+    } catch (rpcErr: any) {
+      console.warn('RPC reversal notice:', rpcErr);
+      if (rpcErr?.message && !rpcErr.message.includes('function') && !rpcErr.message.includes('42883')) {
+        return {
+          success: false,
+          message: `Batch deletion failed: ${rpcErr.message}`
+        };
       }
     }
 
-    // 2. Deduct finished goods output
-    if (targetProduct) {
-      const prevStk = Number(targetProduct.current_stock);
-      const nextStk = Math.max(0, Number((prevStk - Number(targetBatch.quantity_produced)).toFixed(4)));
-      const updatedProd = { ...targetProduct, current_stock: nextStk, updated_at: now };
-      await supabaseService.upsertProduct(updatedProd);
+    // 2. Client-coordinated atomic reversal with full rollback support
+    const restoredRMs: { id: string; prevStock: number }[] = [];
+    let productReverted: { id: string; prevStock: number } | null = null;
 
-      const prodMvt: StockMovement = {
-        id: generateId(),
-        product_id: targetProduct.id,
-        product_name: targetProduct.name,
-        movement_type: 'adjustment',
-        quantity: -targetBatch.quantity_produced,
-        previous_stock: prevStk,
-        new_stock: nextStk,
-        reference_id: targetBatch.batch_number,
-        notes: `Deducted finished output of reversed production batch ${targetBatch.batch_number}`,
-        date: now,
-        created_by_name: user.name,
+    try {
+      // Step A: Restore consumed raw materials
+      if (targetBatch.raw_materials_consumed && targetBatch.raw_materials_consumed.length > 0) {
+        for (const consumed of targetBatch.raw_materials_consumed) {
+          const rm = rawMaterials.find(m => m.id === consumed.raw_material_id);
+          if (rm) {
+            const prevStk = Number(rm.current_stock);
+            const consumedQty = Number(consumed.quantity_consumed);
+            const nextStk = Number((prevStk + consumedQty).toFixed(4));
+            restoredRMs.push({ id: rm.id, prevStock: prevStk });
+
+            const updatedRm = { ...rm, current_stock: nextStk, updated_at: now };
+            await supabaseService.upsertRawMaterial(updatedRm);
+
+            const rawMvt: RawMaterialMovement = {
+              id: generateId(),
+              raw_material_id: rm.id,
+              raw_material_name: rm.name,
+              movement_type: 'production_reversal',
+              quantity: consumedQty,
+              previous_stock: prevStk,
+              new_stock: nextStk,
+              reference_id: targetBatch.batch_number,
+              notes: `Restored raw material from reversed production batch ${targetBatch.batch_number}`,
+              date: now,
+              created_by_name: user.name,
+            };
+            await supabaseService.upsertRawMaterialMovement(rawMvt);
+          }
+        }
+      }
+
+      // Step B: Deduct finished bulk goods output
+      if (targetProduct) {
+        const prevStk = Number(targetProduct.current_stock);
+        const nextStk = Number((prevStk - batchQtyProduced).toFixed(4));
+        productReverted = { id: targetProduct.id, prevStock: prevStk };
+
+        const updatedProd = { ...targetProduct, current_stock: nextStk, updated_at: now };
+        await supabaseService.upsertProduct(updatedProd);
+
+        const prodMvt: StockMovement = {
+          id: generateId(),
+          product_id: targetProduct.id,
+          product_name: targetProduct.name,
+          movement_type: 'production_reversal',
+          quantity: -batchQtyProduced,
+          previous_stock: prevStk,
+          new_stock: nextStk,
+          reference_id: targetBatch.batch_number,
+          notes: `Deducted finished output of reversed production batch ${targetBatch.batch_number}`,
+          date: now,
+          created_by_name: user.name,
+        };
+        await supabaseService.upsertStockMovement(prodMvt);
+      }
+
+      // Step C: Delete batch record from Supabase
+      await supabaseService.deleteProductionBatch(batchId);
+      setProductionBatches(prev => prev.filter(b => b.id !== batchId));
+
+      // Step D: Record in Deletion Audit Log
+      await addDeletionLogEntry({
+        entity_type: 'production_batch',
+        entity_id: batchId,
+        entity_title: `Batch ${targetBatch.batch_number} (${targetBatch.product_name})`,
+        action_type: 'reversed_and_deleted',
+        impact_summary: `Reversed Production Batch ${targetBatch.batch_number}: Restored ${targetBatch.raw_materials_consumed?.length || 0} raw materials, deducted ${batchQtyProduced} ${targetBatch.base_unit} bulk stock.`,
+        performed_by: user.name,
+        performed_by_role: user.role,
+      });
+
+      await loadCloudData();
+
+      return {
+        success: true,
+        message: `Production Batch ${targetBatch.batch_number} reversed successfully. All consumed raw materials returned to warehouse inventory and finished bulk stock deducted.`
       };
-      await supabaseService.upsertStockMovement(prodMvt);
+    } catch (err: any) {
+      console.error('Error during production reversal, rolling back mutations:', err);
+      // ATOMIC ROLLBACK: restore any partially mutated stock
+      for (const r of restoredRMs) {
+        const rm = rawMaterials.find(m => m.id === r.id);
+        if (rm) {
+          await supabaseService.upsertRawMaterial({ ...rm, current_stock: r.prevStock }).catch(console.error);
+        }
+      }
+      if (productReverted) {
+        const prod = products.find(p => p.id === productReverted!.id);
+        if (prod) {
+          await supabaseService.upsertProduct({ ...prod, current_stock: productReverted.prevStock }).catch(console.error);
+        }
+      }
+      await loadCloudData();
+      return {
+        success: false,
+        message: `Batch deletion failed and all stock changes were safely rolled back: ${err?.message || 'Database error'}`
+      };
     }
-
-    // 3. Delete batch record from Supabase
-    await supabaseService.deleteProductionBatch(batchId);
-    setProductionBatches(prev => prev.filter(b => b.id !== batchId));
-
-    await addDeletionLogEntry({
-      entity_type: 'production_batch',
-      entity_id: batchId,
-      entity_title: `Batch ${targetBatch.batch_number} (${targetBatch.product_name})`,
-      action_type: 'reversed_and_deleted',
-      impact_summary: `Reversed Production Batch ${targetBatch.batch_number}: Restored raw materials, deducted ${targetBatch.quantity_produced} ${targetBatch.base_unit} finished output.`,
-      performed_by: user.name,
-      performed_by_role: user.role,
-    });
-
-    await loadCloudData();
-
-    return {
-      success: true,
-      message: `Production Batch ${targetBatch.batch_number} reversed successfully. Consumed raw materials were restored to warehouse stock.`
-    };
   };
 
   // ==============================================================================
