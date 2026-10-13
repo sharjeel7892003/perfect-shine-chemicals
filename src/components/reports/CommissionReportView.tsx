@@ -227,14 +227,24 @@ export const CommissionReportView: React.FC = () => {
     }
   };
 
+  const [isPrinting, setIsPrinting] = useState(false);
+
   const handlePrint = async () => {
-    await printElement('printable-commission-report', `Sales_Commission_Report_${selectedMonth}`);
+    setIsPrinting(true);
+    try {
+      await printElement('printable-commission-report', `Sales_Commission_Report_${selectedMonth}`);
+    } catch (e) {
+      console.error('Print failed, falling back to window.print():', e);
+      window.print();
+    } finally {
+      setIsPrinting(false);
+    }
   };
 
   return (
     <div className="space-y-6">
-      {/* Top Header & Actions Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl">
+      {/* Top Header & Actions Bar (Hidden on print) */}
+      <div className="no-print print:hidden flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-3xl bg-slate-900 border border-slate-800 shadow-xl">
         <div>
           <div className="flex items-center gap-2.5 flex-wrap">
             <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight flex items-center gap-2">
@@ -282,11 +292,12 @@ export const CommissionReportView: React.FC = () => {
 
           <button
             onClick={handlePrint}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors shadow-sm"
+            disabled={isPrinting}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors shadow-sm disabled:opacity-50"
             title="Print or export commission statement"
           >
             <Printer className="w-3.5 h-3.5 text-slate-300" />
-            <span>Print Report</span>
+            <span>{isPrinting ? 'Preparing Print...' : 'Print Report'}</span>
           </button>
 
           {isOwner && (
@@ -311,8 +322,8 @@ export const CommissionReportView: React.FC = () => {
         </div>
       </div>
 
-      {/* Settings Bar (Include Depreciation Toggle & Notes) */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-3 rounded-2xl bg-slate-900/60 border border-slate-800/80 text-xs text-slate-300">
+      {/* Settings Bar (Include Depreciation Toggle & Notes) (Hidden on print) */}
+      <div className="no-print print:hidden flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-3 rounded-2xl bg-slate-900/60 border border-slate-800/80 text-xs text-slate-300">
         <label className="flex items-center gap-2.5 cursor-pointer select-none">
           <input
             type="checkbox"
@@ -337,87 +348,127 @@ export const CommissionReportView: React.FC = () => {
       </div>
 
       {/* Printable Area Starts */}
-      <div id="printable-commission-report" className="space-y-6">
+      <div id="printable-commission-report" className="space-y-6 print:space-y-4 print:p-2 print:bg-white print:text-slate-900">
+        {/* Printable Statement Header (Visible only when printed) */}
+        <div className="hidden print:flex flex-col sm:flex-row justify-between items-start border-b-2 border-slate-900 pb-5 mb-4 gap-4 text-slate-900">
+          <div className="flex items-start gap-4">
+            <img 
+              src="/assets/logo.png" 
+              alt="Perfect Shine Chemicals" 
+              className="w-16 h-16 sm:w-20 sm:h-20 object-contain shrink-0" 
+            />
+            <div>
+              <h2 className="text-2xl font-black text-slate-900 tracking-tight leading-none uppercase">
+                PERFECT SHINE CHEMICALS
+              </h2>
+              <p className="text-xs text-slate-600 font-semibold mt-1">
+                Industrial & Commercial Cleaning Solutions Manufacturer
+              </p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Near Tariq Hameed Mosque R, A 2 Block China Scheme, Lahore, Pakistan
+              </p>
+              <p className="text-xs text-slate-700 font-semibold mt-0.5">
+                Tel / WhatsApp: <span className="font-mono font-bold text-slate-900">0327-4549485</span>
+              </p>
+            </div>
+          </div>
+
+          <div className="text-left sm:text-right shrink-0">
+            <div className="inline-block px-3 py-1 rounded bg-slate-900 text-white text-xs font-black uppercase tracking-wider mb-1.5">
+              Sales Commission & Profit Statement
+            </div>
+            <p className="text-sm font-bold text-slate-800">
+              Period: {reportSummary.monthName} ({selectedMonth})
+            </p>
+            <p className="text-xs text-slate-600 mt-0.5">
+              Status: <strong className="uppercase font-mono">{reportSummary.is_closed ? 'Closed (Snapshot Locked)' : 'Provisional (Month Open)'}</strong>
+            </p>
+            <p className="text-[10px] text-slate-500 mt-1">
+              Printed on {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })} at {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </p>
+          </div>
+        </div>
+
         {/* Month Summary KPI Cards */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           {/* 1. Total Gross Profit */}
-          <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-md">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+          <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-md print:bg-slate-50 print:border-slate-300 print:shadow-none">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block print:text-slate-600">
               1. Total Gross Profit
             </span>
-            <p className="text-lg font-black font-mono text-emerald-400 mt-1">
+            <p className="text-lg font-black font-mono text-emerald-400 mt-1 print:text-slate-900">
               {formatPKR(reportSummary.total_gross_profit)}
             </p>
-            <span className="text-[10px] text-slate-500 block mt-0.5">
+            <span className="text-[10px] text-slate-500 block mt-0.5 print:text-slate-600">
               All {reportSummary.total_invoices} invoices − returns
             </span>
           </div>
 
           {/* 2. Monthly Expenses */}
-          <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-md">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+          <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-md print:bg-slate-50 print:border-slate-300 print:shadow-none">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block print:text-slate-600">
               2. Monthly Expenses
             </span>
-            <p className="text-lg font-black font-mono text-rose-400 mt-1">
+            <p className="text-lg font-black font-mono text-rose-400 mt-1 print:text-slate-900">
               - {formatPKR(reportSummary.total_expenses)}
             </p>
-            <span className="text-[10px] text-slate-500 block mt-0.5">
+            <span className="text-[10px] text-slate-500 block mt-0.5 print:text-slate-600">
               Centralized factory overhead
             </span>
           </div>
 
           {/* 3. Profit Before Commission */}
-          <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-md">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+          <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-md print:bg-slate-50 print:border-slate-300 print:shadow-none">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block print:text-slate-600">
               3. Profit Before Comm.
             </span>
-            <p className={`text-lg font-black font-mono mt-1 ${
+            <p className={`text-lg font-black font-mono mt-1 print:text-slate-900 ${
               reportSummary.profit_before_commission >= 0 ? 'text-cyan-400' : 'text-rose-400'
             }`}>
               {formatPKR(reportSummary.profit_before_commission)}
             </p>
-            <span className="text-[10px] text-slate-500 block mt-0.5">
+            <span className="text-[10px] text-slate-500 block mt-0.5 print:text-slate-600">
               Gross Profit − Expenses
             </span>
           </div>
 
           {/* 4. Coverage Factor */}
-          <div className="p-4 rounded-2xl bg-indigo-950/20 border border-indigo-800/40 shadow-md">
-            <span className="text-[10px] font-bold text-indigo-300 uppercase tracking-wider block">
+          <div className="p-4 rounded-2xl bg-indigo-950/20 border border-indigo-800/40 shadow-md print:bg-slate-50 print:border-slate-300 print:shadow-none">
+            <span className="text-[10px] font-bold text-indigo-300 uppercase tracking-wider block print:text-slate-600">
               4. Coverage Factor
             </span>
-            <p className="text-lg font-black font-mono text-indigo-300 mt-1">
+            <p className="text-lg font-black font-mono text-indigo-300 mt-1 print:text-slate-900">
               {(reportSummary.coverage_factor * 100).toFixed(1)}%
             </p>
-            <span className="text-[10px] text-indigo-400/80 block mt-0.5">
+            <span className="text-[10px] text-indigo-400/80 block mt-0.5 print:text-slate-600">
               Factor = {reportSummary.coverage_factor.toFixed(4)}
             </span>
           </div>
 
           {/* 5. Total Commission Earned */}
-          <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-md">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+          <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 shadow-md print:bg-slate-50 print:border-slate-300 print:shadow-none">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block print:text-slate-600">
               5. Total Commission
             </span>
-            <p className="text-lg font-black font-mono text-amber-400 mt-1">
+            <p className="text-lg font-black font-mono text-amber-400 mt-1 print:text-slate-900">
               {formatPKR(reportSummary.total_commission)}
             </p>
-            <span className="text-[10px] text-slate-500 block mt-0.5">
+            <span className="text-[10px] text-slate-500 block mt-0.5 print:text-slate-600">
               All salespeople payouts
             </span>
           </div>
 
           {/* 6. Owner's Remaining Profit */}
-          <div className="p-4 rounded-2xl bg-emerald-950/20 border border-emerald-800/40 shadow-md">
-            <span className="text-[10px] font-bold text-emerald-300 uppercase tracking-wider block">
+          <div className="p-4 rounded-2xl bg-emerald-950/20 border border-emerald-800/40 shadow-md print:bg-slate-50 print:border-slate-300 print:shadow-none">
+            <span className="text-[10px] font-bold text-emerald-300 uppercase tracking-wider block print:text-slate-600">
               6. Owner's Profit
             </span>
-            <p className={`text-lg font-black font-mono mt-1 ${
+            <p className={`text-lg font-black font-mono mt-1 print:text-slate-900 ${
               reportSummary.owner_remaining_profit >= 0 ? 'text-emerald-400' : 'text-rose-400'
             }`}>
               {formatPKR(reportSummary.owner_remaining_profit)}
             </p>
-            <span className="text-[10px] text-emerald-400/80 block mt-0.5">
+            <span className="text-[10px] text-emerald-400/80 block mt-0.5 print:text-slate-600">
               Net retained by factory
             </span>
           </div>
@@ -425,8 +476,8 @@ export const CommissionReportView: React.FC = () => {
 
         {/* Coverage Factor Explanation Alert if factor is 0 */}
         {reportSummary.coverage_factor === 0 && reportSummary.total_expenses > 0 && (
-          <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 flex items-center gap-3">
-            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+          <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 flex items-center gap-3 print:bg-slate-100 print:text-slate-800 print:border-slate-300">
+            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 print:hidden" />
             <div>
               <strong className="font-bold">Overhead Expenses Exceed Gross Profit:</strong> Monthly expenses ({formatPKR(reportSummary.total_expenses)}) equal or exceed total gross profit ({formatPKR(reportSummary.total_gross_profit)}). The coverage factor is 0%, so all sales commissions are PKR 0.00 for this month. No carry-forward of losses.
             </div>
@@ -434,17 +485,17 @@ export const CommissionReportView: React.FC = () => {
         )}
 
         {/* Salespeople Breakdown Table */}
-        <div className="rounded-3xl bg-slate-900 border border-slate-800 overflow-hidden shadow-xl">
-          <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between flex-wrap gap-2">
+        <div className="rounded-3xl bg-slate-900 border border-slate-800 overflow-hidden shadow-xl print:bg-white print:border-slate-300 print:shadow-none print:rounded-none">
+          <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between flex-wrap gap-2 print:border-slate-300 print:bg-white">
             <div>
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <h3 className="text-base font-bold text-white flex items-center gap-2 print:text-slate-900">
                 <span>Salesperson Performance & Commission Payouts</span>
               </h3>
-              <p className="text-xs text-slate-400 mt-0.5">
+              <p className="text-xs text-slate-400 mt-0.5 print:text-slate-600">
                 Calculated on invoice date basis. Returns deducted in the month recorded.
               </p>
             </div>
-            <span className="text-xs font-mono font-bold text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2.5 py-1 rounded-xl">
+            <span className="text-xs font-mono font-bold text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2.5 py-1 rounded-xl print:text-slate-800 print:border-slate-300 print:bg-slate-100">
               {reportSummary.monthName} Statement
             </span>
           </div>
@@ -452,31 +503,31 @@ export const CommissionReportView: React.FC = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse">
               <thead>
-                <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 font-bold uppercase tracking-wider text-[10px]">
-                  <th className="py-3.5 px-4">Salesperson</th>
-                  <th className="py-3.5 px-3 text-center">Invoices</th>
-                  <th className="py-3.5 px-3 text-right">Total Sales</th>
-                  <th className="py-3.5 px-3 text-right">Gross Profit</th>
-                  <th className="py-3.5 px-3 text-center">Coverage</th>
-                  <th className="py-3.5 px-3 text-center">Rate</th>
-                  <th className="py-3.5 px-4 text-right">Commission Earned</th>
-                  <th className="py-3.5 px-3 text-right">Paid</th>
-                  <th className="py-3.5 px-3 text-right">Balance Due</th>
-                  <th className="py-3.5 px-4 text-center">Actions</th>
+                <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 font-bold uppercase tracking-wider text-[10px] print:bg-slate-100 print:text-slate-800 print:border-slate-300">
+                  <th className="py-3.5 px-4 print:border print:border-slate-300">Salesperson</th>
+                  <th className="py-3.5 px-3 text-center print:border print:border-slate-300">Invoices</th>
+                  <th className="py-3.5 px-3 text-right print:border print:border-slate-300">Total Sales</th>
+                  <th className="py-3.5 px-3 text-right print:border print:border-slate-300">Gross Profit</th>
+                  <th className="py-3.5 px-3 text-center print:border print:border-slate-300">Coverage</th>
+                  <th className="py-3.5 px-3 text-center print:border print:border-slate-300">Rate</th>
+                  <th className="py-3.5 px-4 text-right print:border print:border-slate-300">Commission Earned</th>
+                  <th className="py-3.5 px-3 text-right print:border print:border-slate-300">Paid</th>
+                  <th className="py-3.5 px-3 text-right print:border print:border-slate-300">Balance Due</th>
+                  <th className="no-print print:hidden py-3.5 px-4 text-center">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/60 text-slate-300">
+              <tbody className="divide-y divide-slate-800/60 text-slate-300 print:text-slate-900 print:divide-slate-300">
                 {reportSummary.salespeople.map((sp) => (
-                  <tr key={sp.salesperson_id} className="hover:bg-slate-800/30 transition-colors">
-                    <td className="py-3.5 px-4 font-bold text-white">
+                  <tr key={sp.salesperson_id} className="hover:bg-slate-800/30 transition-colors print:border-b print:border-slate-200">
+                    <td className="py-3.5 px-4 font-bold text-white print:text-slate-900 print:border-r print:border-slate-200">
                       <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 rounded-lg bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-mono font-bold text-xs shrink-0">
+                        <div className="no-print print:hidden w-7 h-7 rounded-lg bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-mono font-bold text-xs shrink-0">
                           {sp.salesperson_name.charAt(0)}
                         </div>
                         <div>
                           <span>{sp.salesperson_name}</span>
                           {sp.returns_gross_profit > 0 && (
-                            <span className="text-[10px] text-rose-400 block font-normal">
+                            <span className="text-[10px] text-rose-400 block font-normal print:text-rose-700">
                               (Return GP: -{formatPKR(sp.returns_gross_profit)})
                             </span>
                           )}
@@ -484,41 +535,41 @@ export const CommissionReportView: React.FC = () => {
                       </div>
                     </td>
 
-                    <td className="py-3.5 px-3 text-center font-mono">
+                    <td className="py-3.5 px-3 text-center font-mono print:text-slate-900 print:border-r print:border-slate-200">
                       {sp.invoice_count}
                     </td>
 
-                    <td className="py-3.5 px-3 text-right font-mono text-slate-300">
+                    <td className="py-3.5 px-3 text-right font-mono text-slate-300 print:text-slate-900 print:border-r print:border-slate-200">
                       {formatPKR(sp.total_sales)}
                     </td>
 
-                    <td className="py-3.5 px-3 text-right font-mono font-bold text-emerald-400">
+                    <td className="py-3.5 px-3 text-right font-mono font-bold text-emerald-400 print:text-slate-900 print:border-r print:border-slate-200">
                       {formatPKR(sp.gross_profit)}
                     </td>
 
-                    <td className="py-3.5 px-3 text-center font-mono text-indigo-300">
+                    <td className="py-3.5 px-3 text-center font-mono text-indigo-300 print:text-slate-900 print:border-r print:border-slate-200">
                       {(sp.coverage_factor * 100).toFixed(1)}%
                     </td>
 
-                    <td className="py-3.5 px-3 text-center font-mono font-bold text-slate-200">
+                    <td className="py-3.5 px-3 text-center font-mono font-bold text-slate-200 print:text-slate-900 print:border-r print:border-slate-200">
                       {sp.commission_rate}%
                     </td>
 
-                    <td className="py-3.5 px-4 text-right font-mono font-black text-amber-400 text-sm">
+                    <td className="py-3.5 px-4 text-right font-mono font-black text-amber-400 text-sm print:text-slate-900 print:border-r print:border-slate-200">
                       {formatPKR(sp.commission_earned)}
                     </td>
 
-                    <td className="py-3.5 px-3 text-right font-mono text-slate-400">
+                    <td className="py-3.5 px-3 text-right font-mono text-slate-400 print:text-slate-900 print:border-r print:border-slate-200">
                       {formatPKR(sp.commission_paid)}
                     </td>
 
-                    <td className="py-3.5 px-3 text-right font-mono font-bold">
-                      <span className={sp.commission_balance > 0 ? 'text-rose-400' : 'text-emerald-400'}>
+                    <td className="py-3.5 px-3 text-right font-mono font-bold print:text-slate-900">
+                      <span className={sp.commission_balance > 0 ? 'text-rose-400 print:text-slate-900' : 'text-emerald-400 print:text-slate-900'}>
                         {formatPKR(sp.commission_balance)}
                       </span>
                     </td>
 
-                    <td className="py-3.5 px-4 text-center">
+                    <td className="no-print print:hidden py-3.5 px-4 text-center">
                       <div className="flex items-center justify-center gap-2">
                         <button
                           type="button"
@@ -545,34 +596,53 @@ export const CommissionReportView: React.FC = () => {
                 ))}
               </tbody>
               <tfoot>
-                <tr className="border-t-2 border-slate-800 bg-slate-950/80 font-black text-white text-xs">
-                  <td className="py-3.5 px-4">Factory Total</td>
-                  <td className="py-3.5 px-3 text-center font-mono">
+                <tr className="border-t-2 border-slate-800 bg-slate-950/80 font-black text-white text-xs print:bg-slate-100 print:text-slate-900 print:border-slate-300">
+                  <td className="py-3.5 px-4 print:border-r print:border-slate-300">Factory Total</td>
+                  <td className="py-3.5 px-3 text-center font-mono print:border-r print:border-slate-300">
                     {reportSummary.total_invoices}
                   </td>
-                  <td className="py-3.5 px-3 text-right font-mono text-slate-300">
+                  <td className="py-3.5 px-3 text-right font-mono text-slate-300 print:text-slate-900 print:border-r print:border-slate-300">
                     {formatPKR(reportSummary.total_sales_amount)}
                   </td>
-                  <td className="py-3.5 px-3 text-right font-mono text-emerald-400">
+                  <td className="py-3.5 px-3 text-right font-mono text-emerald-400 print:text-slate-900 print:border-r print:border-slate-300">
                     {formatPKR(reportSummary.total_gross_profit)}
                   </td>
-                  <td className="py-3.5 px-3 text-center font-mono text-indigo-300">
+                  <td className="py-3.5 px-3 text-center font-mono text-indigo-300 print:text-slate-900 print:border-r print:border-slate-300">
                     {(reportSummary.coverage_factor * 100).toFixed(1)}%
                   </td>
-                  <td className="py-3.5 px-3 text-center">-</td>
-                  <td className="py-3.5 px-4 text-right font-mono text-amber-400 text-sm">
+                  <td className="py-3.5 px-3 text-center print:border-r print:border-slate-300">-</td>
+                  <td className="py-3.5 px-4 text-right font-mono text-amber-400 text-sm print:text-slate-900 print:border-r print:border-slate-300">
                     {formatPKR(reportSummary.total_commission)}
                   </td>
-                  <td className="py-3.5 px-3 text-right font-mono text-slate-400">
+                  <td className="py-3.5 px-3 text-right font-mono text-slate-400 print:text-slate-900 print:border-r print:border-slate-300">
                     {formatPKR(reportSummary.salespeople.reduce((a, b) => a + b.commission_paid, 0))}
                   </td>
-                  <td className="py-3.5 px-3 text-right font-mono text-rose-400">
+                  <td className="py-3.5 px-3 text-right font-mono text-rose-400 print:text-slate-900">
                     {formatPKR(reportSummary.salespeople.reduce((a, b) => a + b.commission_balance, 0))}
                   </td>
-                  <td className="py-3.5 px-4 text-center">-</td>
+                  <td className="no-print print:hidden py-3.5 px-4 text-center">-</td>
                 </tr>
               </tfoot>
             </table>
+          </div>
+        </div>
+
+        {/* Formal Signature & Authorization Block (Visible only when printed) */}
+        <div className="hidden print:grid grid-cols-3 gap-8 pt-6 mt-6 border-t-2 border-slate-900 text-slate-900 text-xs">
+          <div>
+            <p className="text-slate-500 uppercase tracking-wider text-[10px] font-bold">Prepared By</p>
+            <div className="mt-8 border-b border-slate-400"></div>
+            <p className="font-bold text-slate-800 mt-1.5">{currentUser?.name || 'Accounts Officer'}</p>
+          </div>
+          <div>
+            <p className="text-slate-500 uppercase tracking-wider text-[10px] font-bold">Verified By</p>
+            <div className="mt-8 border-b border-slate-400"></div>
+            <p className="font-bold text-slate-800 mt-1.5">Internal Audit / Finance</p>
+          </div>
+          <div>
+            <p className="text-slate-500 uppercase tracking-wider text-[10px] font-bold">Approved By (Owner)</p>
+            <div className="mt-8 border-b border-slate-400"></div>
+            <p className="font-bold text-slate-800 mt-1.5">Managing Director / Partner</p>
           </div>
         </div>
       </div>
@@ -586,99 +656,144 @@ export const CommissionReportView: React.FC = () => {
           title={`Invoices Breakdown: ${drilldownSalesperson.salesperson_name} (${reportSummary.monthName})`}
         >
           <div className="space-y-4">
-            <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/60 flex items-center justify-between text-xs">
-              <div>
-                <span className="text-slate-400 block text-[10px] uppercase">Commission Rate:</span>
-                <span className="font-bold text-white">{drilldownSalesperson.commission_rate}%</span>
+            <div id="printable-commission-drilldown" className="space-y-4 print:p-2 print:bg-white print:text-slate-900">
+              {/* Printable Header for Individual Salesperson Statement */}
+              <div className="hidden print:flex flex-col sm:flex-row justify-between items-start border-b-2 border-slate-900 pb-4 mb-3 gap-3 text-slate-900">
+                <div className="flex items-start gap-3">
+                  <img 
+                    src="/assets/logo.png" 
+                    alt="Perfect Shine Chemicals" 
+                    className="w-14 h-14 object-contain shrink-0" 
+                  />
+                  <div>
+                    <h2 className="text-xl font-black text-slate-900 tracking-tight leading-none uppercase">
+                      PERFECT SHINE CHEMICALS
+                    </h2>
+                    <p className="text-xs text-slate-600 font-semibold mt-0.5">
+                      Industrial & Commercial Cleaning Solutions Manufacturer
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      Near Tariq Hameed Mosque R, A 2 Block China Scheme, Lahore • 0327-4549485
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right shrink-0">
+                  <div className="inline-block px-2.5 py-0.5 rounded bg-slate-900 text-white text-[11px] font-bold uppercase mb-1">
+                    Salesperson Commission Statement
+                  </div>
+                  <p className="text-xs font-bold text-slate-800">
+                    Staff: {drilldownSalesperson.salesperson_name}
+                  </p>
+                  <p className="text-[11px] text-slate-600">
+                    Month: {reportSummary.monthName} ({selectedMonth})
+                  </p>
+                </div>
               </div>
-              <div>
-                <span className="text-slate-400 block text-[10px] uppercase">Coverage Factor:</span>
-                <span className="font-bold text-indigo-400">{(drilldownSalesperson.coverage_factor * 100).toFixed(1)}%</span>
-              </div>
-              <div className="text-right">
-                <span className="text-slate-400 block text-[10px] uppercase">Net Profit Base:</span>
-                <span className="font-mono font-bold text-emerald-400">{formatPKR(drilldownSalesperson.gross_profit)}</span>
-              </div>
-              <div className="text-right">
-                <span className="text-slate-400 block text-[10px] uppercase">Commission Earned:</span>
-                <span className="font-mono font-black text-amber-400">{formatPKR(drilldownSalesperson.commission_earned)}</span>
-              </div>
-            </div>
 
-            {/* Invoices List */}
-            <div>
-              <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">
-                Invoices Credited ({drilldownSalesperson.invoices.length})
-              </h4>
-              {drilldownSalesperson.invoices.length === 0 ? (
-                <p className="text-xs text-slate-500 py-3 text-center">No invoices recorded for this month.</p>
-              ) : (
-                <div className="max-h-60 overflow-y-auto rounded-xl border border-slate-800">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead>
-                      <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 font-bold uppercase text-[10px]">
-                        <th className="py-2.5 px-3">Invoice #</th>
-                        <th className="py-2.5 px-3">Date</th>
-                        <th className="py-2.5 px-3">Customer</th>
-                        <th className="py-2.5 px-3 text-right">Revenue</th>
-                        <th className="py-2.5 px-3 text-right">COGS</th>
-                        <th className="py-2.5 px-3 text-right">Gross Profit</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800/60">
-                      {drilldownSalesperson.invoices.map((inv) => (
-                        <tr key={inv.sale_id} className="hover:bg-slate-800/30">
-                          <td className="py-2 px-3 font-mono font-bold text-white">{inv.invoice_number}</td>
-                          <td className="py-2 px-3 text-slate-400">{formatDate(inv.date)}</td>
-                          <td className="py-2 px-3 text-slate-300">{inv.customer_name}</td>
-                          <td className="py-2 px-3 text-right font-mono text-slate-300">{formatPKR(inv.revenue)}</td>
-                          <td className="py-2 px-3 text-right font-mono text-rose-400">{formatPKR(inv.cogs)}</td>
-                          <td className="py-2 px-3 text-right font-mono font-bold text-emerald-400">{formatPKR(inv.gross_profit)}</td>
+              <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/60 flex items-center justify-between text-xs print:bg-slate-50 print:border-slate-300 print:text-slate-900">
+                <div>
+                  <span className="text-slate-400 block text-[10px] uppercase print:text-slate-600">Commission Rate:</span>
+                  <span className="font-bold text-white print:text-slate-900">{drilldownSalesperson.commission_rate}%</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px] uppercase print:text-slate-600">Coverage Factor:</span>
+                  <span className="font-bold text-indigo-400 print:text-slate-900">{(drilldownSalesperson.coverage_factor * 100).toFixed(1)}%</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-slate-400 block text-[10px] uppercase print:text-slate-600">Net Profit Base:</span>
+                  <span className="font-mono font-bold text-emerald-400 print:text-slate-900">{formatPKR(drilldownSalesperson.gross_profit)}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-slate-400 block text-[10px] uppercase print:text-slate-600">Commission Earned:</span>
+                  <span className="font-mono font-black text-amber-400 print:text-slate-900">{formatPKR(drilldownSalesperson.commission_earned)}</span>
+                </div>
+              </div>
+
+              {/* Invoices List */}
+              <div>
+                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2 print:text-slate-800">
+                  Invoices Credited ({drilldownSalesperson.invoices.length})
+                </h4>
+                {drilldownSalesperson.invoices.length === 0 ? (
+                  <p className="text-xs text-slate-500 py-3 text-center print:text-slate-600">No invoices recorded for this month.</p>
+                ) : (
+                  <div className="max-h-60 overflow-y-auto rounded-xl border border-slate-800 print:max-h-none print:overflow-visible print:border-slate-300">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 font-bold uppercase text-[10px] print:bg-slate-100 print:text-slate-800 print:border-slate-300">
+                          <th className="py-2.5 px-3">Invoice #</th>
+                          <th className="py-2.5 px-3">Date</th>
+                          <th className="py-2.5 px-3">Customer</th>
+                          <th className="py-2.5 px-3 text-right">Revenue</th>
+                          <th className="py-2.5 px-3 text-right">COGS</th>
+                          <th className="py-2.5 px-3 text-right">Gross Profit</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60 print:divide-slate-200">
+                        {drilldownSalesperson.invoices.map((inv) => (
+                          <tr key={inv.sale_id} className="hover:bg-slate-800/30 print:border-b print:border-slate-200">
+                            <td className="py-2 px-3 font-mono font-bold text-white print:text-slate-900">{inv.invoice_number}</td>
+                            <td className="py-2 px-3 text-slate-400 print:text-slate-800">{formatDate(inv.date)}</td>
+                            <td className="py-2 px-3 text-slate-300 print:text-slate-800">{inv.customer_name}</td>
+                            <td className="py-2 px-3 text-right font-mono text-slate-300 print:text-slate-900">{formatPKR(inv.revenue)}</td>
+                            <td className="py-2 px-3 text-right font-mono text-rose-400 print:text-slate-900">{formatPKR(inv.cogs)}</td>
+                            <td className="py-2 px-3 text-right font-mono font-bold text-emerald-400 print:text-slate-900">{formatPKR(inv.gross_profit)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Returns Deductions if any */}
+              {drilldownSalesperson.returns.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-bold text-rose-400 uppercase tracking-wider mb-2 flex items-center gap-1.5 print:text-rose-700">
+                    <RotateCcw className="w-3.5 h-3.5 no-print print:hidden" />
+                    <span>Sales Returns Deductions ({drilldownSalesperson.returns.length})</span>
+                  </h4>
+                  <div className="max-h-40 overflow-y-auto rounded-xl border border-rose-900/40 bg-rose-950/10 print:max-h-none print:overflow-visible print:border-slate-300 print:bg-white">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="border-b border-rose-900/40 bg-rose-950/40 text-rose-300 font-bold uppercase text-[10px] print:bg-slate-100 print:text-slate-800 print:border-slate-300">
+                          <th className="py-2.5 px-3">Credit Note #</th>
+                          <th className="py-2.5 px-3">Date</th>
+                          <th className="py-2.5 px-3">Inv Ref</th>
+                          <th className="py-2.5 px-3 text-right">Returned Rev</th>
+                          <th className="py-2.5 px-3 text-right">Reversed COGS</th>
+                          <th className="py-2.5 px-3 text-right">GP Deducted</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-rose-900/20 print:divide-slate-200">
+                        {drilldownSalesperson.returns.map((ret) => (
+                          <tr key={ret.return_id} className="print:border-b print:border-slate-200">
+                            <td className="py-2 px-3 font-mono font-bold text-rose-300 print:text-slate-900">{ret.credit_note_number}</td>
+                            <td className="py-2 px-3 text-slate-400 print:text-slate-800">{formatDate(ret.date)}</td>
+                            <td className="py-2 px-3 font-mono text-slate-400 print:text-slate-800">{ret.invoice_number}</td>
+                            <td className="py-2 px-3 text-right font-mono text-rose-300 print:text-slate-900">-{formatPKR(ret.returned_revenue)}</td>
+                            <td className="py-2 px-3 text-right font-mono text-slate-400 print:text-slate-900">{formatPKR(ret.returned_cogs)}</td>
+                            <td className="py-2 px-3 text-right font-mono font-bold text-rose-400 print:text-slate-900">-{formatPKR(ret.gross_profit_deducted)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
             </div>
 
-            {/* Returns Deductions if any */}
-            {drilldownSalesperson.returns.length > 0 && (
-              <div>
-                <h4 className="text-xs font-bold text-rose-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Sales Returns Deductions ({drilldownSalesperson.returns.length})</span>
-                </h4>
-                <div className="max-h-40 overflow-y-auto rounded-xl border border-rose-900/40 bg-rose-950/10">
-                  <table className="w-full text-left text-xs border-collapse">
-                    <thead>
-                      <tr className="border-b border-rose-900/40 bg-rose-950/40 text-rose-300 font-bold uppercase text-[10px]">
-                        <th className="py-2.5 px-3">Credit Note #</th>
-                        <th className="py-2.5 px-3">Date</th>
-                        <th className="py-2.5 px-3">Inv Ref</th>
-                        <th className="py-2.5 px-3 text-right">Returned Rev</th>
-                        <th className="py-2.5 px-3 text-right">Reversed COGS</th>
-                        <th className="py-2.5 px-3 text-right">GP Deducted</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-rose-900/20">
-                      {drilldownSalesperson.returns.map((ret) => (
-                        <tr key={ret.return_id}>
-                          <td className="py-2 px-3 font-mono font-bold text-rose-300">{ret.credit_note_number}</td>
-                          <td className="py-2 px-3 text-slate-400">{formatDate(ret.date)}</td>
-                          <td className="py-2 px-3 font-mono text-slate-400">{ret.invoice_number}</td>
-                          <td className="py-2 px-3 text-right font-mono text-rose-300">-{formatPKR(ret.returned_revenue)}</td>
-                          <td className="py-2 px-3 text-right font-mono text-slate-400">{formatPKR(ret.returned_cogs)}</td>
-                          <td className="py-2 px-3 text-right font-mono font-bold text-rose-400">-{formatPKR(ret.gross_profit_deducted)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
+            <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => printElement('printable-commission-drilldown', `Commission_${drilldownSalesperson.salesperson_name}_${selectedMonth}`)}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors"
+                title="Print detailed statement for this salesperson"
+              >
+                <Printer className="w-3.5 h-3.5 text-slate-300" />
+                <span>Print Breakdown</span>
+              </button>
 
-            <div className="flex justify-end pt-3 border-t border-slate-800">
               <button
                 type="button"
                 onClick={() => setDrilldownSalesperson(null)}

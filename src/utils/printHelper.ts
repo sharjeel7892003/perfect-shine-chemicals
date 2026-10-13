@@ -17,16 +17,18 @@ export const printElement = (elementId: string, documentTitle?: string): Promise
     }
 
     try {
-      // 1. Create a hidden, sandboxed printing iframe attached to body
+      // 1. Create a sandboxed printing iframe attached to body (rendered offscreen/transparently so Chromium generates layout)
       const iframe = document.createElement('iframe');
       iframe.setAttribute('id', `psc-print-frame-${Date.now()}`);
       iframe.style.position = 'fixed';
-      iframe.style.right = '0';
-      iframe.style.bottom = '0';
-      iframe.style.width = '0';
-      iframe.style.height = '0';
+      iframe.style.left = '0';
+      iframe.style.top = '0';
+      iframe.style.width = '100vw';
+      iframe.style.height = '100vh';
       iframe.style.border = '0';
-      iframe.style.visibility = 'hidden';
+      iframe.style.opacity = '0';
+      iframe.style.pointerEvents = 'none';
+      iframe.style.zIndex = '-9999';
       document.body.appendChild(iframe);
 
       const frameDoc = iframe.contentWindow?.document;
@@ -73,6 +75,11 @@ export const printElement = (elementId: string, documentTitle?: string): Promise
                 font-size: 11px !important;
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
+              }
+              /* Ensure the printed root and all children are explicitly visible in the iframe */
+              #print-root,
+              #print-root * {
+                visibility: visible !important;
               }
               /* Strip any container height / overflow restrictions */
               #${elementId},
