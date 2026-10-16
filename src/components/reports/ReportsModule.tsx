@@ -23,7 +23,8 @@ import {
   CheckCircle2,
   Clock,
   FlaskConical,
-  Building2
+  Building2,
+  Scale
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -40,11 +41,12 @@ import {
   getLocalMonthBounds
 } from '../../utils/financialEngine';
 import { ProductionReportView } from './ProductionReportView';
+import { ProductionVolumeReportView } from './ProductionVolumeReportView';
 import { RawMaterialPurchaseReportView } from './RawMaterialPurchaseReportView';
 import { CommissionReportView } from './CommissionReportView';
 import { calculateMonthlyCommissionSummary } from '../../utils/commissionEngine';
 
-export type ReportType = 'sales' | 'purchases' | 'rm_purchases' | 'profit' | 'commission' | 'production' | 'receivables' | 'payables' | 'valuation';
+export type ReportType = 'sales' | 'purchases' | 'rm_purchases' | 'profit' | 'commission' | 'production' | 'volume' | 'receivables' | 'payables' | 'valuation';
 
 interface ReportsModuleProps {
   initialReport?: ReportType;
@@ -745,6 +747,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
       case 'rm_purchases': return 'Raw Material Purchase History & Procurement Report';
       case 'profit': return 'Profit & Loss (P&L) Statement';
       case 'commission': return 'Sales Commission & Net Profit Payout Report';
+      case 'volume': return 'Production Volume Report in Weight (Kg & Tons)';
       case 'production':
         if (productionSubView === 'period') return `Production Period Summary (${periodGrouping.toUpperCase()})`;
         if (productionSubView === 'raw_materials') return 'Raw Material Consumption Audit Report';
@@ -862,6 +865,16 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
         >
           <Factory className="w-4 h-4" />
           <span>Production Batches</span>
+        </button>
+
+        <button
+          onClick={() => setActiveReport('volume')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            activeReport === 'volume' ? 'bg-emerald-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Scale className="w-4 h-4" />
+          <span>Volume (Kg & Tons)</span>
         </button>
 
         <button
@@ -1598,6 +1611,11 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
       {/* ================= REPORT: PRODUCTION BATCHES ================= */}
       {activeReport === 'production' && (
         <ProductionReportView />
+      )}
+
+      {/* ================= REPORT: PRODUCTION VOLUME REPORT (WEIGHT KG & TONS) ================= */}
+      {activeReport === 'volume' && (
+        <ProductionVolumeReportView />
       )}
 
       {/* ================= REPORT 4: RECEIVABLES REPORT ================= */}

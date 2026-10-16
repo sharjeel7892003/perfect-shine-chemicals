@@ -352,8 +352,26 @@ export const supabaseService = {
         }))
       }));
 
+      // 0B. Normalized Products (extract density from column or fallback [density:X] in description)
+      const normalizedProducts: Product[] = (prodRes.data || []).map((p: any) => {
+        let density = Number(p.density);
+        const desc = p.description || '';
+        if (isNaN(density) || density <= 0) {
+          const match = typeof desc === 'string' ? desc.match(/\[density:([0-9.]+)\]/) : null;
+          if (match && match[1]) {
+            density = parseFloat(match[1]);
+          } else {
+            density = 1.0;
+          }
+        }
+        return {
+          ...p,
+          density: Number(density) || 1.0,
+        };
+      });
+
       return {
-        products: (prodRes.data as Product[]) || [],
+        products: normalizedProducts,
         customers: (custRes.data as Customer[]) || [],
         suppliers: (suppRes.data as Supplier[]) || [],
         rawMaterials: normalizedRawMaterials,
@@ -391,8 +409,16 @@ export const supabaseService = {
 
     const validId = ensureUUID(product.id);
     product.id = validId;
+    const densityVal = Number(product.density) > 0 ? Number(product.density) : 1.0;
 
-    const payload = {
+    let safeDescription = product.description || '';
+    if (!safeDescription.includes('[density:')) {
+      safeDescription = `[density:${densityVal}] ${safeDescription}`.trim();
+    } else {
+      safeDescription = safeDescription.replace(/\[density:[0-9.]+\]/, `[density:${densityVal}]`).trim();
+    }
+
+    const payload: any = {
       id: validId,
       name: product.name,
       sku: product.sku,
@@ -403,15 +429,26 @@ export const supabaseService = {
       selling_price: Number(product.selling_price || 0),
       current_stock: Number(product.current_stock || 0),
       reorder_level: Number(product.reorder_level || 0),
-      description: product.description || '',
+      description: safeDescription,
       pack_sizes: product.pack_sizes || [],
       is_active: product.is_active !== false,
       is_archived: Boolean(product.is_archived),
+      density: densityVal,
       updated_at: new Date().toISOString()
     };
 
-    const { data, error } = await supabase.from('products').upsert(payload).select().single();
-    if (error) {
+    let { data, error } = await supabase.from('products').upsert(payload).select().single();
+    if (error && (error.message?.includes('density') || error.code === 'PGRST204')) {
+      // Graceful fallback if density column is not yet migrated in Supabase
+      const fallbackPayload = { ...payload };
+      delete fallbackPayload.density;
+      const retryRes = await supabase.from('products').upsert(fallbackPayload).select().single();
+      if (retryRes.error) {
+        console.error('Supabase upsertProduct fallback error:', retryRes.error);
+        throw new Error(`Product database write failed: ${retryRes.error.message}`);
+      }
+      data = { ...retryRes.data, density: densityVal, description: product.description };
+    } else if (error) {
       console.error('Supabase upsertProduct error:', error);
       throw new Error(`Product database write failed: ${error.message}`);
     }

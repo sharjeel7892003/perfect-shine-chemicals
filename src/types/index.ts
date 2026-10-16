@@ -55,6 +55,7 @@ export interface Product {
   is_private_label?: boolean; // True if contract/private label product for a client
   client_brand_name?: string; // e.g. "Neo Clean", "Crown Chemicals"
   default_labour_rate?: number; // Default packaging labour per bottle (e.g. 3.5 PKR)
+  density?: number; // Density in kg per liter for liquid products (default 1.0)
   created_at?: string;
   updated_at?: string;
 }
@@ -266,6 +267,7 @@ export interface Sale {
   labour_rate_per_bottle?: number; // Packing labour cost per bottle (e.g. 3.5 PKR)
   labour_bottle_qty?: number; // Sum of all bottles across line items (e.g. 948)
   labour_total_amount?: number; // Total labour cost (e.g. 3,318 PKR)
+  is_archived?: boolean;
   created_at?: string;
 }
 

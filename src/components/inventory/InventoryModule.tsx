@@ -80,6 +80,7 @@ export const InventoryModule: React.FC = () => {
     is_private_label: false,
     client_brand_name: '',
     default_labour_rate: 3.5,
+    density: 1.0,
   });
 
   // Form states for Stock Adjustment
@@ -106,6 +107,7 @@ export const InventoryModule: React.FC = () => {
       is_private_label: false,
       client_brand_name: '',
       default_labour_rate: 3.5,
+      density: 1.0,
     });
     setSubmitError(null);
     setIsAddModalOpen(true);
@@ -128,6 +130,7 @@ export const InventoryModule: React.FC = () => {
       is_private_label: Boolean(product.is_private_label),
       client_brand_name: product.client_brand_name || '',
       default_labour_rate: product.default_labour_rate ? Number(product.default_labour_rate) : 3.5,
+      density: product.density !== undefined ? Number(product.density) : 1.0,
     });
     setSubmitError(null);
     setIsEditModalOpen(true);
@@ -388,6 +391,11 @@ export const InventoryModule: React.FC = () => {
                           <span className="font-mono text-emerald-400 uppercase font-bold px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20">
                             {baseUnit}
                           </span>
+                          {baseUnit === 'liter' && (
+                            <span className="block text-[10px] text-slate-400 font-mono mt-0.5" title="Specific Gravity / Density (kg/L)">
+                              {Number(p.density || 1.0).toFixed(2)} kg/L
+                            </span>
+                          )}
                         </td>
                         <td className="py-3 px-3 text-right">
                           <span className={`font-mono font-black text-sm ${isLow && !p.is_archived ? 'text-rose-400' : 'text-white'}`}>
@@ -667,6 +675,43 @@ export const InventoryModule: React.FC = () => {
                 <option value="liter">Liter (Liter / L)</option>
                 <option value="kg">Kilogram (Kg)</option>
               </select>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-bold text-slate-400 uppercase">Density (kg/Liter)</label>
+                <span className="text-[10px] text-emerald-400 font-mono">Default 1.0</span>
+              </div>
+              {formData.base_unit === 'liter' ? (
+                <div>
+                  <input
+                    type="number"
+                    step="0.001"
+                    min="0.1"
+                    max="5.0"
+                    required
+                    value={formData.density}
+                    onChange={(e) => setFormData({ ...formData, density: parseFloat(e.target.value) || 1.0 })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white font-mono"
+                    placeholder="1.000"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Used to convert liters into kg & tons in Production Volume Reports.
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <input
+                    type="text"
+                    disabled
+                    value="1.000 (Kg base — no conversion needed)"
+                    className="w-full bg-slate-800/60 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-400 font-mono cursor-not-allowed"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    Products measured in kg require no density conversion.
+                  </p>
+                </div>
+              )}
             </div>
 
             <div>
