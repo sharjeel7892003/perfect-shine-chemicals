@@ -85,7 +85,7 @@ export const supabaseService = {
         Promise.resolve(supabase.from('purchase_trips').select('*, purchase_trip_items(*)').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
         Promise.resolve(supabase.from('sales_returns').select('*, sales_return_items(*)').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
         Promise.resolve(supabase.from('packing_runs').select('*').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
-        Promise.resolve(supabase.from('quotations').select('*').order('created_at', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
+        Promise.resolve(supabase.from('quotations').select('*, quotation_items(*)').order('created_at', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
         Promise.resolve(supabase.from('salespersons').select('*').order('name', { ascending: true })).catch(() => ({ data: [], error: null } as any)),
         Promise.resolve(supabase.from('monthly_commission_closures').select('*').order('month', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
         Promise.resolve(supabase.from('commission_payments').select('*').order('payment_date', { ascending: false })).catch(() => ({ data: [], error: null } as any))
@@ -389,7 +389,30 @@ export const supabaseService = {
         recurringExpenses: (recExpRes?.data as RecurringExpense[]) || [],
         purchaseTrips: normalizedPurchaseTrips,
         packingRuns: ((packingRes?.data || []) as PackingRun[]),
-        quotations: ((quotRes?.data || []) as Quotation[]),
+        quotations: ((quotRes?.data || []) as any[]).map((q: any) => ({
+          ...q,
+          quotation_type: q.quotation_type || 'private_label',
+          items: (Array.isArray(q.quotation_items) && q.quotation_items.length > 0)
+            ? q.quotation_items.map((it: any) => ({
+                ...it,
+                product_cost: Number(it.product_cost || 0),
+                bottle_cost: Number(it.bottle_cost || 0),
+                cap_cost: Number(it.cap_cost || 0),
+                label_cost: Number(it.label_cost || 0),
+                labour_cost: Number(it.labour_cost || 0),
+                carton_cost: Number(it.carton_cost || 0),
+                transport_cost: Number(it.transport_cost || 0),
+                total_cost_per_unit: Number(it.total_cost_per_unit || 0),
+                quoted_price_per_unit: Number(it.quoted_price_per_unit || 0),
+                bottles_per_box: it.bottles_per_box != null ? Number(it.bottles_per_box) : undefined,
+                unit_rate: it.unit_rate != null ? Number(it.unit_rate) : undefined,
+                box_rate: it.box_rate != null ? Number(it.box_rate) : undefined,
+                quantity_bottles: it.quantity_bottles != null ? Number(it.quantity_bottles) : undefined,
+                quantity_boxes: it.quantity_boxes != null ? Number(it.quantity_boxes) : undefined,
+                line_total: it.line_total != null ? Number(it.line_total) : undefined,
+              }))
+            : (Array.isArray(q.items) ? q.items : [])
+        })),
         salespersons: ((salespersonsRes?.data || []) as Salesperson[]),
         monthlyCommissionClosures: ((closuresRes?.data || []) as MonthlyCommissionClosure[]),
         commissionPayments: ((commPayRes?.data || []) as CommissionPayment[]),
@@ -1674,6 +1697,7 @@ export const supabaseService = {
       const payload = {
         id: validId,
         quotation_number: quotation.quotation_number,
+        quotation_type: quotation.quotation_type || 'private_label',
         customer_id: isValidUUID(quotation.customer_id) ? quotation.customer_id : null,
         customer_name: quotation.customer_name,
         company_name: quotation.company_name || null,
@@ -1682,8 +1706,8 @@ export const supabaseService = {
         date: quotation.date,
         validity_period: quotation.validity_period,
         status: quotation.status,
-        items: quotation.items,
-        moq: quotation.moq,
+        items: quotation.items || [],
+        moq: quotation.moq || null,
         repeat_order_moq: quotation.repeat_order_moq || null,
         sample_cost: quotation.sample_cost || null,
         sample_lead_time: quotation.sample_lead_time || null,
@@ -1694,13 +1718,49 @@ export const supabaseService = {
         terms_conditions: quotation.terms_conditions || null,
         notes: quotation.notes || null,
         created_by: isValidUUID(quotation.created_by) ? quotation.created_by : null,
+        updated_at: new Date().toISOString()
       };
+
       const { error } = await supabase.from('quotations').upsert(payload);
       if (error) {
-        console.warn('Supabase quotation upsert notice:', error.message);
+        console.error('Supabase quotation upsert error:', error.message);
+        throw new Error(`Failed to save quotation to Supabase: ${error.message}`);
       }
-    } catch (e) {
-      console.warn('Local fallback active for quotations:', e);
+
+      // Also sync relational quotation_items
+      if (Array.isArray(quotation.items) && quotation.items.length > 0) {
+        await supabase.from('quotation_items').delete().eq('quotation_id', validId);
+        const itemRows = quotation.items.map(item => ({
+          id: ensureUUID(item.id),
+          quotation_id: validId,
+          product_name: item.product_name,
+          size: item.size || null,
+          product_cost: Number(item.product_cost || 0),
+          bottle_cost: Number(item.bottle_cost || 0),
+          cap_cost: Number(item.cap_cost || 0),
+          label_cost: Number(item.label_cost || 0),
+          labour_cost: Number(item.labour_cost || 0),
+          carton_cost: Number(item.carton_cost || 0),
+          transport_cost: Number(item.transport_cost || 0),
+          total_cost_per_unit: Number(item.total_cost_per_unit || 0),
+          quoted_price_per_unit: Number(item.quoted_price_per_unit || 0),
+          moq: item.moq || null,
+          notes: item.notes || null,
+          bottles_per_box: item.bottles_per_box != null ? Number(item.bottles_per_box) : null,
+          unit_rate: item.unit_rate != null ? Number(item.unit_rate) : null,
+          box_rate: item.box_rate != null ? Number(item.box_rate) : null,
+          quantity_bottles: item.quantity_bottles != null ? Number(item.quantity_bottles) : null,
+          quantity_boxes: item.quantity_boxes != null ? Number(item.quantity_boxes) : null,
+          line_total: item.line_total != null ? Number(item.line_total) : null,
+        }));
+        const { error: itemsError } = await supabase.from('quotation_items').insert(itemRows);
+        if (itemsError) {
+          console.warn('Notice saving relational quotation_items:', itemsError.message);
+        }
+      }
+    } catch (e: any) {
+      console.error('saveQuotation failed:', e);
+      throw e;
     }
     return quotation;
   },
@@ -1710,10 +1770,15 @@ export const supabaseService = {
     try {
       assertOnline();
       if (isValidUUID(id)) {
-        await supabase.from('quotations').delete().eq('id', id);
+        const { error } = await supabase.from('quotations').delete().eq('id', id);
+        if (error) {
+          console.error('Failed to delete quotation from cloud:', error);
+          throw new Error(`Failed to delete quotation: ${error.message}`);
+        }
       }
-    } catch (e) {
-      console.warn('Failed to delete quotation from cloud:', e);
+    } catch (e: any) {
+      console.error('deleteQuotation failed:', e);
+      throw e;
     }
   },
 

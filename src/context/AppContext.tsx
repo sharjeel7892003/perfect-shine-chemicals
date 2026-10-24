@@ -306,15 +306,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return [];
   });
-  const [quotations, setQuotations] = useState<Quotation[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const cached = localStorage.getItem('psc_local_quotations');
-        if (cached) return JSON.parse(cached);
-      } catch {}
-    }
-    return [];
-  });
+  const [quotations, setQuotations] = useState<Quotation[]>([]);
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -493,19 +485,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             localStorage.setItem('psc_local_packing_runs', JSON.stringify(effectivePackingRuns));
           } catch {}
         }
-        let effectiveQuotations = (cloudData as any).quotations || [];
-        if (effectiveQuotations.length === 0 && typeof window !== 'undefined') {
-          try {
-            const cached = localStorage.getItem('psc_local_quotations');
-            if (cached) effectiveQuotations = JSON.parse(cached);
-          } catch {}
-        }
+        const effectiveQuotations = ((cloudData as any).quotations || []).map((q: any) => ({
+          ...q,
+          quotation_type: q.quotation_type || 'private_label'
+        }));
         setQuotations(effectiveQuotations);
-        if (typeof window !== 'undefined' && effectiveQuotations.length > 0) {
-          try {
-            localStorage.setItem('psc_local_quotations', JSON.stringify(effectiveQuotations));
-          } catch {}
-        }
 
         // Sales Commission Data Sync
         const loadedSalespersons = (cloudData as any).salespersons || [];
@@ -3873,21 +3857,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setQuotations(prev => {
       const existingIdx = prev.findIndex(q => q.id === validId);
-      const next = existingIdx !== -1 
+      return existingIdx !== -1 
         ? prev.map((q, idx) => idx === existingIdx ? quotation : q)
         : [quotation, ...prev];
-      if (typeof window !== 'undefined') {
-        try {
-          localStorage.setItem('psc_local_quotations', JSON.stringify(next));
-        } catch {}
-      }
-      return next;
     });
 
     try {
       await supabaseService.saveQuotation(quotation);
-    } catch (e) {
-      console.warn('Failed to save quotation to Supabase:', e);
+    } catch (e: any) {
+      console.error('Failed to save quotation to Supabase:', e);
+      throw e;
     }
 
     return quotation;
@@ -3896,26 +3875,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateQuotationStatus = async (id: string, status: QuotationStatus): Promise<void> => {
     let updated: Quotation | undefined;
     setQuotations(prev => {
-      const next = prev.map(q => {
+      return prev.map(q => {
         if (q.id === id) {
           updated = { ...q, status, updated_at: new Date().toISOString() };
           return updated;
         }
         return q;
       });
-      if (typeof window !== 'undefined') {
-        try {
-          localStorage.setItem('psc_local_quotations', JSON.stringify(next));
-        } catch {}
-      }
-      return next;
     });
 
     if (updated) {
       try {
         await supabaseService.saveQuotation(updated);
-      } catch (e) {
-        console.warn('Failed to update quotation status in Supabase:', e);
+      } catch (e: any) {
+        console.error('Failed to update quotation status in Supabase:', e);
+        throw e;
       }
     }
   };
@@ -3947,20 +3921,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteQuotation = async (id: string): Promise<void> => {
-    setQuotations(prev => {
-      const next = prev.filter(q => q.id !== id);
-      if (typeof window !== 'undefined') {
-        try {
-          localStorage.setItem('psc_local_quotations', JSON.stringify(next));
-        } catch {}
-      }
-      return next;
-    });
+    setQuotations(prev => prev.filter(q => q.id !== id));
 
     try {
       await supabaseService.deleteQuotation(id);
-    } catch (e) {
-      console.warn('Failed to delete quotation from Supabase:', e);
+    } catch (e: any) {
+      console.error('Failed to delete quotation from Supabase:', e);
+      throw e;
     }
   };
 

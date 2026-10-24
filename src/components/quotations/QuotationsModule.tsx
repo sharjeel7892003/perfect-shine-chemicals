@@ -29,6 +29,8 @@ import { formatPKR, formatDate, formatBoxBreakdown } from '../../utils/formatter
 import { QuotationModal } from './QuotationModal';
 import { QuotationViewModal } from './QuotationViewModal';
 import { ConvertToInvoiceModal } from './ConvertToInvoiceModal';
+import { ImportQuotationsModal } from './ImportQuotationsModal';
+import { UploadCloud } from 'lucide-react';
 
 export const QuotationsModule: React.FC = () => {
   const { 
@@ -52,6 +54,7 @@ export const QuotationsModule: React.FC = () => {
   const [convertedNotice, setConvertedNotice] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [isDuplicating, setIsDuplicating] = useState<string | null>(null);
+  const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
 
   // Filtered Quotations
   const filteredQuotations = useMemo(() => {
@@ -154,16 +157,29 @@ export const QuotationsModule: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={() => {
-            setEditingQuotation(null);
-            setIsCreateModalOpen(true);
-          }}
-          className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-500/20 transition-all shrink-0 self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4 stroke-[2.5]" />
-          <span>Create Quotation</span>
-        </button>
+        <div className="flex items-center gap-2.5 shrink-0 self-start sm:self-auto">
+          {(isOwner || currentUser?.role === 'owner') && (
+            <button
+              onClick={() => setIsImportModalOpen(true)}
+              className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 hover:border-amber-500/40 font-bold text-xs flex items-center gap-2 shadow-sm transition-all"
+              title="One-time import of quotations from browser backup JSON"
+            >
+              <UploadCloud className="w-4 h-4 stroke-[2.2] text-amber-400" />
+              <span>Import Backup JSON</span>
+            </button>
+          )}
+
+          <button
+            onClick={() => {
+              setEditingQuotation(null);
+              setIsCreateModalOpen(true);
+            }}
+            className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-500/20 transition-all"
+          >
+            <Plus className="w-4 h-4 stroke-[2.5]" />
+            <span>Create Quotation</span>
+          </button>
+        </div>
       </div>
 
       {/* Success Banner if converted to invoice */}
@@ -591,6 +607,14 @@ export const QuotationsModule: React.FC = () => {
           onSuccess={(newSale: Sale) => {
             setConvertedNotice(`Quotation #${convertingQuotation.quotation_number} was converted to Invoice #${newSale.invoice_number} successfully!`);
           }}
+        />
+      )}
+
+      {/* Admin One-Time Backup Import Modal */}
+      {isImportModalOpen && (
+        <ImportQuotationsModal
+          isOpen={isImportModalOpen}
+          onClose={() => setIsImportModalOpen(false)}
         />
       )}
     </div>

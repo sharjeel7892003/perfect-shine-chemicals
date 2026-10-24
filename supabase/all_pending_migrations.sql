@@ -403,3 +403,326 @@ BEGIN
 END;
 $$;
 
+-- ==============================================================================
+-- 10. PRICE QUOTATIONS & PROPOSALS MODULE
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS public.quotations (
+    id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    quotation_number TEXT UNIQUE NOT NULL,
+    quotation_type TEXT NOT NULL DEFAULT 'private_label',
+    customer_id TEXT,
+    customer_name TEXT NOT NULL,
+    company_name TEXT,
+    phone TEXT,
+    email TEXT,
+    date DATE NOT NULL DEFAULT CURRENT_DATE,
+    validity_period TEXT NOT NULL DEFAULT 'Valid for 15 days',
+    status TEXT NOT NULL DEFAULT 'pending',
+    items JSONB NOT NULL DEFAULT '[]'::jsonb,
+    moq TEXT,
+    repeat_order_moq TEXT,
+    sample_cost TEXT,
+    sample_lead_time TEXT,
+    delivery_charges TEXT,
+    available_fragrances TEXT,
+    formula_specifications TEXT,
+    batch_mfg_expiry_info TEXT,
+    terms_conditions TEXT,
+    notes TEXT,
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.quotation_items (
+    id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    quotation_id TEXT NOT NULL REFERENCES public.quotations(id) ON DELETE CASCADE,
+    product_name TEXT NOT NULL,
+    size TEXT,
+    product_cost NUMERIC(12, 4) NOT NULL DEFAULT 0.0000,
+    bottle_cost NUMERIC(12, 4) NOT NULL DEFAULT 0.0000,
+    cap_cost NUMERIC(12, 4) NOT NULL DEFAULT 0.0000,
+    label_cost NUMERIC(12, 4) NOT NULL DEFAULT 0.0000,
+    labour_cost NUMERIC(12, 4) NOT NULL DEFAULT 0.0000,
+    carton_cost NUMERIC(12, 4) NOT NULL DEFAULT 0.0000,
+    transport_cost NUMERIC(12, 4) DEFAULT 0.0000,
+    total_cost_per_unit NUMERIC(12, 4) NOT NULL DEFAULT 0.0000,
+    quoted_price_per_unit NUMERIC(12, 4) NOT NULL DEFAULT 0.0000,
+    moq TEXT,
+    notes TEXT,
+    bottles_per_box NUMERIC(12, 4),
+    unit_rate NUMERIC(12, 4),
+    box_rate NUMERIC(12, 4),
+    quantity_bottles NUMERIC(12, 4),
+    quantity_boxes NUMERIC(12, 4),
+    line_total NUMERIC(12, 4),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_quotations_number ON public.quotations(quotation_number);
+CREATE INDEX IF NOT EXISTS idx_quotations_customer_id ON public.quotations(customer_id);
+CREATE INDEX IF NOT EXISTS idx_quotations_date ON public.quotations(date);
+CREATE INDEX IF NOT EXISTS idx_quotations_status ON public.quotations(status);
+CREATE INDEX IF NOT EXISTS idx_quotation_items_quotation_id ON public.quotation_items(quotation_id);
+
+GRANT ALL ON public.quotations TO authenticated;
+GRANT ALL ON public.quotation_items TO authenticated;
+GRANT ALL ON public.quotations TO anon;
+GRANT ALL ON public.quotation_items TO anon;
+
+ALTER TABLE public.quotations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.quotation_items ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "quotations_select_authenticated" ON public.quotations;
+CREATE POLICY "quotations_select_authenticated" ON public.quotations FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "quotations_manage_authenticated" ON public.quotations;
+CREATE POLICY "quotations_manage_authenticated" ON public.quotations FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "quotation_items_select_authenticated" ON public.quotation_items;
+CREATE POLICY "quotation_items_select_authenticated" ON public.quotation_items FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "quotation_items_manage_authenticated" ON public.quotation_items;
+CREATE POLICY "quotation_items_manage_authenticated" ON public.quotation_items FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- ==============================================================================
+-- 11. SALES COMMISSION SYSTEM (SALESPERSONS, CLOSURES, COMMISSION PAYMENTS)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS public.salespersons (
+    id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    name TEXT NOT NULL,
+    commission_rate NUMERIC(5, 2) NOT NULL DEFAULT 10.00,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO public.salespersons (id, name, commission_rate, is_active)
+VALUES 
+    ('sp_sharjeel_initial', 'Sharjeel', 10.00, true),
+    ('sp_aqeel_initial', 'Aqeel', 10.00, true),
+    ('sp_ilyas_initial', 'Ilyas', 10.00, true)
+ON CONFLICT (id) DO NOTHING;
+
+ALTER TABLE public.sales ADD COLUMN IF NOT EXISTS salesperson_id TEXT;
+
+CREATE TABLE IF NOT EXISTS public.monthly_commission_closures (
+    month TEXT PRIMARY KEY,
+    is_closed BOOLEAN NOT NULL DEFAULT true,
+    closed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    closed_by TEXT,
+    closed_by_name TEXT,
+    total_gross_profit NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
+    total_expenses NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
+    coverage_factor NUMERIC(8, 6) NOT NULL DEFAULT 0.000000,
+    total_commission NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
+    owner_remaining_profit NUMERIC(14, 2) NOT NULL DEFAULT 0.00,
+    include_depreciation BOOLEAN NOT NULL DEFAULT false,
+    snapshots JSONB NOT NULL DEFAULT '[]'::jsonb,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.commission_payments (
+    id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    salesperson_id TEXT NOT NULL REFERENCES public.salespersons(id) ON DELETE RESTRICT,
+    salesperson_name TEXT NOT NULL,
+    month TEXT NOT NULL,
+    amount NUMERIC(14, 2) NOT NULL,
+    payment_method TEXT NOT NULL DEFAULT 'cash',
+    payment_date DATE NOT NULL,
+    payment_id TEXT,
+    notes TEXT,
+    recorded_by TEXT,
+    recorded_by_name TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+GRANT ALL ON public.salespersons TO authenticated;
+GRANT ALL ON public.monthly_commission_closures TO authenticated;
+GRANT ALL ON public.commission_payments TO authenticated;
+
+ALTER TABLE public.salespersons ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.monthly_commission_closures ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.commission_payments ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "salespersons_select_auth" ON public.salespersons;
+CREATE POLICY "salespersons_select_auth" ON public.salespersons FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "salespersons_admin_manage" ON public.salespersons;
+CREATE POLICY "salespersons_admin_manage" ON public.salespersons FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "closures_admin_all" ON public.monthly_commission_closures;
+CREATE POLICY "closures_admin_all" ON public.monthly_commission_closures FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "commission_payments_admin_all" ON public.commission_payments;
+CREATE POLICY "commission_payments_admin_all" ON public.commission_payments FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- ==============================================================================
+-- 12. SALES RETURNS & CREDIT NOTES
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS public.sales_returns (
+    id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    credit_note_number TEXT UNIQUE NOT NULL,
+    sale_id TEXT NOT NULL REFERENCES public.sales(id) ON DELETE CASCADE,
+    invoice_number TEXT NOT NULL,
+    customer_id TEXT,
+    customer_name TEXT NOT NULL,
+    date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    total_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    reason TEXT,
+    notes TEXT,
+    refund_method TEXT NOT NULL DEFAULT 'reduce_receivable',
+    payment_method TEXT,
+    refund_payment_id TEXT,
+    created_by TEXT,
+    created_by_name TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.sales_return_items (
+    id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    return_id TEXT NOT NULL REFERENCES public.sales_returns(id) ON DELETE CASCADE,
+    sale_item_id TEXT,
+    item_type TEXT NOT NULL DEFAULT 'finished_product',
+    product_id TEXT,
+    raw_material_id TEXT,
+    product_name TEXT NOT NULL,
+    unit TEXT,
+    pack_size_id TEXT,
+    pack_size_name TEXT,
+    size_in_base_unit NUMERIC(12, 4),
+    quantity NUMERIC(12, 4) NOT NULL DEFAULT 1,
+    base_quantity NUMERIC(12, 4) NOT NULL DEFAULT 1,
+    unit_cost NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    unit_price NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    subtotal NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+GRANT ALL ON public.sales_returns TO authenticated;
+GRANT ALL ON public.sales_return_items TO authenticated;
+
+ALTER TABLE public.sales_returns ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.sales_return_items ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "sales_returns_all_auth" ON public.sales_returns;
+CREATE POLICY "sales_returns_all_auth" ON public.sales_returns FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "sales_return_items_all_auth" ON public.sales_return_items;
+CREATE POLICY "sales_return_items_all_auth" ON public.sales_return_items FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- ==============================================================================
+-- 13. PURCHASE TRIPS & TRANSPORT FREIGHT ALLOCATION
+-- ==============================================================================
+ALTER TABLE public.purchases ADD COLUMN IF NOT EXISTS freight_cost NUMERIC(12, 2) DEFAULT 0.00;
+ALTER TABLE public.purchases ADD COLUMN IF NOT EXISTS trip_id TEXT;
+ALTER TABLE public.purchases ADD COLUMN IF NOT EXISTS trip_number TEXT;
+
+ALTER TABLE public.purchase_items ADD COLUMN IF NOT EXISTS allocated_freight NUMERIC(12, 2) DEFAULT 0.00;
+ALTER TABLE public.purchase_items ADD COLUMN IF NOT EXISTS landed_cost NUMERIC(12, 2) DEFAULT 0.00;
+ALTER TABLE public.purchase_items ADD COLUMN IF NOT EXISTS trip_id TEXT;
+
+CREATE TABLE IF NOT EXISTS public.purchase_trips (
+    id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    trip_number TEXT UNIQUE NOT NULL,
+    date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    total_transport_cost NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    transport_payment_method TEXT DEFAULT 'cash',
+    transport_notes TEXT,
+    vehicle_or_driver TEXT,
+    include_pcs_in_weight_allocation BOOLEAN DEFAULT FALSE,
+    total_material_cost NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    total_weight_kg_liter NUMERIC(12, 4) NOT NULL DEFAULT 0.0000,
+    grand_total NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.purchase_trip_items (
+    id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    trip_id TEXT NOT NULL REFERENCES public.purchase_trips(id) ON DELETE CASCADE,
+    supplier_id TEXT,
+    supplier_name TEXT NOT NULL,
+    raw_material_id TEXT NOT NULL,
+    raw_material_name TEXT NOT NULL,
+    unit TEXT NOT NULL DEFAULT 'kg',
+    quantity NUMERIC(12, 4) NOT NULL DEFAULT 0.0000,
+    unit_cost NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    subtotal NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    is_weight_allocated BOOLEAN DEFAULT TRUE,
+    allocation_percentage NUMERIC(6, 2) DEFAULT 0.00,
+    allocated_freight NUMERIC(12, 2) DEFAULT 0.00,
+    landed_cost NUMERIC(12, 2) DEFAULT 0.00,
+    total_landed_cost NUMERIC(12, 2) DEFAULT 0.00,
+    purchase_id TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+GRANT ALL ON public.purchase_trips TO authenticated;
+GRANT ALL ON public.purchase_trip_items TO authenticated;
+
+ALTER TABLE public.purchase_trips ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.purchase_trip_items ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "purchase_trips_all_auth" ON public.purchase_trips;
+CREATE POLICY "purchase_trips_all_auth" ON public.purchase_trips FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "purchase_trip_items_all_auth" ON public.purchase_trip_items;
+CREATE POLICY "purchase_trip_items_all_auth" ON public.purchase_trip_items FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- ==============================================================================
+-- 14. PACKING RUNS (BOTTLING BATCHES)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS public.packing_runs (
+    id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    run_number TEXT UNIQUE NOT NULL,
+    product_id TEXT NOT NULL,
+    product_name TEXT NOT NULL,
+    pack_size_id TEXT NOT NULL,
+    pack_size_name TEXT NOT NULL,
+    quantity_packed NUMERIC(12, 4) NOT NULL,
+    size_in_base_unit NUMERIC(12, 4) NOT NULL,
+    bulk_liquid_consumed NUMERIC(12, 4) NOT NULL,
+    bulk_unit_cost NUMERIC(12, 4) NOT NULL DEFAULT 0.0000,
+    bulk_total_cost NUMERIC(12, 4) NOT NULL DEFAULT 0.0000,
+    packaging_materials_consumed JSONB NOT NULL DEFAULT '[]'::jsonb,
+    packaging_total_cost NUMERIC(12, 4) NOT NULL DEFAULT 0.0000,
+    total_cost NUMERIC(12, 4) NOT NULL DEFAULT 0.0000,
+    true_cost_per_unit NUMERIC(12, 4) NOT NULL DEFAULT 0.0000,
+    date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    operator_name TEXT,
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+GRANT ALL ON public.packing_runs TO authenticated;
+ALTER TABLE public.packing_runs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "packing_runs_all_auth" ON public.packing_runs;
+CREATE POLICY "packing_runs_all_auth" ON public.packing_runs FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+-- ==============================================================================
+-- 15. REALTIME PUBLICATION EXTENSION
+-- ==============================================================================
+DO $$
+BEGIN
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE 
+      public.quotations, 
+      public.quotation_items,
+      public.salespersons, 
+      public.monthly_commission_closures, 
+      public.commission_payments,
+      public.sales_returns, 
+      public.sales_return_items,
+      public.purchase_trips, 
+      public.purchase_trip_items,
+      public.packing_runs;
+  EXCEPTION WHEN OTHERS THEN
+    NULL;
+  END;
+END $$;
+
+
