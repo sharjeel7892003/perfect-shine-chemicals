@@ -24,7 +24,8 @@ import {
   Clock,
   FlaskConical,
   Building2,
-  Scale
+  Scale,
+  Landmark
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -45,8 +46,15 @@ import { ProductionVolumeReportView } from './ProductionVolumeReportView';
 import { RawMaterialPurchaseReportView } from './RawMaterialPurchaseReportView';
 import { CommissionReportView } from './CommissionReportView';
 import { calculateMonthlyCommissionSummary } from '../../utils/commissionEngine';
+import {
+  calculateDepreciationExpenseForPeriod,
+  calculateAccumulatedDepreciation,
+  calculateCurrentBookValue,
+  calculateMonthlyDepreciation,
+  calculatePartnerCapitalLedgers
+} from '../../utils/assetCalculations';
 
-export type ReportType = 'sales' | 'purchases' | 'rm_purchases' | 'profit' | 'commission' | 'production' | 'volume' | 'receivables' | 'payables' | 'valuation';
+export type ReportType = 'sales' | 'purchases' | 'rm_purchases' | 'profit' | 'commission' | 'production' | 'volume' | 'receivables' | 'payables' | 'valuation' | 'assets' | 'partner_capital';
 
 interface ReportsModuleProps {
   initialReport?: ReportType;
@@ -67,7 +75,13 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
     salesReturns = [],
     salespersons = [],
     monthlyCommissionClosures = [],
-    commissionPayments = []
+    commissionPayments = [],
+    fixedAssets = [],
+    partners = [],
+    partnerCapitalTransactions = [],
+    totalFixedAssetsCost = 0,
+    totalFixedAssetsBookValue = 0,
+    totalFixedAssetsDepreciation = 0
   } = useApp();
   const { isOwner, allUsers } = useAuth();
 
@@ -402,8 +416,13 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
   });
   totalSalesCommissionExpense = Number(totalSalesCommissionExpense.toFixed(2));
 
-  // NET PROFIT = Gross Profit - Operating Expenses - Accrued Sales Commission
-  const netProfit = Number((estimatedGrossProfit - totalOperatingExpenses - totalSalesCommissionExpense).toFixed(2));
+  // Straight-line non-cash depreciation expense for company fixed assets
+  const totalDepreciationExpense = Number(
+    calculateDepreciationExpenseForPeriod(fixedAssets, startDate, endDate).toFixed(2)
+  );
+
+  // NET PROFIT = Gross Profit - Operating Expenses - Accrued Sales Commission - Non-Cash Depreciation
+  const netProfit = Number((estimatedGrossProfit - totalOperatingExpenses - totalSalesCommissionExpense - totalDepreciationExpense).toFixed(2));
   const netMarginPercent = profitRevenue > 0 ? ((netProfit / profitRevenue) * 100).toFixed(1) : '0';
 
 
@@ -737,6 +756,47 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
         s.current_balance
       ]);
       exportToCSV(`PSC_Outstanding_Payables_${dateRangeLabel}`, headers, rows);
+    } else if (activeReport === 'profit') {
+      const headers = ['Accounting Component', 'Description', 'Amount (PKR)'];
+      const rows = [
+        ['Operating Revenue (Net Turnover)', `Gross sales less returns (${filteredSales.length} invoices)`, profitRevenue],
+        ['Cost of Goods Sold (COGS)', 'Chemical raw materials & packaging consumed', -profitCOGS],
+        ['Gross Operating Profit', `Gross Margin: ${grossMarginPercent}%`, estimatedGrossProfit],
+        ['Operating Overhead Expenses', `${filteredOperatingExpenses.length} overhead records`, -totalOperatingExpenses],
+        ['Sales Commission (Accrued)', 'Accrued performance commission payouts', -totalSalesCommissionExpense],
+        ['Depreciation Expense (Fixed Assets)', 'Non-cash straight-line depreciation charge', -totalDepreciationExpense],
+        ['Net Operating Profit (Owner)', `Net Margin: ${netMarginPercent}%`, netProfit]
+      ];
+      exportToCSV(`PSC_Profit_Loss_Statement_${dateRangeLabel}`, headers, rows);
+    } else if (activeReport === 'assets') {
+      const headers = ['Asset Code', 'Asset Name', 'Category', 'Purchase Date', 'Vendor', 'Useful Life (Yrs)', 'Total Cost (PKR)', 'Salvage Value (PKR)', 'Monthly Dep (PKR)', 'Accumulated Dep (PKR)', 'Current Book Value (PKR)', 'Status'];
+      const rows = fixedAssets.map(a => [
+        a.asset_code,
+        a.name,
+        a.category,
+        a.purchase_date,
+        a.vendor || '-',
+        a.useful_life_years,
+        a.total_cost,
+        a.salvage_value,
+        calculateMonthlyDepreciation(a),
+        calculateAccumulatedDepreciation(a),
+        calculateCurrentBookValue(a),
+        a.status
+      ]);
+      exportToCSV(`PSC_Fixed_Asset_Register_${dateRangeLabel}`, headers, rows);
+    } else if (activeReport === 'partner_capital') {
+      const { summaries } = calculatePartnerCapitalLedgers(partners, partnerCapitalTransactions, payments);
+      const headers = ['Partner Name', 'Total Contributed (PKR)', 'Total Drawings (PKR)', 'Net Equity Balance (PKR)', 'Share of Contributed Equity (%)', 'Outstanding Partner Loans (PKR)'];
+      const rows = summaries.map(s => [
+        s.partnerName,
+        s.totalContributedCapital,
+        s.withdrawals,
+        s.netCapitalBalance,
+        `${s.shareOfTotalCapitalPercent.toFixed(1)}%`,
+        s.loanContributions
+      ]);
+      exportToCSV(`PSC_Partner_Capital_Summary_${dateRangeLabel}`, headers, rows);
     }
   };
 
@@ -755,6 +815,8 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
       case 'receivables': return 'Outstanding Receivables Report';
       case 'payables': return 'Outstanding Payables Report';
       case 'valuation': return 'Stock Asset Valuation Report';
+      case 'assets': return 'Company Fixed Assets & Equipment Register Report';
+      case 'partner_capital': return 'Partner Equity & Capital Summary Report';
       default: return 'Financial & Analytical Report';
     }
   };
@@ -906,6 +968,30 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
           <Layers className="w-4 h-4" />
           <span>Stock Valuation</span>
         </button>
+
+        {isOwner && (
+          <>
+            <button
+              onClick={() => setActiveReport('assets')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+                activeReport === 'assets' ? 'bg-cyan-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Landmark className="w-4 h-4 text-cyan-400" />
+              <span>Fixed Assets Register</span>
+            </button>
+
+            <button
+              onClick={() => setActiveReport('partner_capital')}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+                activeReport === 'partner_capital' ? 'bg-indigo-500 text-white shadow-md' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Users className="w-4 h-4 text-indigo-400" />
+              <span>Partner Capital</span>
+            </button>
+          </>
+        )}
       </div>
 
       {/* Filter Toolbar (Active for Sales, Purchases, Profit, Production) */}
@@ -1344,7 +1430,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
       {activeReport === 'profit' && (
         <div className="space-y-6">
           {/* Executive P&L KPI Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
             {/* 1. Revenue */}
             <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
               <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">1. Net Revenue</span>
@@ -1381,10 +1467,17 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
             <div className="p-4 rounded-2xl bg-slate-900 border border-amber-500/30">
               <span className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider">5. Less: Commission</span>
               <p className="text-lg font-black text-amber-400 mt-1 font-mono">- {formatPKR(totalSalesCommissionExpense)}</p>
-              <p className="text-[10px] text-amber-300/80 mt-0.5">Accrued team payouts</p>
+              <p className="text-[10px] text-amber-300/80 mt-0.5">Accrued payouts</p>
             </div>
 
-            {/* 6. Net Profit */}
+            {/* 6. Depreciation (Non-Cash) */}
+            <div className="p-4 rounded-2xl bg-slate-900 border border-sky-500/30">
+              <span className="text-[10px] font-semibold text-sky-400 uppercase tracking-wider">6. Less: Depreciation</span>
+              <p className="text-lg font-black text-sky-400 mt-1 font-mono">- {formatPKR(totalDepreciationExpense)}</p>
+              <p className="text-[10px] text-sky-300/80 mt-0.5">Non-cash charge</p>
+            </div>
+
+            {/* 7. Net Profit */}
             <div className={`p-4 rounded-2xl border ${
               netProfit >= 0 
                 ? 'bg-gradient-to-br from-emerald-950/80 to-slate-900 border-emerald-500/40' 
@@ -1393,7 +1486,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
               <span className={`text-[10px] font-bold uppercase tracking-wider ${
                 netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'
               }`}>
-                6. Net Profit (Owner)
+                7. Net Profit (Owner)
               </span>
               <p className={`text-lg font-black mt-1 font-mono ${
                 netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'
@@ -1521,6 +1614,23 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
                 <div className="px-4 py-2 flex items-center justify-between text-slate-300">
                   <span className="pl-3">• Earned by sales team after overhead coverage (accrual for invoices in period)</span>
                   <span className="font-mono text-amber-400">- {formatPKR(totalSalesCommissionExpense)}</span>
+                </div>
+              </div>
+
+              {/* SECTION E: DEPRECIATION EXPENSE (NON-CASH) */}
+              <div className="space-y-1.5 pt-2">
+                <div className="flex items-center justify-between font-bold text-white uppercase tracking-wider text-[11px] bg-slate-800/60 p-2.5 rounded-xl">
+                  <div className="flex items-center gap-2">
+                    <span>E. Depreciation Expense (Fixed Assets)</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20 font-normal">
+                      Non-Cash Operating Charge
+                    </span>
+                  </div>
+                  <span className="font-mono text-sky-400 font-black">- {formatPKR(totalDepreciationExpense)}</span>
+                </div>
+                <div className="px-4 py-2 flex items-center justify-between text-slate-300">
+                  <span className="pl-3">• Straight-line monthly depreciation on plant equipment & machines (omitted from Cash Book)</span>
+                  <span className="font-mono text-sky-400">- {formatPKR(totalDepreciationExpense)}</span>
                 </div>
               </div>
 
@@ -1872,6 +1982,263 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
               </table>
             </div>
           </div>
+
+          {/* Fixed Assets (Plant Equipment & Capital Assets) */}
+          <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-base font-bold text-white">Company Fixed Assets (Equipment & Machinery)</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Capital equipment, weighing machines, vehicles, and furniture • <span className="text-cyan-400 font-medium">Valued at Current Book Value (Cost less Accumulated Depreciation)</span></p>
+              </div>
+              <span className="text-sm font-black font-mono text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 px-3 py-1 rounded-xl">
+                Net Book Value: {formatPKR(totalFixedAssetsBookValue)}
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+                    <th className="py-3 px-3">Asset Code</th>
+                    <th className="py-3 px-3">Asset Name</th>
+                    <th className="py-3 px-3">Category</th>
+                    <th className="py-3 px-3">Purchase Date</th>
+                    <th className="py-3 px-3 text-right">Original Cost</th>
+                    <th className="py-3 px-3 text-right">Accum. Depreciation</th>
+                    <th className="py-3 px-3 text-right">Current Book Value</th>
+                    <th className="py-3 px-3 text-center">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {fixedAssets.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="py-8 text-center text-slate-500 text-xs">
+                        No fixed assets recorded in company register.
+                      </td>
+                    </tr>
+                  ) : (
+                    fixedAssets.map((asset) => {
+                      const accum = calculateAccumulatedDepreciation(asset);
+                      const bookVal = calculateCurrentBookValue(asset);
+                      return (
+                        <tr key={asset.id} className="hover:bg-slate-800/40">
+                          <td className="py-3 px-3 font-mono text-cyan-400 font-bold">{asset.asset_code}</td>
+                          <td className="py-3 px-3 font-bold text-white">{asset.name}</td>
+                          <td className="py-3 px-3 text-slate-400">{asset.category}</td>
+                          <td className="py-3 px-3 text-slate-400 font-mono">{formatDate(asset.purchase_date)}</td>
+                          <td className="py-3 px-3 text-right font-mono text-slate-300">{formatPKR(asset.total_cost)}</td>
+                          <td className="py-3 px-3 text-right font-mono text-rose-400">-{formatPKR(accum)}</td>
+                          <td className="py-3 px-3 text-right font-mono font-bold text-cyan-400">{formatPKR(bookVal)}</td>
+                          <td className="py-3 px-3 text-center">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase ${
+                              asset.status === 'active' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
+                              asset.status === 'disposed' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
+                              'bg-slate-700 text-slate-400'
+                            }`}>
+                              {asset.status}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= REPORT: FIXED ASSETS REGISTER ================= */}
+      {activeReport === 'assets' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Total Historical Cost</span>
+              <p className="text-xl font-black text-white mt-1 font-mono">{formatPKR(totalFixedAssetsCost)}</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">{fixedAssets.length} total recorded assets</p>
+            </div>
+            <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+              <span className="text-[10px] font-semibold text-rose-400 uppercase tracking-wider">Accumulated Depreciation</span>
+              <p className="text-xl font-black text-rose-400 mt-1 font-mono">-{formatPKR(totalFixedAssetsDepreciation)}</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">Non-cash written down</p>
+            </div>
+            <div className="p-4 rounded-2xl bg-slate-900 border border-cyan-500/30">
+              <span className="text-[10px] font-semibold text-cyan-400 uppercase tracking-wider">Net Book Value</span>
+              <p className="text-xl font-black text-cyan-400 mt-1 font-mono">{formatPKR(totalFixedAssetsBookValue)}</p>
+              <p className="text-[10px] text-cyan-300/80 mt-0.5">Current balance sheet asset value</p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-base font-bold text-white">Fixed Assets Register Report</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Complete ledger of company assets, machinery, and equipment with straight-line depreciation</p>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+                    <th className="py-3 px-3">Asset Code</th>
+                    <th className="py-3 px-3">Asset Name</th>
+                    <th className="py-3 px-3">Category</th>
+                    <th className="py-3 px-3">Purchase Date</th>
+                    <th className="py-3 px-3">Useful Life</th>
+                    <th className="py-3 px-3 text-right">Original Cost</th>
+                    <th className="py-3 px-3 text-right">Salvage Value</th>
+                    <th className="py-3 px-3 text-right">Monthly Dep.</th>
+                    <th className="py-3 px-3 text-right">Accum. Dep.</th>
+                    <th className="py-3 px-3 text-right">Book Value</th>
+                    <th className="py-3 px-3 text-center">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {fixedAssets.length === 0 ? (
+                    <tr>
+                      <td colSpan={11} className="py-12 text-center text-slate-500 text-xs">
+                        No fixed assets recorded in company register.
+                      </td>
+                    </tr>
+                  ) : (
+                    fixedAssets.map((asset) => {
+                      const monthly = calculateMonthlyDepreciation(asset);
+                      const accum = calculateAccumulatedDepreciation(asset);
+                      const bookVal = calculateCurrentBookValue(asset);
+                      return (
+                        <tr key={asset.id} className="hover:bg-slate-800/40">
+                          <td className="py-3 px-3 font-mono text-cyan-400 font-bold">{asset.asset_code}</td>
+                          <td className="py-3 px-3 font-bold text-white">
+                            <div>{asset.name}</div>
+                            {asset.vendor && <div className="text-[10px] text-slate-500">Vendor: {asset.vendor}</div>}
+                          </td>
+                          <td className="py-3 px-3 text-slate-400">{asset.category}</td>
+                          <td className="py-3 px-3 text-slate-400 font-mono">{formatDate(asset.purchase_date)}</td>
+                          <td className="py-3 px-3 text-slate-400">{asset.useful_life_years} Yrs ({asset.useful_life_years * 12} Mos)</td>
+                          <td className="py-3 px-3 text-right font-mono text-white font-bold">{formatPKR(asset.total_cost)}</td>
+                          <td className="py-3 px-3 text-right font-mono text-slate-400">{formatPKR(asset.salvage_value || 0)}</td>
+                          <td className="py-3 px-3 text-right font-mono text-sky-400">{formatPKR(monthly)}/mo</td>
+                          <td className="py-3 px-3 text-right font-mono text-rose-400">-{formatPKR(accum)}</td>
+                          <td className="py-3 px-3 text-right font-mono font-bold text-cyan-400">{formatPKR(bookVal)}</td>
+                          <td className="py-3 px-3 text-center">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase ${
+                              asset.status === 'active' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
+                              asset.status === 'disposed' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
+                              'bg-slate-700 text-slate-400'
+                            }`}>
+                              {asset.status}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= REPORT: PARTNER CAPITAL SUMMARY ================= */}
+      {activeReport === 'partner_capital' && (
+        <div className="space-y-6">
+          {(() => {
+            const { summaries: partnerSummaries, totalEquityCapital, totalPartnerLoans } = calculatePartnerCapitalLedgers(partners, partnerCapitalTransactions, payments);
+            const totalContributed = partnerSummaries.reduce((sum, p) => sum + p.totalContributedCapital, 0);
+            const totalWithdrawn = partnerSummaries.reduce((sum, p) => sum + p.withdrawals, 0);
+            const totalNetEquity = totalEquityCapital;
+            const totalLoans = totalPartnerLoans;
+
+            return (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+                  <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+                    <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Total Contributed Equity</span>
+                    <p className="text-xl font-black text-white mt-1 font-mono">{formatPKR(totalContributed)}</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Asset & cash capital injections</p>
+                  </div>
+                  <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+                    <span className="text-[10px] font-semibold text-rose-400 uppercase tracking-wider">Total Drawings / Withdrawals</span>
+                    <p className="text-xl font-black text-rose-400 mt-1 font-mono">-{formatPKR(totalWithdrawn)}</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Partner personal drawings</p>
+                  </div>
+                  <div className="p-4 rounded-2xl bg-slate-900 border border-indigo-500/30">
+                    <span className="text-[10px] font-semibold text-indigo-400 uppercase tracking-wider">Net Partner Equity</span>
+                    <p className="text-xl font-black text-indigo-400 mt-1 font-mono">{formatPKR(totalNetEquity)}</p>
+                    <p className="text-[10px] text-indigo-300/80 mt-0.5">Current ownership value</p>
+                  </div>
+                  <div className="p-4 rounded-2xl bg-slate-900 border border-amber-500/30">
+                    <span className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider">Partner Loans (Repayable)</span>
+                    <p className="text-xl font-black text-amber-400 mt-1 font-mono">{formatPKR(totalLoans)}</p>
+                    <p className="text-[10px] text-amber-300/80 mt-0.5">Company liabilities to partners</p>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="text-base font-bold text-white">Partner Capital & Equity Ledger Summary</h3>
+                      <p className="text-xs text-slate-400 mt-0.5">Authoritative equity contribution, ownership share percentage, drawings, and net balance per partner</p>
+                    </div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider text-[10px]">
+                          <th className="py-3 px-3">Partner Name</th>
+                          <th className="py-3 px-3 text-right">Total Contributed</th>
+                          <th className="py-3 px-3 text-right">Drawings / Withdrawals</th>
+                          <th className="py-3 px-3 text-right">Net Equity Balance</th>
+                          <th className="py-3 px-3 text-right">Equity Share %</th>
+                          <th className="py-3 px-3 text-right">Repayable Partner Loan</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60">
+                        {partnerSummaries.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="py-12 text-center text-slate-500 text-xs">
+                              No partners configured in the system.
+                            </td>
+                          </tr>
+                        ) : (
+                          partnerSummaries.map((summary) => (
+                            <tr key={summary.partnerId} className="hover:bg-slate-800/40">
+                              <td className="py-3 px-3 font-bold text-white text-sm">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-7 h-7 rounded-lg bg-indigo-500/20 text-indigo-300 font-black flex items-center justify-center text-xs">
+                                    {summary.partnerName.charAt(0)}
+                                  </div>
+                                  <span>{summary.partnerName}</span>
+                                </div>
+                              </td>
+                              <td className="py-3 px-3 text-right font-mono font-semibold text-emerald-400">
+                                +{formatPKR(summary.totalContributedCapital)}
+                              </td>
+                              <td className="py-3 px-3 text-right font-mono font-semibold text-rose-400">
+                                -{formatPKR(summary.withdrawals)}
+                              </td>
+                              <td className="py-3 px-3 text-right font-mono font-black text-indigo-400 text-sm">
+                                {formatPKR(summary.netCapitalBalance)}
+                              </td>
+                              <td className="py-3 px-3 text-right font-mono font-bold text-white">
+                                <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                                  {summary.shareOfTotalCapitalPercent.toFixed(1)}%
+                                </span>
+                              </td>
+                              <td className="py-3 px-3 text-right font-mono font-semibold text-amber-400">
+                                {summary.loanContributions > 0 ? formatPKR(summary.loanContributions) : '-'}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
         </div>
       )}
       </div>

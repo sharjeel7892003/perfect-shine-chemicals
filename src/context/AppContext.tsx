@@ -32,7 +32,11 @@ import {
   QuotationStatus,
   Salesperson,
   MonthlyCommissionClosure,
-  CommissionPayment
+  CommissionPayment,
+  FixedAsset,
+  FixedAssetFunding,
+  Partner,
+  PartnerCapitalTransaction
 } from '../types';
 import { generateInvoiceNumber, formatPKR } from '../utils/formatters';
 import { allocateTripFreight, calculateWeightedAverageLandedCost } from '../utils/freightAllocation';
@@ -42,6 +46,12 @@ import {
   ACTIVE_RAW_MATERIAL_COSTING_METHOD 
 } from '../utils/costingPolicy';
 import { getNextBatchNumberForProduct, getNextPackingRunNumber } from '../utils/batchNumber';
+import { 
+  calculateCurrentBookValue, 
+  calculateAccumulatedDepreciation, 
+  calculateMonthlyDepreciation,
+  getNextAssetCode 
+} from '../utils/assetCalculations';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { supabaseService } from '../lib/supabaseService';
 import { generateId, ensureUUID, isValidUUID } from '../utils/uuid';
@@ -77,6 +87,9 @@ interface AppContextType {
   salespersons: Salesperson[];
   monthlyCommissionClosures: MonthlyCommissionClosure[];
   commissionPayments: CommissionPayment[];
+  fixedAssets: FixedAsset[];
+  partners: Partner[];
+  partnerCapitalTransactions: PartnerCapitalTransaction[];
   
   // Cloud & Connectivity Status
   isLoadingCloudData: boolean;
@@ -89,6 +102,9 @@ interface AppContextType {
   lowStockRawMaterials: RawMaterial[];
   totalRawMaterialsValuation: number;
   totalProductsValuation: number;
+  totalFixedAssetsCost: number;
+  totalFixedAssetsBookValue: number;
+  totalFixedAssetsDepreciation: number;
   thisMonthExpenses: number;
   thisMonthOverheads: MonthlyOverheadsSummary;
   totalExpenses: number;
@@ -220,9 +236,33 @@ interface AppContextType {
   
   recordPayment: (paymentData: Omit<Payment, 'id' | 'created_at'>) => Promise<Payment>;
   deletePayment: (paymentId: string) => Promise<void>;
-  recordCapitalInjection: (data: { amount: number; payment_method: PaymentMethod; transaction_ref?: string; notes?: string; date?: string; depositor_name?: string }) => Promise<Payment>;
-  recordOwnerWithdrawal: (data: { amount: number; payment_method: PaymentMethod; transaction_ref?: string; notes?: string; date?: string; withdrawn_by?: string }) => Promise<Payment>;
+  recordCapitalInjection: (data: { amount: number; payment_method: PaymentMethod; transaction_ref?: string; notes?: string; date?: string; depositor_name?: string; partner_id?: string }) => Promise<Payment>;
+  recordOwnerWithdrawal: (data: { amount: number; payment_method: PaymentMethod; transaction_ref?: string; notes?: string; date?: string; withdrawn_by?: string; partner_id?: string }) => Promise<Payment>;
   recordCustomerAdvance: (data: { customer_id: string; customer_name: string; amount: number; payment_method: PaymentMethod; transaction_ref?: string; notes?: string; date?: string }) => Promise<Payment>;
+
+  // Fixed Assets Actions
+  addFixedAsset: (data: {
+    asset: Omit<FixedAsset, 'id' | 'asset_code' | 'created_at' | 'updated_at'>;
+    fundings: Omit<FixedAssetFunding, 'id' | 'asset_id' | 'created_at'>[];
+    user: Profile;
+  }) => Promise<FixedAsset>;
+  updateFixedAsset: (
+    id: string,
+    updates: Partial<FixedAsset>,
+    fundings: Omit<FixedAssetFunding, 'id' | 'asset_id' | 'created_at'>[],
+    user: Profile
+  ) => Promise<FixedAsset>;
+  deleteFixedAsset: (id: string, user: Profile) => Promise<void>;
+  archiveOrDisposeFixedAsset: (
+    id: string,
+    disposalData: { status: 'disposed' | 'archived'; disposal_date?: string; disposal_amount?: number; disposal_notes?: string },
+    user: Profile
+  ) => Promise<void>;
+
+  // Partner Actions
+  addPartner: (partner: Omit<Partner, 'id' | 'created_at' | 'updated_at'>) => Promise<Partner>;
+  updatePartner: (id: string, updates: Partial<Partner>) => Promise<Partner>;
+  deletePartner: (id: string) => Promise<void>;
 
   // Expense Actions
   addExpense: (expenseData: Omit<Expense, 'id' | 'created_at'>, user: Profile) => Promise<Expense>;
@@ -346,6 +386,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return [];
   });
+
+  // Fixed Assets & Partner Capital States (Supabase-only, strictly no localStorage per rule 6)
+  const [fixedAssets, setFixedAssets] = useState<FixedAsset[]>([]);
+  const [partners, setPartners] = useState<Partner[]>([]);
+  const [partnerCapitalTransactions, setPartnerCapitalTransactions] = useState<PartnerCapitalTransaction[]>([]);
 
   // Cloud status states
   const [isLoadingCloudData, setIsLoadingCloudData] = useState<boolean>(true);
@@ -521,6 +566,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setExpenses(cloudData.expenses || []);
         setRecurringExpenses(cloudData.recurringExpenses || []);
         setDeletionLogs(cloudData.deletionLogs || []);
+        setFixedAssets((cloudData as any).fixedAssets || []);
+        setPartners((cloudData as any).partners || []);
+        setPartnerCapitalTransactions((cloudData as any).partnerCapitalTransactions || []);
       }
     } catch (err: any) {
       console.error('Failed to load cloud data from Supabase:', err);
@@ -592,6 +640,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setExpenses([]);
         setRecurringExpenses([]);
         setDeletionLogs([]);
+        setFixedAssets([]);
+        setPartners([]);
+        setPartnerCapitalTransactions([]);
       }
     });
 
@@ -3456,8 +3507,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     notes?: string;
     date?: string;
     depositor_name?: string;
+    partner_id?: string;
   }): Promise<Payment> => {
-    return recordPayment({
+    const pay = await recordPayment({
       related_to: 'capital_injection',
       amount: Number(data.amount || 0),
       payment_method: data.payment_method,
@@ -3466,6 +3518,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       date: data.date || new Date().toISOString(),
       created_by: data.depositor_name,
     });
+
+    // Also write to partner_capital_transactions if partner is known or matches
+    const matchedPartner = (data.partner_id && partners.find(p => p.id === data.partner_id)) ||
+      (data.depositor_name && partners.find(p => p.name.toLowerCase() === data.depositor_name?.toLowerCase())) ||
+      partners[0];
+
+    if (matchedPartner) {
+      const partnerTxn: PartnerCapitalTransaction = {
+        id: generateId(),
+        partner_id: matchedPartner.id,
+        partner_name: matchedPartner.name,
+        date: (data.date || new Date().toISOString()).split('T')[0],
+        transaction_type: 'contribution',
+        contribution_type: 'capital',
+        amount: Number(data.amount || 0),
+        reference_id: pay.id,
+        reference_no: data.transaction_ref || pay.transaction_ref || 'CAP-INJ',
+        reference_type: 'cash_injection',
+        notes: data.notes || `Cash capital injection into business`,
+        created_by: data.depositor_name,
+      };
+      await supabaseService.createPartnerCapitalTransaction(partnerTxn).catch(err => {
+        console.warn('Could not record partner capital transaction in cloud:', err);
+      });
+      setPartnerCapitalTransactions(prev => [partnerTxn, ...prev]);
+    }
+
+    return pay;
   };
 
   const recordOwnerWithdrawal = async (data: {
@@ -3475,8 +3555,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     notes?: string;
     date?: string;
     withdrawn_by?: string;
+    partner_id?: string;
   }): Promise<Payment> => {
-    return recordPayment({
+    const pay = await recordPayment({
       related_to: 'owner_withdrawal',
       amount: Number(data.amount || 0),
       payment_method: data.payment_method,
@@ -3485,6 +3566,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       date: data.date || new Date().toISOString(),
       created_by: data.withdrawn_by,
     });
+
+    const matchedPartner = (data.partner_id && partners.find(p => p.id === data.partner_id)) ||
+      (data.withdrawn_by && partners.find(p => p.name.toLowerCase() === data.withdrawn_by?.toLowerCase())) ||
+      partners[0];
+
+    if (matchedPartner) {
+      const partnerTxn: PartnerCapitalTransaction = {
+        id: generateId(),
+        partner_id: matchedPartner.id,
+        partner_name: matchedPartner.name,
+        date: (data.date || new Date().toISOString()).split('T')[0],
+        transaction_type: 'withdrawal',
+        contribution_type: 'capital',
+        amount: Number(data.amount || 0),
+        reference_id: pay.id,
+        reference_no: data.transaction_ref || pay.transaction_ref || 'DRAWING',
+        reference_type: 'cash_withdrawal',
+        notes: data.notes || `Owner drawing for personal use`,
+        created_by: data.withdrawn_by,
+      };
+      await supabaseService.createPartnerCapitalTransaction(partnerTxn).catch(err => {
+        console.warn('Could not record partner drawing transaction in cloud:', err);
+      });
+      setPartnerCapitalTransactions(prev => [partnerTxn, ...prev]);
+    }
+
+    return pay;
   };
 
   const recordCustomerAdvance = async (data: {
@@ -3555,6 +3663,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           await supabaseService.upsertSupplier(updatedSupp);
           setSuppliers(prev => prev.map(s => s.id === supp.id ? updatedSupp : s));
         }
+      }
+      // Revert partner capital transaction if this payment was a capital injection or owner drawing
+      if (target.related_to === 'capital_injection' || target.related_to === 'owner_withdrawal') {
+        await supabaseService.deletePartnerCapitalTransactionsByReference(paymentId).catch(() => {});
+        setPartnerCapitalTransactions(prev => prev.filter(t => t.reference_id !== paymentId));
       }
     }
   };
@@ -4067,6 +4180,293 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
   };
 
+  // ==============================================================================
+  // FIXED ASSETS & PARTNER CAPITAL ACTIONS
+  // ==============================================================================
+  const totalFixedAssetsCost = fixedAssets
+    .filter(a => a.status === 'active')
+    .reduce((sum, a) => sum + Number(a.total_cost || 0), 0);
+
+  const totalFixedAssetsBookValue = fixedAssets
+    .filter(a => a.status === 'active')
+    .reduce((sum, a) => sum + calculateCurrentBookValue(a), 0);
+
+  const totalFixedAssetsDepreciation = fixedAssets
+    .filter(a => a.status === 'active')
+    .reduce((sum, a) => sum + calculateAccumulatedDepreciation(a), 0);
+
+  const addFixedAsset = async (data: {
+    asset: Omit<FixedAsset, 'id' | 'asset_code' | 'created_at' | 'updated_at'>;
+    fundings: Omit<FixedAssetFunding, 'id' | 'asset_id' | 'created_at'>[];
+    user: Profile;
+  }): Promise<FixedAsset> => {
+    const totalCost = Number(data.asset.total_cost || 0);
+    const totalFunding = Number(data.fundings.reduce((sum, f) => {
+      return sum + (f.funding_type === 'business' ? Number(f.business_amount || 0) : Number(f.partner_amount || 0));
+    }, 0).toFixed(2));
+
+    if (Math.abs(totalFunding - totalCost) > 0.01) {
+      throw new Error(`Funding split total (PKR ${totalFunding.toFixed(2)}) must exactly equal asset cost (PKR ${totalCost.toFixed(2)}). Difference: PKR ${Math.abs(totalCost - totalFunding).toFixed(2)}.`);
+    }
+
+    const newId = generateId();
+    const nextCode = getNextAssetCode(fixedAssets);
+    const newAsset: FixedAsset = {
+      ...data.asset,
+      id: newId,
+      asset_code: nextCode,
+      total_cost: totalCost,
+      useful_life_years: Number(data.asset.useful_life_years || 0),
+      salvage_value: Number(data.asset.salvage_value || 0),
+      status: 'active',
+      created_by: data.user?.name || 'Admin',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    const preparedFundings: FixedAssetFunding[] = data.fundings.map(f => ({
+      ...f,
+      id: generateId(),
+      asset_id: newId,
+      business_amount: f.funding_type === 'business' ? Number(f.business_amount || 0) : 0,
+      partner_amount: f.funding_type === 'partner' ? Number(f.partner_amount || 0) : 0,
+      created_at: new Date().toISOString()
+    }));
+
+    // 1. Process Business Outflow in Cash Book (payments table)
+    const businessFundings = preparedFundings.filter(f => f.funding_type === 'business' && f.business_amount > 0);
+    for (const bf of businessFundings) {
+      await recordPayment({
+        related_to: 'fixed_asset',
+        amount: bf.business_amount,
+        payment_method: bf.payment_method || 'bank',
+        reference_id: newId,
+        reference_no: nextCode,
+        notes: `Fixed Asset Purchase: ${newAsset.name}`,
+        date: newAsset.purchase_date,
+        created_by: data.user?.name,
+      });
+    }
+
+    // 2. Process Partner Contributions in partner_capital_transactions table
+    const partnerFundings = preparedFundings.filter(f => f.funding_type === 'partner' && f.partner_amount > 0);
+    const newTxns: PartnerCapitalTransaction[] = [];
+    for (const pf of partnerFundings) {
+      const partnerTxn: PartnerCapitalTransaction = {
+        id: generateId(),
+        partner_id: pf.partner_id!,
+        partner_name: pf.partner_name || 'Partner',
+        date: newAsset.purchase_date,
+        transaction_type: 'asset_contribution',
+        contribution_type: pf.partner_contribution_type || 'capital',
+        amount: pf.partner_amount,
+        reference_id: newId,
+        reference_no: nextCode,
+        reference_type: 'fixed_asset',
+        notes: `Asset contribution for ${newAsset.name}`,
+        created_by: data.user?.name,
+        created_at: new Date().toISOString()
+      };
+      await supabaseService.createPartnerCapitalTransaction(partnerTxn).catch(err => {
+        console.warn('Could not record partner asset contribution in Supabase:', err);
+      });
+      newTxns.push(partnerTxn);
+    }
+    if (newTxns.length > 0) {
+      setPartnerCapitalTransactions(prev => [...newTxns, ...prev]);
+    }
+
+    // 3. Save Fixed Asset & fundings in Supabase
+    const saved = await supabaseService.upsertFixedAsset(newAsset, preparedFundings);
+    setFixedAssets(prev => [saved, ...prev]);
+    return saved;
+  };
+
+  const updateFixedAsset = async (
+    id: string,
+    updates: Partial<FixedAsset>,
+    fundings: Omit<FixedAssetFunding, 'id' | 'asset_id' | 'created_at'>[],
+    user: Profile
+  ): Promise<FixedAsset> => {
+    const current = fixedAssets.find(a => a.id === id);
+    if (!current) throw new Error('Asset not found');
+
+    const totalCost = Number(updates.total_cost !== undefined ? updates.total_cost : current.total_cost);
+    const totalFunding = Number(fundings.reduce((sum, f) => {
+      return sum + (f.funding_type === 'business' ? Number(f.business_amount || 0) : Number(f.partner_amount || 0));
+    }, 0).toFixed(2));
+
+    if (Math.abs(totalFunding - totalCost) > 0.01) {
+      throw new Error(`Funding split total (PKR ${totalFunding.toFixed(2)}) must equal asset cost (PKR ${totalCost.toFixed(2)}). Difference: PKR ${Math.abs(totalCost - totalFunding).toFixed(2)}.`);
+    }
+
+    // 1. REVERSE existing cash outflow payment vouchers for this asset
+    const linkedPayments = payments.filter(p => p.reference_id === id && p.related_to === 'fixed_asset');
+    for (const lp of linkedPayments) {
+      await supabaseService.deletePayment(lp.id);
+    }
+    setPayments(prev => prev.filter(p => !(p.reference_id === id && p.related_to === 'fixed_asset')));
+
+    // 2. REVERSE existing partner capital contributions for this asset
+    await supabaseService.deletePartnerCapitalTransactionsByReference(id);
+    setPartnerCapitalTransactions(prev => prev.filter(t => t.reference_id !== id));
+
+    // 3. REAPPLY updated asset and new fundings
+    const updatedAsset: FixedAsset = {
+      ...current,
+      ...updates,
+      total_cost: totalCost,
+      useful_life_years: Number(updates.useful_life_years !== undefined ? updates.useful_life_years : current.useful_life_years),
+      salvage_value: Number(updates.salvage_value !== undefined ? updates.salvage_value : current.salvage_value),
+      updated_at: new Date().toISOString(),
+    };
+
+    const preparedFundings: FixedAssetFunding[] = fundings.map(f => ({
+      ...f,
+      id: generateId(),
+      asset_id: id,
+      business_amount: f.funding_type === 'business' ? Number(f.business_amount || 0) : 0,
+      partner_amount: f.funding_type === 'partner' ? Number(f.partner_amount || 0) : 0,
+      created_at: new Date().toISOString()
+    }));
+
+    // Reapply business payments
+    const businessFundings = preparedFundings.filter(f => f.funding_type === 'business' && f.business_amount > 0);
+    for (const bf of businessFundings) {
+      await recordPayment({
+        related_to: 'fixed_asset',
+        amount: bf.business_amount,
+        payment_method: bf.payment_method || 'bank',
+        reference_id: id,
+        reference_no: updatedAsset.asset_code,
+        notes: `Fixed Asset Purchase: ${updatedAsset.name}`,
+        date: updatedAsset.purchase_date,
+        created_by: user?.name,
+      });
+    }
+
+    // Reapply partner contributions
+    const partnerFundings = preparedFundings.filter(f => f.funding_type === 'partner' && f.partner_amount > 0);
+    const newTxns: PartnerCapitalTransaction[] = [];
+    for (const pf of partnerFundings) {
+      const partnerTxn: PartnerCapitalTransaction = {
+        id: generateId(),
+        partner_id: pf.partner_id!,
+        partner_name: pf.partner_name || 'Partner',
+        date: updatedAsset.purchase_date,
+        transaction_type: 'asset_contribution',
+        contribution_type: pf.partner_contribution_type || 'capital',
+        amount: pf.partner_amount,
+        reference_id: id,
+        reference_no: updatedAsset.asset_code,
+        reference_type: 'fixed_asset',
+        notes: `Asset contribution for ${updatedAsset.name} (Updated)`,
+        created_by: user?.name,
+        created_at: new Date().toISOString()
+      };
+      await supabaseService.createPartnerCapitalTransaction(partnerTxn).catch(() => {});
+      newTxns.push(partnerTxn);
+    }
+    if (newTxns.length > 0) {
+      setPartnerCapitalTransactions(prev => [...newTxns, ...prev]);
+    }
+
+    const saved = await supabaseService.upsertFixedAsset(updatedAsset, preparedFundings);
+    setFixedAssets(prev => prev.map(a => a.id === id ? saved : a));
+    return saved;
+  };
+
+  const deleteFixedAsset = async (id: string, user: Profile): Promise<void> => {
+    const target = fixedAssets.find(a => a.id === id);
+    if (!target) return;
+
+    // 1. Reverse business payments
+    const linkedPayments = payments.filter(p => p.reference_id === id && p.related_to === 'fixed_asset');
+    for (const lp of linkedPayments) {
+      await supabaseService.deletePayment(lp.id);
+    }
+    setPayments(prev => prev.filter(p => !(p.reference_id === id && p.related_to === 'fixed_asset')));
+
+    // 2. Reverse partner capital contributions
+    await supabaseService.deletePartnerCapitalTransactionsByReference(id);
+    setPartnerCapitalTransactions(prev => prev.filter(t => t.reference_id !== id));
+
+    // 3. Delete fixed asset & fundings in Supabase
+    await supabaseService.deleteFixedAsset(id);
+    setFixedAssets(prev => prev.filter(a => a.id !== id));
+
+    // 4. Record audit log
+    await addDeletionLogEntry({
+      entity_type: 'fixed_asset',
+      entity_id: id,
+      entity_title: target.name,
+      action_type: 'reversed_and_deleted',
+      impact_summary: `Reversed cash outflow and partner contributions for asset ${target.name} (${target.asset_code}, cost PKR ${target.total_cost})`,
+      performed_by: user?.name || 'Admin',
+      performed_by_role: user?.role || 'owner',
+    });
+  };
+
+  const archiveOrDisposeFixedAsset = async (
+    id: string,
+    disposalData: { status: 'disposed' | 'archived'; disposal_date?: string; disposal_amount?: number; disposal_notes?: string },
+    user: Profile
+  ): Promise<void> => {
+    const target = fixedAssets.find(a => a.id === id);
+    if (!target) return;
+
+    await supabaseService.archiveOrDisposeFixedAsset(id, disposalData);
+    setFixedAssets(prev => prev.map(a => a.id === id ? {
+      ...a,
+      status: disposalData.status,
+      disposal_date: disposalData.disposal_date,
+      disposal_amount: disposalData.disposal_amount,
+      disposal_notes: disposalData.disposal_notes,
+    } : a));
+
+    await addDeletionLogEntry({
+      entity_type: 'fixed_asset',
+      entity_id: id,
+      entity_title: target.name,
+      action_type: 'archived',
+      impact_summary: `Asset ${target.name} (${target.asset_code}) marked as ${disposalData.status} on ${disposalData.disposal_date || 'today'} with recovery amount PKR ${disposalData.disposal_amount || 0}`,
+      performed_by: user?.name || 'Admin',
+      performed_by_role: user?.role || 'owner',
+    });
+  };
+
+  const addPartner = async (data: Omit<Partner, 'id' | 'created_at' | 'updated_at'>): Promise<Partner> => {
+    const newPartner: Partner = {
+      ...data,
+      id: generateId(),
+      initial_capital: Number(data.initial_capital || 0),
+      is_active: data.is_active !== false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    const saved = await supabaseService.upsertPartner(newPartner);
+    setPartners(prev => [...prev, saved]);
+    return saved;
+  };
+
+  const updatePartner = async (id: string, updates: Partial<Partner>): Promise<Partner> => {
+    const existing = partners.find(p => p.id === id);
+    if (!existing) throw new Error('Partner not found');
+    const updated: Partner = {
+      ...existing,
+      ...updates,
+      updated_at: new Date().toISOString(),
+    };
+    const saved = await supabaseService.upsertPartner(updated);
+    setPartners(prev => prev.map(p => p.id === id ? saved : p));
+    return saved;
+  };
+
+  const deletePartner = async (id: string): Promise<void> => {
+    await supabaseService.deletePartner(id);
+    setPartners(prev => prev.filter(p => p.id !== id));
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -4084,6 +4484,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         expenses,
         recurringExpenses,
         deletionLogs,
+        fixedAssets,
+        partners,
+        partnerCapitalTransactions,
+        totalFixedAssetsCost,
+        totalFixedAssetsBookValue,
+        totalFixedAssetsDepreciation,
         isLoadingCloudData,
         cloudSyncError,
         isOnline,
@@ -4147,6 +4553,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         recordCapitalInjection,
         recordOwnerWithdrawal,
         recordCustomerAdvance,
+        addFixedAsset,
+        updateFixedAsset,
+        deleteFixedAsset,
+        archiveOrDisposeFixedAsset,
+        addPartner,
+        updatePartner,
+        deletePartner,
         addExpense,
         deleteExpense,
         addRecurringExpense,

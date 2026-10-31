@@ -60,7 +60,8 @@ export interface OverallFinancialMetrics {
   ownerWithdrawals: number;
   salesReturnRefunds?: number;
   salesCommissionDisbursements?: number;
-  totalDisbursements: number; // Sum of all Outflows: purchaseDisbursements + transportDisbursements + operatingExpenses + ownerWithdrawals + salesReturnRefunds + salesCommissionDisbursements
+  fixedAssetDisbursements?: number;
+  totalDisbursements: number; // Sum of all Outflows: purchaseDisbursements + transportDisbursements + operatingExpenses + ownerWithdrawals + salesReturnRefunds + salesCommissionDisbursements + fixedAssetDisbursements
   
   // NET CASH POSITION
   netCashPosition: number; // totalCashCollected - totalDisbursements
@@ -458,9 +459,17 @@ export const calculateFinancialMetrics = (data: {
       .toFixed(2)
   );
 
-  // Total Disbursements = Purchases Paid + Transport Paid + Operating Expenses + Owner Withdrawals + Sales Return Cash Refunds + Sales Commission Paid
+  // Fixed Asset Purchases via Business Funds (Cash Out via Cash Book)
+  const fixedAssetDisbursements = Number(
+    boundedPayments
+      .filter(p => p.related_to === 'fixed_asset')
+      .reduce((acc, p) => acc + (Number(p.amount) || 0), 0)
+      .toFixed(2)
+  );
+
+  // Total Disbursements = Purchases Paid + Transport Paid + Operating Expenses + Owner Withdrawals + Sales Return Cash Refunds + Sales Commission Paid + Fixed Asset Purchases
   const totalDisbursements = Number(
-    (purchaseDisbursements + transportDisbursements + operatingExpenses + ownerWithdrawals + salesReturnRefunds + salesCommissionDisbursements).toFixed(2)
+    (purchaseDisbursements + transportDisbursements + operatingExpenses + ownerWithdrawals + salesReturnRefunds + salesCommissionDisbursements + fixedAssetDisbursements).toFixed(2)
   );
 
   // Net Cash Position = Total Cash Collected - Total Disbursements
@@ -485,6 +494,7 @@ export const calculateFinancialMetrics = (data: {
     ownerWithdrawals,
     salesReturnRefunds,
     salesCommissionDisbursements,
+    fixedAssetDisbursements,
     totalDisbursements,
     netCashPosition,
     netCashflow: netCashPosition,

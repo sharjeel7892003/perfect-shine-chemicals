@@ -450,7 +450,7 @@ export interface RecurringExpense {
 
 export interface Payment {
   id: string;
-  related_to: 'sale' | 'purchase' | 'customer_balance' | 'supplier_balance' | 'expense' | 'capital_injection' | 'owner_withdrawal' | 'customer_advance' | 'sales_return_refund' | 'transport' | 'sales_commission';
+  related_to: 'sale' | 'purchase' | 'customer_balance' | 'supplier_balance' | 'expense' | 'capital_injection' | 'owner_withdrawal' | 'customer_advance' | 'sales_return_refund' | 'transport' | 'sales_commission' | 'fixed_asset';
   reference_id?: string;
   reference_no?: string;
   customer_id?: string;
@@ -471,7 +471,7 @@ export interface Payment {
 // ==============================================================================
 export interface DeletionAuditLog {
   id: string;
-  entity_type: 'customer' | 'supplier' | 'product' | 'raw_material' | 'sale' | 'purchase' | 'formulation' | 'staff' | 'production_batch' | 'packing_run' | 'expense' | 'sales_return';
+  entity_type: 'customer' | 'supplier' | 'product' | 'raw_material' | 'sale' | 'purchase' | 'formulation' | 'staff' | 'production_batch' | 'packing_run' | 'expense' | 'sales_return' | 'fixed_asset' | 'partner';
   entity_id: string;
   entity_title: string;
   action_type: 'deleted' | 'archived' | 'reversed_and_deleted' | 'deactivated';
@@ -648,3 +648,83 @@ export interface CommissionPayment {
   recorded_by_name?: string;
   created_at?: string;
 }
+
+// ==============================================================================
+// 7. FIXED ASSETS & PARTNER CAPITAL ENTITIES
+// ==============================================================================
+export type AssetCategory = 'Machinery' | 'Equipment' | 'Vehicle' | 'Furniture' | 'Other';
+export type AssetStatus = 'active' | 'disposed' | 'archived';
+
+export type FundingType = 'business' | 'partner';
+export type PartnerContributionType = 'capital' | 'loan';
+
+export interface FixedAssetFunding {
+  id: string;
+  asset_id: string;
+  funding_type: FundingType;
+  business_amount: number;
+  payment_method?: PaymentMethod;
+  partner_id?: string;
+  partner_name?: string;
+  partner_contribution_type?: PartnerContributionType;
+  partner_amount: number;
+  notes?: string;
+  created_at?: string;
+}
+
+export interface FixedAsset {
+  id: string;
+  asset_code: string;
+  name: string;
+  category: AssetCategory;
+  purchase_date: string; // 'YYYY-MM-DD'
+  vendor?: string;
+  total_cost: number;
+  useful_life_years: number;
+  salvage_value: number;
+  status: AssetStatus;
+  disposal_date?: string;
+  disposal_amount?: number;
+  disposal_notes?: string;
+  notes?: string;
+  created_by?: string;
+  created_at?: string;
+  updated_at?: string;
+  fundings?: FixedAssetFunding[];
+}
+
+export interface Partner {
+  id: string;
+  name: string;
+  phone?: string;
+  email?: string;
+  initial_capital: number;
+  is_active: boolean;
+  notes?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type PartnerTransactionType = 
+  | 'contribution' 
+  | 'withdrawal' 
+  | 'asset_contribution' 
+  | 'loan_received' 
+  | 'loan_repayment';
+
+export interface PartnerCapitalTransaction {
+  id: string;
+  partner_id: string;
+  partner_name: string;
+  date: string;
+  transaction_type: PartnerTransactionType;
+  contribution_type: PartnerContributionType; // 'capital' | 'loan'
+  amount: number;
+  reference_id?: string;
+  reference_no?: string;
+  reference_type: 'fixed_asset' | 'cash_injection' | 'cash_withdrawal' | 'manual';
+  notes?: string;
+  created_by?: string;
+  created_at?: string;
+}
+

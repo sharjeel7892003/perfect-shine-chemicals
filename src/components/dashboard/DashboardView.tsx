@@ -16,7 +16,8 @@ import {
   DollarSign, 
   Receipt,
   Wallet,
-  UserCheck
+  UserCheck,
+  Landmark
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -46,7 +47,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     expenses,
     salesReturns,
     thisMonthExpenses,
-    thisMonthOverheads
+    thisMonthOverheads,
+    fixedAssets = [],
+    totalFixedAssetsBookValue = 0
   } = useApp();
   
   const { currentUser, isOwner, canCreateSale, canManagePurchases, canRecordProduction } = useAuth();
@@ -140,7 +143,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
       </div>
 
       {/* KPI Stat Cards Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         {/* Sales Revenue */}
         <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 hover:border-slate-700 transition-all">
           <div className="flex items-center justify-between">
@@ -221,6 +224,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             <button onClick={() => onNavigate('expenses')} className="text-rose-400 hover:underline flex items-center gap-0.5 font-medium">
               {thisMonthOverheads?.count ?? 0} items <ArrowUpRight className="w-3 h-3" />
             </button>
+          </div>
+        </div>
+
+        {/* Fixed Assets (Book Value) */}
+        <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 hover:border-slate-700 transition-all">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Fixed Assets (Book Value)</span>
+            <div className="w-9 h-9 rounded-xl bg-cyan-500/10 text-cyan-400 flex items-center justify-center">
+              <Landmark className="w-5 h-5" />
+            </div>
+          </div>
+          <p className="text-2xl font-black text-cyan-400 mt-3 font-mono">{formatPKR(totalFixedAssetsBookValue)}</p>
+          <div className="flex items-center justify-between text-xs text-slate-400 mt-2">
+            <span>{fixedAssets.filter(a => a.status === 'active').length} Active Assets</span>
+            {isOwner && (
+              <button onClick={() => onNavigate('fixed_assets')} className="text-cyan-400 hover:underline flex items-center gap-0.5 font-medium">
+                Register <ArrowUpRight className="w-3 h-3" />
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -498,11 +520,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             </div>
           </div>
 
-          <div className="mt-5 pt-4 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
-            <span>Combined Total Factory Asset Valuation:</span>
-            <span className="text-sm font-black font-mono text-emerald-400">
-              {formatPKR(combinedFactoryValuation)}
-            </span>
+          <div className="mt-5 pt-4 border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs text-slate-400">
+            <span>Total Combined Company Assets (Stock + Fixed Assets):</span>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-black font-mono text-emerald-400">
+                {formatPKR(combinedFactoryValuation + totalFixedAssetsBookValue)}
+              </span>
+              <span className="text-[11px] text-slate-500">
+                (Stock {formatPKR(combinedFactoryValuation)} + Assets {formatPKR(totalFixedAssetsBookValue)})
+              </span>
+            </div>
           </div>
         </div>
 

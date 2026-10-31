@@ -8,6 +8,7 @@ interface ModalProps {
   subtitle?: string;
   children: React.ReactNode;
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl';
 }
 
 export const Modal: React.FC<ModalProps> = ({
@@ -17,7 +18,9 @@ export const Modal: React.FC<ModalProps> = ({
   subtitle,
   children,
   maxWidth = 'lg',
+  size,
 }) => {
+  const effectiveMaxWidth = size || maxWidth;
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -47,7 +50,7 @@ export const Modal: React.FC<ModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-200">
       <div 
-        className={`w-full ${maxWidthClasses[maxWidth]} bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl shadow-black/60 overflow-hidden flex flex-col max-h-[90vh]`}
+        className={`w-full ${maxWidthClasses[effectiveMaxWidth]} bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl shadow-black/60 overflow-hidden flex flex-col max-h-[90vh]`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

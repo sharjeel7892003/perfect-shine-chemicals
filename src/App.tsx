@@ -18,6 +18,7 @@ import { CustomersModule } from './components/customers/CustomersModule';
 import { SuppliersModule } from './components/suppliers/SuppliersModule';
 import { PaymentsModule } from './components/payments/PaymentsModule';
 import { ExpensesModule } from './components/expenses/ExpensesModule';
+import { FixedAssetsModule } from './components/fixedAssets/FixedAssetsModule';
 import { ReportsModule, ReportType } from './components/reports/ReportsModule';
 import { UsersModule } from './components/users/UsersModule';
 import { LoginView } from './components/auth/LoginView';
@@ -32,6 +33,7 @@ const MainLayout: React.FC = () => {
   const { 
     currentUser, 
     isAuthenticated, 
+    isOwner,
     allUsers, 
     login,
     canAccessSales,
@@ -99,6 +101,8 @@ const MainLayout: React.FC = () => {
         return canManagePurchases ? <PaymentsModule /> : <DashboardView onNavigate={setActiveTab} />;
       case 'expenses':
         return (canManageExpenses || canViewReports) ? <ExpensesModule /> : <DashboardView onNavigate={setActiveTab} />;
+      case 'fixed_assets':
+        return isOwner ? <FixedAssetsModule /> : <DashboardView onNavigate={setActiveTab} />;
       case 'reports':
         return canViewReports ? (
           <ReportsModule initialReport={reportsInitialTab} initialRawMaterialId={reportsInitialRMId} />

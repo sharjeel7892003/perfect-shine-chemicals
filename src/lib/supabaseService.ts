@@ -23,7 +23,11 @@ import {
   Quotation,
   Salesperson,
   MonthlyCommissionClosure,
-  CommissionPayment
+  CommissionPayment,
+  FixedAsset,
+  FixedAssetFunding,
+  Partner,
+  PartnerCapitalTransaction
 } from '../types';
 import { ensureUUID, isValidUUID } from '../utils/uuid';
 
@@ -65,7 +69,10 @@ export const supabaseService = {
         quotRes,
         salespersonsRes,
         closuresRes,
-        commPayRes
+        commPayRes,
+        fixedAssetsRes,
+        partnersRes,
+        partnerTxnsRes
       ] = await Promise.all([
         supabase.from('products').select('*').order('created_at', { ascending: false }),
         supabase.from('customers').select('*').order('created_at', { ascending: false }),
@@ -88,7 +95,10 @@ export const supabaseService = {
         Promise.resolve(supabase.from('quotations').select('*, quotation_items(*)').order('created_at', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
         Promise.resolve(supabase.from('salespersons').select('*').order('name', { ascending: true })).catch(() => ({ data: [], error: null } as any)),
         Promise.resolve(supabase.from('monthly_commission_closures').select('*').order('month', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
-        Promise.resolve(supabase.from('commission_payments').select('*').order('payment_date', { ascending: false })).catch(() => ({ data: [], error: null } as any))
+        Promise.resolve(supabase.from('commission_payments').select('*').order('payment_date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
+        Promise.resolve(supabase.from('fixed_assets').select('*, fixed_asset_fundings(*)').order('purchase_date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
+        Promise.resolve(supabase.from('partners').select('*').order('name', { ascending: true })).catch(() => ({ data: [], error: null } as any)),
+        Promise.resolve(supabase.from('partner_capital_transactions').select('*').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any))
       ]);
 
 
@@ -416,6 +426,27 @@ export const supabaseService = {
         salespersons: ((salespersonsRes?.data || []) as Salesperson[]),
         monthlyCommissionClosures: ((closuresRes?.data || []) as MonthlyCommissionClosure[]),
         commissionPayments: ((commPayRes?.data || []) as CommissionPayment[]),
+        fixedAssets: (((fixedAssetsRes as any)?.data || []) as any[]).map((fa: any) => ({
+          ...fa,
+          total_cost: Number(fa.total_cost || 0),
+          useful_life_years: Number(fa.useful_life_years || 0),
+          salvage_value: Number(fa.salvage_value || 0),
+          disposal_amount: Number(fa.disposal_amount || 0),
+          fundings: (Array.isArray(fa.fixed_asset_fundings) ? fa.fixed_asset_fundings : []).map((f: any) => ({
+            ...f,
+            business_amount: Number(f.business_amount || 0),
+            partner_amount: Number(f.partner_amount || 0),
+          }))
+        })) as FixedAsset[],
+        partners: (((partnersRes as any)?.data || []) as any[]).map((p: any) => ({
+          ...p,
+          initial_capital: Number(p.initial_capital || 0),
+          is_active: p.is_active !== false,
+        })) as Partner[],
+        partnerCapitalTransactions: (((partnerTxnsRes as any)?.data || []) as any[]).map((t: any) => ({
+          ...t,
+          amount: Number(t.amount || 0),
+        })) as PartnerCapitalTransaction[],
       };
     } catch (err: any) {
       console.error('Failed to fetch from Supabase:', err);
@@ -1908,6 +1939,212 @@ export const supabaseService = {
       }).eq('id', saleId);
     } catch (e) {
       console.warn('Failed to update salesperson on sale:', e);
+    }
+  },
+
+  // ============================================================================
+  // PARTNERS & CAPITAL TRANSACTIONS
+  // ============================================================================
+  async upsertPartner(partner: Partner): Promise<Partner> {
+    if (!isSupabaseConfigured || !supabase) return partner;
+    try {
+      assertOnline();
+      const payload: any = {
+        id: ensureUUID(partner.id),
+        name: partner.name.trim(),
+        phone: partner.phone || null,
+        email: partner.email || null,
+        initial_capital: Number(partner.initial_capital || 0),
+        is_active: partner.is_active !== false,
+        notes: partner.notes || null,
+        updated_at: new Date().toISOString()
+      };
+      const { data, error } = await supabase.from('partners').upsert(payload).select().single();
+      if (error) {
+        console.error('Failed to upsert partner in Supabase:', error);
+        throw new Error(error.message);
+      }
+      return data as Partner;
+    } catch (e: any) {
+      console.error('upsertPartner error:', e);
+      throw e;
+    }
+  },
+
+  async deletePartner(partnerId: string): Promise<void> {
+    if (!isSupabaseConfigured || !supabase) return;
+    try {
+      assertOnline();
+      const { error } = await supabase.from('partners').delete().eq('id', partnerId);
+      if (error) {
+        console.error('Failed to delete partner:', error);
+        throw new Error(error.message);
+      }
+    } catch (e: any) {
+      console.error('deletePartner error:', e);
+      throw e;
+    }
+  },
+
+  async createPartnerCapitalTransaction(txn: PartnerCapitalTransaction): Promise<PartnerCapitalTransaction> {
+    if (!isSupabaseConfigured || !supabase) return txn;
+    try {
+      assertOnline();
+      const payload: any = {
+        id: ensureUUID(txn.id),
+        partner_id: txn.partner_id,
+        partner_name: txn.partner_name,
+        date: txn.date,
+        transaction_type: txn.transaction_type,
+        contribution_type: txn.contribution_type || 'capital',
+        amount: Number(txn.amount || 0),
+        reference_id: txn.reference_id || null,
+        reference_no: txn.reference_no || null,
+        reference_type: txn.reference_type || 'fixed_asset',
+        notes: txn.notes || null,
+        created_by: txn.created_by || null,
+        created_at: new Date().toISOString()
+      };
+      const { data, error } = await supabase.from('partner_capital_transactions').insert(payload).select().single();
+      if (error) {
+        console.error('Failed to record partner capital transaction:', error);
+        throw new Error(error.message);
+      }
+      return data as PartnerCapitalTransaction;
+    } catch (e: any) {
+      console.error('createPartnerCapitalTransaction error:', e);
+      throw e;
+    }
+  },
+
+  async deletePartnerCapitalTransactionsByReference(referenceId: string): Promise<void> {
+    if (!isSupabaseConfigured || !supabase) return;
+    try {
+      assertOnline();
+      const { error } = await supabase.from('partner_capital_transactions').delete().eq('reference_id', referenceId);
+      if (error) {
+        console.warn('deletePartnerCapitalTransactionsByReference notice:', error.message);
+      }
+    } catch (e) {
+      console.warn('deletePartnerCapitalTransactionsByReference error:', e);
+    }
+  },
+
+  // ============================================================================
+  // FIXED ASSETS & FUNDINGS
+  // ============================================================================
+  async upsertFixedAsset(asset: FixedAsset, fundings: FixedAssetFunding[]): Promise<FixedAsset> {
+    if (!isSupabaseConfigured || !supabase) return asset;
+    try {
+      assertOnline();
+      const assetId = ensureUUID(asset.id);
+      const assetPayload: any = {
+        id: assetId,
+        asset_code: asset.asset_code,
+        name: asset.name.trim(),
+        category: asset.category,
+        purchase_date: asset.purchase_date,
+        vendor: asset.vendor || null,
+        total_cost: Number(asset.total_cost || 0),
+        useful_life_years: Number(asset.useful_life_years || 0),
+        salvage_value: Number(asset.salvage_value || 0),
+        status: asset.status || 'active',
+        disposal_date: asset.disposal_date || null,
+        disposal_amount: Number(asset.disposal_amount || 0),
+        disposal_notes: asset.disposal_notes || null,
+        notes: asset.notes || null,
+        created_by: asset.created_by || null,
+        updated_at: new Date().toISOString()
+      };
+
+      const { data: savedAsset, error: assetErr } = await supabase
+        .from('fixed_assets')
+        .upsert(assetPayload)
+        .select()
+        .single();
+
+      if (assetErr) {
+        console.error('Failed to save fixed asset in Supabase:', assetErr);
+        throw new Error(assetErr.message);
+      }
+
+      // Reapply fundings
+      await supabase.from('fixed_asset_fundings').delete().eq('asset_id', assetId);
+
+      if (fundings && fundings.length > 0) {
+        const fundingRows = fundings.map(f => ({
+          id: ensureUUID(f.id),
+          asset_id: assetId,
+          funding_type: f.funding_type,
+          business_amount: Number(f.business_amount || 0),
+          payment_method: f.payment_method || null,
+          partner_id: f.partner_id || null,
+          partner_name: f.partner_name || null,
+          partner_contribution_type: f.partner_contribution_type || 'capital',
+          partner_amount: Number(f.partner_amount || 0),
+          notes: f.notes || null
+        }));
+
+        const { error: fundErr } = await supabase.from('fixed_asset_fundings').insert(fundingRows);
+        if (fundErr) {
+          console.error('Failed to insert fixed asset fundings:', fundErr);
+          throw new Error(fundErr.message);
+        }
+      }
+
+      return {
+        ...savedAsset,
+        fundings
+      } as FixedAsset;
+    } catch (e: any) {
+      console.error('upsertFixedAsset error:', e);
+      throw e;
+    }
+  },
+
+  async deleteFixedAsset(assetId: string): Promise<void> {
+    if (!isSupabaseConfigured || !supabase) return;
+    try {
+      assertOnline();
+      await supabase.from('fixed_asset_fundings').delete().eq('asset_id', assetId);
+      const { error } = await supabase.from('fixed_assets').delete().eq('id', assetId);
+      if (error) {
+        console.error('Failed to delete fixed asset:', error);
+        throw new Error(error.message);
+      }
+    } catch (e: any) {
+      console.error('deleteFixedAsset error:', e);
+      throw e;
+    }
+  },
+
+  async archiveOrDisposeFixedAsset(
+    assetId: string, 
+    disposalData: { 
+      status: 'disposed' | 'archived'; 
+      disposal_date?: string; 
+      disposal_amount?: number; 
+      disposal_notes?: string; 
+    }
+  ): Promise<void> {
+    if (!isSupabaseConfigured || !supabase) return;
+    try {
+      assertOnline();
+      const { error } = await supabase.from('fixed_assets').update({
+        status: disposalData.status,
+        disposal_date: disposalData.disposal_date || new Date().toISOString().split('T')[0],
+        disposal_amount: Number(disposalData.disposal_amount || 0),
+        disposal_notes: disposalData.disposal_notes || null,
+        updated_at: new Date().toISOString()
+      }).eq('id', assetId);
+
+      if (error) {
+        console.error('Failed to archive/dispose fixed asset:', error);
+        throw new Error(error.message);
+      }
+    } catch (e: any) {
+      console.error('archiveOrDisposeFixedAsset error:', e);
+      throw e;
     }
   }
 };

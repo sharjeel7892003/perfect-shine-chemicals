@@ -40,7 +40,8 @@ export const PaymentsModule: React.FC = () => {
     recordPayment,
     recordCapitalInjection,
     recordOwnerWithdrawal,
-    recordCustomerAdvance 
+    recordCustomerAdvance,
+    partners = []
   } = useApp();
   const { isOwner, canManagePurchases } = useAuth();
 
@@ -78,6 +79,7 @@ export const PaymentsModule: React.FC = () => {
   const [capitalDate, setCapitalDate] = useState<string>(getTodayDateString());
   const [capitalAmount, setCapitalAmount] = useState<number>(0);
   const [capitalMethod, setCapitalMethod] = useState<PaymentMethod>('bank');
+  const [capitalPartnerId, setCapitalPartnerId] = useState<string>('');
   const [capitalRef, setCapitalRef] = useState('');
   const [capitalNotes, setCapitalNotes] = useState('');
 
@@ -85,6 +87,7 @@ export const PaymentsModule: React.FC = () => {
   const [withdrawalDate, setWithdrawalDate] = useState<string>(getTodayDateString());
   const [withdrawalAmount, setWithdrawalAmount] = useState<number>(0);
   const [withdrawalMethod, setWithdrawalMethod] = useState<PaymentMethod>('bank');
+  const [withdrawalPartnerId, setWithdrawalPartnerId] = useState<string>('');
   const [withdrawalRef, setWithdrawalRef] = useState('');
   const [withdrawalNotes, setWithdrawalNotes] = useState('');
 
@@ -262,12 +265,17 @@ export const PaymentsModule: React.FC = () => {
       return;
     }
 
+    const selectedPartner = (capitalPartnerId && partners.find(p => p.id === capitalPartnerId)) || partners[0];
+    const partnerName = selectedPartner?.name || 'Owner';
+
     recordCapitalInjection({
       amount: capitalAmount,
       payment_method: capitalMethod,
       transaction_ref: capitalRef,
-      notes: capitalNotes || 'Owner personal capital injection into business',
+      notes: capitalNotes || `Capital injection by ${partnerName}`,
       date: formatSelectedDateToIso(capitalDate),
+      depositor_name: partnerName,
+      partner_id: selectedPartner?.id,
     });
 
     setIsCapitalModalOpen(false);
@@ -275,6 +283,7 @@ export const PaymentsModule: React.FC = () => {
     setCapitalRef('');
     setCapitalNotes('');
     setCapitalDate(getTodayDateString());
+    setCapitalPartnerId('');
   };
 
   // Submit Owner Withdrawal
@@ -285,12 +294,17 @@ export const PaymentsModule: React.FC = () => {
       return;
     }
 
+    const selectedPartner = (withdrawalPartnerId && partners.find(p => p.id === withdrawalPartnerId)) || partners[0];
+    const partnerName = selectedPartner?.name || 'Owner';
+
     recordOwnerWithdrawal({
       amount: withdrawalAmount,
       payment_method: withdrawalMethod,
       transaction_ref: withdrawalRef,
-      notes: withdrawalNotes || 'Owner drawings / withdrawal for personal use',
+      notes: withdrawalNotes || `Owner drawings / withdrawal by ${partnerName}`,
       date: formatSelectedDateToIso(withdrawalDate),
+      withdrawn_by: partnerName,
+      partner_id: selectedPartner?.id,
     });
 
     setIsWithdrawalModalOpen(false);
@@ -298,6 +312,7 @@ export const PaymentsModule: React.FC = () => {
     setWithdrawalRef('');
     setWithdrawalNotes('');
     setWithdrawalDate(getTodayDateString());
+    setWithdrawalPartnerId('');
   };
 
   // Submit Customer Advance
@@ -341,13 +356,14 @@ export const PaymentsModule: React.FC = () => {
     const matchesType = 
       typeFilter === 'all' || 
       (typeFilter === 'inflow' && (p.related_to === 'sale' || p.related_to === 'customer_balance' || p.related_to === 'capital_injection' || p.related_to === 'customer_advance')) ||
-      (typeFilter === 'outflow' && (p.related_to === 'purchase' || p.related_to === 'supplier_balance' || p.related_to === 'expense' || p.related_to === 'owner_withdrawal' || p.related_to === 'sales_return_refund' || p.related_to === 'transport' || p.related_to === 'sales_commission')) ||
+      (typeFilter === 'outflow' && (p.related_to === 'purchase' || p.related_to === 'supplier_balance' || p.related_to === 'expense' || p.related_to === 'owner_withdrawal' || p.related_to === 'sales_return_refund' || p.related_to === 'transport' || p.related_to === 'sales_commission' || p.related_to === 'fixed_asset')) ||
       (typeFilter === 'capital' && p.related_to === 'capital_injection') ||
       (typeFilter === 'drawings' && p.related_to === 'owner_withdrawal') ||
       (typeFilter === 'advance' && p.related_to === 'customer_advance') ||
       (typeFilter === 'expense' && p.related_to === 'expense') ||
       (typeFilter === 'transport' && p.related_to === 'transport') ||
-      (typeFilter === 'commission' && p.related_to === 'sales_commission');
+      (typeFilter === 'commission' && p.related_to === 'sales_commission') ||
+      (typeFilter === 'fixed_asset' && p.related_to === 'fixed_asset');
 
     return matchesSearch && matchesChannel && matchesType;
   });
@@ -825,7 +841,8 @@ export const PaymentsModule: React.FC = () => {
                 >
                   <option value="all">All Inflow & Outflow</option>
                   <option value="inflow">All Inflow (Sales, Capital, Advances)</option>
-                  <option value="outflow">All Outflow (Suppliers, Expenses, Drawings, Freight)</option>
+                  <option value="outflow">All Outflow (Suppliers, Assets, Expenses, Drawings, Freight)</option>
+                  <option value="fixed_asset">Fixed Asset Purchases (-)</option>
                   <option value="capital">Owner Capital Injections (+)</option>
                   <option value="drawings">Owner Withdrawals (-)</option>
                   <option value="advance">Customer Advances (+)</option>
@@ -877,13 +894,16 @@ export const PaymentsModule: React.FC = () => {
                       const isReturnRefund = p.related_to === 'sales_return_refund';
                       const isTransport = p.related_to === 'transport';
                       const isCommission = p.related_to === 'sales_commission';
+                      const isFixedAsset = p.related_to === 'fixed_asset';
                       const isInflow = p.related_to === 'sale' || p.related_to === 'customer_balance' || isCapital || isAdvance;
                       const isExpense = p.related_to === 'expense';
 
                       const partyName = isCapital
-                        ? 'Owner Equity (Capital Injection)'
+                        ? `Partner Capital: ${p.created_by || 'Partner'}`
                         : isWithdrawal
-                        ? 'Owner Drawings (Personal Withdrawal)'
+                        ? `Partner Drawings: ${p.created_by || 'Partner'}`
+                        : isFixedAsset
+                        ? `Fixed Asset: ${p.notes?.replace('Fixed Asset Purchase: ', '') || p.reference_no || 'Company Equipment'}`
                         : isAdvance
                         ? `${p.customer_name || 'Customer'} (Advance Deposit)`
                         : isReturnRefund
@@ -900,6 +920,8 @@ export const PaymentsModule: React.FC = () => {
                         ? 'blue' 
                         : isWithdrawal 
                         ? 'amber' 
+                        : isFixedAsset
+                        ? 'cyan'
                         : isAdvance 
                         ? 'blue' 
                         : isReturnRefund
@@ -916,6 +938,8 @@ export const PaymentsModule: React.FC = () => {
                         ? 'Capital (+)' 
                         : isWithdrawal 
                         ? 'Drawings (-)' 
+                        : isFixedAsset
+                        ? 'Fixed Asset (-)'
                         : isAdvance 
                         ? 'Advance (+)' 
                         : isReturnRefund
@@ -1529,7 +1553,7 @@ export const PaymentsModule: React.FC = () => {
         subtitle="Deposit owner personal funds into business bank account or cash register to boost liquidity"
       >
         <form onSubmit={handleSubmitCapital} className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1 flex items-center gap-1.5">
                 <Calendar className="w-3.5 h-3.5 text-indigo-400" />
@@ -1542,6 +1566,24 @@ export const PaymentsModule: React.FC = () => {
                 onChange={(e) => setCapitalDate(e.target.value)}
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
               />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Contributing Partner *
+              </label>
+              <select
+                value={capitalPartnerId}
+                onChange={(e) => setCapitalPartnerId(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 font-semibold"
+              >
+                <option value="">-- Select Partner --</option>
+                {partners.map(partner => (
+                  <option key={partner.id} value={partner.id}>
+                    {partner.name}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div>
@@ -1642,7 +1684,7 @@ export const PaymentsModule: React.FC = () => {
         subtitle="Withdraw money from business funds for owner personal use"
       >
         <form onSubmit={handleSubmitWithdrawal} className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1 flex items-center gap-1.5">
                 <Calendar className="w-3.5 h-3.5 text-amber-400" />
@@ -1655,6 +1697,24 @@ export const PaymentsModule: React.FC = () => {
                 onChange={(e) => setWithdrawalDate(e.target.value)}
                 className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500"
               />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">
+                Withdrawing Partner *
+              </label>
+              <select
+                value={withdrawalPartnerId}
+                onChange={(e) => setWithdrawalPartnerId(e.target.value)}
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500 font-semibold"
+              >
+                <option value="">-- Select Partner --</option>
+                {partners.map(partner => (
+                  <option key={partner.id} value={partner.id}>
+                    {partner.name}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div>

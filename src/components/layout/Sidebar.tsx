@@ -17,7 +17,8 @@ import {
   Factory,
   DollarSign,
   Boxes,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Landmark
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useApp } from '../../context/AppContext';
@@ -37,6 +38,7 @@ export type ActiveTab =
   | 'suppliers' 
   | 'payments' 
   | 'expenses'
+  | 'fixed_assets'
   | 'reports' 
   | 'users';
 
@@ -92,6 +94,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
     { id: 'suppliers' as ActiveTab, label: 'Suppliers & Vendors', icon: Building2, visible: canManagePurchases },
     { id: 'payments' as ActiveTab, label: 'Payments & Cashbook', icon: CreditCard, visible: canManagePurchases },
     { id: 'expenses' as ActiveTab, label: 'Expenses & Overheads', icon: DollarSign, visible: canManageExpenses || canViewReports },
+    { id: 'fixed_assets' as ActiveTab, label: 'Fixed Assets & Capital', icon: Landmark, visible: isOwner },
     { id: 'reports' as ActiveTab, label: 'Financial & Reports', icon: BarChart3, visible: canViewReports },
     { id: 'users' as ActiveTab, label: 'Staff & Roles', icon: ShieldCheck, visible: canManageUsers },
   ];
