@@ -53,6 +53,8 @@ import {
   calculateMonthlyDepreciation,
   calculatePartnerCapitalLedgers
 } from '../../utils/assetCalculations';
+import { printElement } from '../../utils/printHelper';
+import { FixedAssetsPrintModal } from '../fixedAssets/FixedAssetsPrintModal';
 
 export type ReportType = 'sales' | 'purchases' | 'rm_purchases' | 'profit' | 'commission' | 'production' | 'volume' | 'receivables' | 'payables' | 'valuation' | 'assets' | 'partner_capital';
 
@@ -81,11 +83,13 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
     partnerCapitalTransactions = [],
     totalFixedAssetsCost = 0,
     totalFixedAssetsBookValue = 0,
-    totalFixedAssetsDepreciation = 0
+    totalFixedAssetsDepreciation = 0,
+    isLoadingCloudData
   } = useApp();
-  const { isOwner, allUsers } = useAuth();
+  const { isOwner, allUsers, currentUser } = useAuth();
 
   const [activeReport, setActiveReport] = useState<ReportType>(initialReport);
+  const [isFixedAssetsPrintModalOpen, setIsFixedAssetsPrintModalOpen] = useState<boolean>(false);
 
   // Filter States
   const [startDate, setStartDate] = useState<string>('');
@@ -853,11 +857,26 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
           </button>
 
           <button
-            onClick={() => window.print()}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors w-fit"
+            onClick={async () => {
+              if (activeReport === 'assets' || activeReport === 'partner_capital') {
+                setIsFixedAssetsPrintModalOpen(true);
+                return;
+              }
+              const dateLabel = `${startDate || 'all'}_to_${endDate || 'today'}`;
+              const docTitle = `PSC_${getReportTitle(activeReport).replace(/[^a-zA-Z0-9]/g, '_')}_${dateLabel}`;
+              const landscapeReports: ReportType[] = ['rm_purchases', 'production', 'volume', 'sales', 'purchases'];
+              await printElement('printable-report', docTitle, {
+                orientation: landscapeReports.includes(activeReport) ? 'landscape' : 'portrait'
+              });
+            }}
+            disabled={isLoadingCloudData}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-slate-200 text-xs font-semibold border border-slate-700 transition-colors w-fit ${
+              isLoadingCloudData ? 'bg-slate-800/50 opacity-60 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 active:scale-95'
+            }`}
+            title="Print report preview & PDF"
           >
             <Printer className="w-4 h-4 text-emerald-400" />
-            <span>Print Report</span>
+            <span>{isLoadingCloudData ? 'Loading...' : 'Print Report'}</span>
           </button>
         </div>
       </div>
@@ -2242,6 +2261,29 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
         </div>
       )}
       </div>
+
+      {/* Fixed Assets & Partner Capital Print Modal */}
+      {isFixedAssetsPrintModalOpen && (
+        <FixedAssetsPrintModal
+          isOpen={isFixedAssetsPrintModalOpen}
+          onClose={() => setIsFixedAssetsPrintModalOpen(false)}
+          reportType={activeReport === 'assets' ? 'asset_register' : 'partner_capital_summary'}
+          isLoading={isLoadingCloudData}
+          assets={fixedAssets}
+          totalAssetsCost={totalFixedAssetsCost}
+          totalAccumulatedDepreciation={totalFixedAssetsDepreciation}
+          totalBookValue={totalFixedAssetsBookValue}
+          activeFilterSummary={
+            startDate || endDate 
+              ? `Period: ${startDate || 'Beginning'} to ${endDate || 'Present'}` 
+              : 'Complete Company Ledger (All Recorded Assets)'
+          }
+          partnerSummaries={calculatePartnerCapitalLedgers(partners, partnerCapitalTransactions, payments).summaries}
+          totalEquityCapital={calculatePartnerCapitalLedgers(partners, partnerCapitalTransactions, payments).totalEquityCapital}
+          totalPartnerLoans={calculatePartnerCapitalLedgers(partners, partnerCapitalTransactions, payments).totalPartnerLoans}
+          generatedByName={currentUser?.name || 'Administrator'}
+        />
+      )}
     </div>
   );
 };

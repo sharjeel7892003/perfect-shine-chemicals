@@ -41,6 +41,7 @@ import { AssetModal } from './AssetModal';
 import { AssetDisposalModal } from './AssetDisposalModal';
 import { AssetDetailModal } from './AssetDetailModal';
 import { PartnerModal } from './PartnerModal';
+import { FixedAssetsPrintModal } from './FixedAssetsPrintModal';
 
 export const FixedAssetsModule: React.FC = () => {
   const { 
@@ -48,6 +49,7 @@ export const FixedAssetsModule: React.FC = () => {
     partners, 
     partnerCapitalTransactions, 
     payments,
+    isLoadingCloudData,
     addFixedAsset, 
     updateFixedAsset, 
     deleteFixedAsset, 
@@ -79,6 +81,10 @@ export const FixedAssetsModule: React.FC = () => {
 
   const [isPartnerModalOpen, setIsPartnerModalOpen] = useState(false);
   const [editingPartner, setEditingPartner] = useState<Partner | null>(null);
+
+  // Print Modal States
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [printReportType, setPrintReportType] = useState<'asset_register' | 'partner_capital_summary' | 'partner_ledger'>('asset_register');
 
   // Selected Partner for Capital Ledger
   const [selectedLedgerPartnerId, setSelectedLedgerPartnerId] = useState<string>(partners[0]?.id || '');
@@ -327,17 +333,18 @@ export const FixedAssetsModule: React.FC = () => {
   };
 
   const handlePrint = () => {
-    window.print();
+    if (activeTab === 'register') {
+      setPrintReportType('asset_register');
+    } else if (activeTab === 'capital_ledger') {
+      setPrintReportType('partner_capital_summary');
+    } else {
+      setPrintReportType('partner_capital_summary');
+    }
+    setIsPrintModalOpen(true);
   };
 
   return (
     <div className="space-y-6 pb-12">
-      {/* Printable Header */}
-      <div className="hidden print:block text-slate-900 border-b pb-4 mb-4">
-        <h1 className="text-xl font-bold uppercase tracking-tight">Perfect Shine Chemicals</h1>
-        <p className="text-xs">Lahore Manufacturing Plant • Fixed Asset Register & Partner Capital Report</p>
-        <p className="text-[10px] text-slate-600 mt-1">Generated: {formatDateTime(new Date().toISOString())} by {currentUser.name}</p>
-      </div>
 
       {/* Top Header Banner */}
       <div className="p-6 rounded-3xl bg-gradient-to-r from-emerald-950/80 via-slate-900 to-slate-900 border border-emerald-500/20 flex flex-col md:flex-row md:items-center justify-between gap-4 print:hidden">
@@ -386,10 +393,24 @@ export const FixedAssetsModule: React.FC = () => {
 
           <button
             onClick={handlePrint}
-            className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs border border-slate-700 transition-all"
+            disabled={isLoadingCloudData}
+            className={`flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-white font-semibold text-xs border border-slate-700 transition-all ${
+              isLoadingCloudData
+                ? 'bg-slate-800/50 opacity-60 cursor-not-allowed'
+                : 'bg-slate-800 hover:bg-slate-700 active:scale-95'
+            }`}
+            title={isLoadingCloudData ? 'Loading data from cloud...' : 'Open print preview & PDF'}
           >
-            <Printer className="w-4 h-4" />
-            <span>Print View</span>
+            <Printer className="w-4 h-4 text-emerald-400" />
+            <span>
+              {isLoadingCloudData
+                ? 'Loading Data...'
+                : activeTab === 'register'
+                ? 'Print Asset Register'
+                : activeTab === 'capital_ledger'
+                ? 'Print Capital Report'
+                : 'Print Partners Report'}
+            </span>
           </button>
         </div>
       </div>
@@ -504,13 +525,32 @@ export const FixedAssetsModule: React.FC = () => {
               </select>
             </div>
 
-            <button
-              onClick={exportAssetRegisterCSV}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs border border-slate-700 transition-colors"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>Export CSV</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={exportAssetRegisterCSV}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs border border-slate-700 transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Export CSV</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setPrintReportType('asset_register');
+                  setIsPrintModalOpen(true);
+                }}
+                disabled={isLoadingCloudData}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${
+                  isLoadingCloudData
+                    ? 'bg-slate-800/50 text-slate-500 border-slate-800 cursor-not-allowed'
+                    : 'bg-slate-800 hover:bg-slate-700 text-emerald-400 border-slate-700 active:scale-95'
+                }`}
+                title="Print filtered asset register preview & PDF"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Print Register ({filteredAssets.length})</span>
+              </button>
+            </div>
           </div>
 
           {/* Assets Table */}
@@ -704,10 +744,24 @@ export const FixedAssetsModule: React.FC = () => {
 
           {/* Partner Selection Cards with Share % */}
           <div className="space-y-3">
-            <span className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-              <Users className="w-4 h-4 text-emerald-400" />
-              <span>Partner Capital Accounts & Equity Shares</span>
-            </span>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                <Users className="w-4 h-4 text-emerald-400" />
+                <span>Partner Capital Accounts & Equity Shares</span>
+              </span>
+
+              <button
+                onClick={() => {
+                  setPrintReportType('partner_capital_summary');
+                  setIsPrintModalOpen(true);
+                }}
+                disabled={isLoadingCloudData}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition-all active:scale-95"
+              >
+                <Printer className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Print Capital Summary</span>
+              </button>
+            </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
               {partnerSummaries.map(summary => {
@@ -804,6 +858,19 @@ export const FixedAssetsModule: React.FC = () => {
                   >
                     <Download className="w-3.5 h-3.5" />
                     <span>Export Statement CSV</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setPrintReportType('partner_ledger');
+                      setIsPrintModalOpen(true);
+                    }}
+                    disabled={isLoadingCloudData || !currentPartnerSummary}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md shadow-indigo-600/20 transition-all active:scale-95"
+                    title="Print formal partner capital account statement"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Print Partner Statement</span>
                   </button>
                 </div>
               </div>
@@ -1013,6 +1080,37 @@ export const FixedAssetsModule: React.FC = () => {
           }}
           onSave={handleSavePartner}
           initialPartner={editingPartner}
+        />
+      )}
+
+      {/* Fixed Assets & Partner Capital Multi-Page Print Modal */}
+      {isPrintModalOpen && (
+        <FixedAssetsPrintModal
+          isOpen={isPrintModalOpen}
+          onClose={() => setIsPrintModalOpen(false)}
+          reportType={printReportType}
+          isLoading={isLoadingCloudData}
+          assets={filteredAssets}
+          totalAssetsCost={filteredAssets.reduce((sum, a) => sum + Number(a.total_cost || 0), 0)}
+          totalAccumulatedDepreciation={filteredAssets.reduce((sum, a) => sum + calculateAccumulatedDepreciation(a), 0)}
+          totalBookValue={filteredAssets.reduce((sum, a) => sum + calculateCurrentBookValue(a), 0)}
+          activeFilterSummary={
+            printReportType === 'asset_register'
+              ? [
+                  searchTerm ? `Search: "${searchTerm}"` : null,
+                  categoryFilter !== 'all' ? `Category: ${categoryFilter}` : null,
+                  statusFilter !== 'all' ? `Status: ${statusFilter}` : null
+                ].filter(Boolean).join(' • ') || 'All Assets (No Filters)'
+              : printReportType === 'partner_ledger'
+              ? `Partner: ${currentPartnerSummary?.partnerName || 'Selected'} • Full Historical Ledger`
+              : 'All Partners • Full Contributed Equity & Drawings Summary'
+          }
+          partnerSummaries={partnerSummaries}
+          totalEquityCapital={totalEquityCapital}
+          totalPartnerLoans={totalPartnerLoans}
+          selectedPartner={currentPartnerSummary}
+          partnerLedgerRows={getPartnerLedgerRows()}
+          generatedByName={currentUser.name}
         />
       )}
     </div>
