@@ -66,31 +66,15 @@ CREATE TABLE IF NOT EXISTS public.commission_payments (
 );
 
 -- 5. ENSURE COLUMN AND FOREIGN KEY ON public.sales
-DO $$
-BEGIN
-  -- Add salesperson_id column if it doesn't exist
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns 
-    WHERE table_schema = 'public' AND table_name = 'sales' AND column_name = 'salesperson_id'
-  ) THEN
-    ALTER TABLE public.sales ADD COLUMN salesperson_id UUID;
-  END IF;
+-- Drop legacy foreign key constraint pointing to profiles table
+ALTER TABLE public.sales DROP CONSTRAINT IF EXISTS sales_salesperson_id_fkey;
+ALTER TABLE public.sales DROP CONSTRAINT IF EXISTS fk_sales_salesperson;
 
-  -- Add foreign key constraint to salespersons(id)
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.table_constraints 
-    WHERE constraint_name = 'fk_sales_salesperson' AND table_name = 'sales'
-  ) THEN
-    ALTER TABLE public.sales 
-    ADD CONSTRAINT fk_sales_salesperson 
-    FOREIGN KEY (salesperson_id) 
-    REFERENCES public.salespersons(id) 
-    ON DELETE SET NULL;
-  END IF;
-EXCEPTION
-  WHEN OTHERS THEN
-    RAISE NOTICE 'Constraint notice: %', SQLERRM;
-END $$;
+ALTER TABLE public.sales 
+ADD CONSTRAINT fk_sales_salesperson 
+FOREIGN KEY (salesperson_id) 
+REFERENCES public.salespersons(id) 
+ON DELETE SET NULL;
 
 -- 6. ENABLE ROW LEVEL SECURITY & POLICIES
 ALTER TABLE public.salespersons ENABLE ROW LEVEL SECURITY;
