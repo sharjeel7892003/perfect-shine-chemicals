@@ -8,12 +8,12 @@ export function generateId(): string {
   });
 }
 
-export function isValidUUID(str?: string): boolean {
+export function isValidUUID(str?: string | null): boolean {
   if (!str) return false;
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
 }
 
-export function ensureUUID(id?: string): string {
+export function ensureUUID(id?: string | null): string {
   if (id && isValidUUID(id)) return id;
   return generateId();
 }

@@ -353,20 +353,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [recurringExpenses, setRecurringExpenses] = useState<RecurringExpense[]>([]);
   const [deletionLogs, setDeletionLogs] = useState<DeletionAuditLog[]>([]);
 
-  // Sales Commission States
-  const DEFAULT_INITIAL_SALESPERSONS: Salesperson[] = [
-    { id: 'sp_sharjeel_initial', name: 'Sharjeel', commission_rate: 10, is_active: true },
-    { id: 'sp_aqeel_initial', name: 'Aqeel', commission_rate: 10, is_active: true },
-    { id: 'sp_ilyas_initial', name: 'Ilyas', commission_rate: 10, is_active: true },
-  ];
+  // Sales Commission States (Loaded strictly from Supabase — no hardcoded seed IDs)
   const [salespersons, setSalespersons] = useState<Salesperson[]>(() => {
     if (typeof window !== 'undefined') {
       try {
         const cached = localStorage.getItem('psc_local_salespersons');
-        if (cached) return JSON.parse(cached);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed)) {
+            // Strictly retain only valid UUID records; purge legacy seed IDs (sp_*_initial)
+            return parsed.filter(s => isValidUUID(s.id));
+          }
+        }
       } catch {}
     }
-    return DEFAULT_INITIAL_SALESPERSONS;
+    return [];
   });
   const [monthlyCommissionClosures, setMonthlyCommissionClosures] = useState<MonthlyCommissionClosure[]>(() => {
     if (typeof window !== 'undefined') {
@@ -536,13 +537,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }));
         setQuotations(effectiveQuotations);
 
-        // Sales Commission Data Sync
-        const loadedSalespersons = (cloudData as any).salespersons || [];
-        const effectiveSalespersons = loadedSalespersons.length > 0 ? loadedSalespersons : DEFAULT_INITIAL_SALESPERSONS;
-        setSalespersons(effectiveSalespersons);
+        // Sales Commission Data Sync (load strictly from Supabase with valid UUIDs)
+        const loadedSalespersons = ((cloudData as any).salespersons || []).filter((s: any) => isValidUUID(s.id));
+        setSalespersons(loadedSalespersons);
         if (typeof window !== 'undefined') {
           try {
-            localStorage.setItem('psc_local_salespersons', JSON.stringify(effectiveSalespersons));
+            localStorage.setItem('psc_local_salespersons', JSON.stringify(loadedSalespersons));
           } catch {}
         }
 

@@ -919,7 +919,7 @@ export const supabaseService = {
       amount_paid: Number(sale.amount_paid || 0),
       payment_status: sale.payment_status || 'unpaid',
       payment_method: sale.payment_method || 'cash',
-      salesperson_id: sale.salesperson_id && sale.salesperson_id !== 'none' ? sale.salesperson_id : null,
+      salesperson_id: isValidUUID(sale.salesperson_id) ? sale.salesperson_id : null,
       notes: notesPayload
     };
 
@@ -1821,7 +1821,7 @@ export const supabaseService = {
     try {
       assertOnline();
       const payload = {
-        id: salesperson.id,
+        id: ensureUUID(salesperson.id),
         name: salesperson.name,
         commission_rate: Number(salesperson.commission_rate ?? 10.0),
         is_active: Boolean(salesperson.is_active),
@@ -1935,7 +1935,7 @@ export const supabaseService = {
     try {
       assertOnline();
       await supabase.from('sales').update({
-        salesperson_id: salespersonId && salespersonId !== 'none' ? salespersonId : null
+        salesperson_id: isValidUUID(salespersonId) ? salespersonId : null
       }).eq('id', saleId);
     } catch (e) {
       console.warn('Failed to update salesperson on sale:', e);

@@ -34,6 +34,7 @@ import { InvoiceModal } from './InvoiceModal';
 import { CreditNoteModal } from './CreditNoteModal';
 import { ProcessReturnModal } from './ProcessReturnModal';
 import { InvoiceProfitModal } from './InvoiceProfitModal';
+import { isValidUUID } from '../../utils/uuid';
 
 export const SalesModule: React.FC = () => {
   const { 
@@ -702,7 +703,7 @@ export const SalesModule: React.FC = () => {
         advance_received_date: advanceDate,
         payment_status: paymentStatus,
         payment_method: finalPaymentMethod,
-        salesperson_id: spObj ? spObj.id : undefined,
+        salesperson_id: spObj && isValidUUID(spObj.id) ? spObj.id : undefined,
         salesperson_name: spObj ? spObj.name : 'None',
         notes: salesNotes,
         invoice_type: isPLSale ? 'private_label' : 'standard',
@@ -2308,7 +2309,7 @@ export const SalesModule: React.FC = () => {
                   try {
                     await updateSaleSalesperson(
                       editingSalespersonSale.id, 
-                      newSalespersonId === 'none' ? null : newSalespersonId
+                      newSalespersonId === 'none' || !isValidUUID(newSalespersonId) ? null : newSalespersonId
                     );
                     setEditingSalespersonSale(null);
                   } catch (err: any) {
