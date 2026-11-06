@@ -209,26 +209,26 @@ export const RawMaterialPurchaseReportView: React.FC<RawMaterialPurchaseReportVi
 
     const purchaseCount = filteredRows.length;
     const totalQuantity = filteredRows.reduce((sum, r) => sum + r.quantity, 0);
-    const totalSpent = filteredRows.reduce((sum, r) => sum + r.subtotal, 0);
+    const totalSpent = filteredRows.reduce((sum, r) => sum + (r.subtotal + (r.allocatedFreight || 0)), 0);
 
-    // Weighted average price per unit
+    // Weighted average landed price per unit
     const weightedAveragePrice = totalQuantity > 0 ? Number((totalSpent / totalQuantity).toFixed(2)) : 0;
 
-    // Minimum and Maximum prices paid with vendor and date
+    // Minimum and Maximum landed prices paid with vendor and date
     let minRecord: ItemizedPurchaseRow | null = null;
     let maxRecord: ItemizedPurchaseRow | null = null;
 
     if (filteredRows.length > 0) {
-      minRecord = filteredRows.reduce((min, cur) => cur.unitCost < min.unitCost ? cur : min, filteredRows[0]);
-      maxRecord = filteredRows.reduce((max, cur) => cur.unitCost > max.unitCost ? cur : max, filteredRows[0]);
+      minRecord = filteredRows.reduce((min, cur) => cur.landedCost < min.landedCost ? cur : min, filteredRows[0]);
+      maxRecord = filteredRows.reduce((max, cur) => cur.landedCost > max.landedCost ? cur : max, filteredRows[0]);
     }
 
     const currentCost = activeRM ? Number(activeRM.cost_per_unit || 0) : 0;
     const commonUnit = activeRM ? activeRM.unit : (filteredRows[0]?.unit || 'kg');
 
-    // Price spread / variance
-    const minPrice = minRecord ? minRecord.unitCost : 0;
-    const maxPrice = maxRecord ? maxRecord.unitCost : 0;
+    // Price spread / variance (based on landed cost per unit)
+    const minPrice = minRecord ? minRecord.landedCost : 0;
+    const maxPrice = maxRecord ? maxRecord.landedCost : 0;
     const priceSpread = maxPrice - minPrice;
     const priceSpreadPercent = minPrice > 0 ? Number(((priceSpread / minPrice) * 100).toFixed(1)) : 0;
 
@@ -281,7 +281,8 @@ export const RawMaterialPurchaseReportView: React.FC<RawMaterialPurchaseReportVi
       }
 
       const suppData = map.get(suppKey)!;
-      suppData.totalSpent += row.subtotal;
+      const landedRowTotal = row.subtotal + (row.allocatedFreight || 0);
+      suppData.totalSpent += landedRowTotal;
       if (new Date(row.date) > new Date(suppData.lastPurchaseDate)) {
         suppData.lastPurchaseDate = row.date;
       }
@@ -294,18 +295,18 @@ export const RawMaterialPurchaseReportView: React.FC<RawMaterialPurchaseReportVi
           unit: row.unit,
           totalQty: 0,
           totalCost: 0,
-          minCost: row.unitCost,
-          maxCost: row.unitCost,
+          minCost: row.landedCost,
+          maxCost: row.landedCost,
           purchaseCount: 0,
         });
       }
 
       const matData = suppData.materialMap.get(matKey)!;
       matData.totalQty += row.quantity;
-      matData.totalCost += row.subtotal;
+      matData.totalCost += landedRowTotal;
       matData.purchaseCount += 1;
-      if (row.unitCost < matData.minCost) matData.minCost = row.unitCost;
-      if (row.unitCost > matData.maxCost) matData.maxCost = row.unitCost;
+      if (row.landedCost < matData.minCost) matData.minCost = row.landedCost;
+      if (row.landedCost > matData.maxCost) matData.maxCost = row.landedCost;
     });
 
     // Count distinct POs per supplier
@@ -349,28 +350,28 @@ export const RawMaterialPurchaseReportView: React.FC<RawMaterialPurchaseReportVi
           purchaseCount: 0,
           totalQty: 0,
           totalSpent: 0,
-          minPrice: row.unitCost,
+          minPrice: row.landedCost,
           minSupplier: row.supplierName,
           minDate: row.date,
-          maxPrice: row.unitCost,
+          maxPrice: row.landedCost,
           maxSupplier: row.supplierName,
           maxDate: row.date,
-          currentRate: matchingRM ? Number(matchingRM.cost_per_unit || 0) : row.unitCost,
+          currentRate: matchingRM ? Number(matchingRM.cost_per_unit || 0) : row.landedCost,
         });
       }
 
       const item = map.get(key)!;
       item.purchaseCount += 1;
       item.totalQty += row.quantity;
-      item.totalSpent += row.subtotal;
+      item.totalSpent += row.subtotal + (row.allocatedFreight || 0);
 
-      if (row.unitCost < item.minPrice) {
-        item.minPrice = row.unitCost;
+      if (row.landedCost < item.minPrice) {
+        item.minPrice = row.landedCost;
         item.minSupplier = row.supplierName;
         item.minDate = row.date;
       }
-      if (row.unitCost > item.maxPrice) {
-        item.maxPrice = row.unitCost;
+      if (row.landedCost > item.maxPrice) {
+        item.maxPrice = row.landedCost;
         item.maxSupplier = row.supplierName;
         item.maxDate = row.date;
       }

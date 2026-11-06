@@ -344,6 +344,10 @@ export interface Purchase {
   payment_method: PaymentMethod;
   notes?: string;
   freight_cost?: number; // Freight or additional transport cost for single purchase
+  freight_payment_status?: 'paid' | 'partial' | 'unpaid';
+  freight_payment_method?: PaymentMethod;
+  freight_amount_paid?: number;
+  freight_payment_date?: string;
   trip_id?: string; // Associated PurchaseTrip ID if created via trip
   trip_number?: string;
   created_at?: string;

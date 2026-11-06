@@ -25,7 +25,7 @@ import { PackSizesModal } from '../inventory/PackSizesModal';
 import { Modal } from '../common/Modal';
 
 export const PackingModule: React.FC = () => {
-  const { products, packingRuns, deletePackingRun, updateProductPackSizes } = useApp();
+  const { products, rawMaterials, packingRuns, deletePackingRun, updateProductPackSizes } = useApp();
   const { currentUser, isOwner } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'inventory' | 'history'>('inventory');
@@ -292,10 +292,12 @@ export const PackingModule: React.FC = () => {
                           const chemicalPortion = Number(((pack.size_in_base_unit || 1) * Number(product.cost_price || 0)).toFixed(2));
                           const packagingPortion = Number(
                             (pack.packaging_items || []).reduce((sum, item) => {
-                              return sum + (Number(item.quantity || 0) * Number(item.cost_per_unit || 0));
+                              const rm = rawMaterials.find(r => r.id === item.raw_material_id);
+                              const liveRate = rm ? Number(rm.cost_per_unit || 0) : Number(item.cost_per_unit || 0);
+                              return sum + (Number(item.quantity || 0) * liveRate);
                             }, 0).toFixed(2)
                           );
-                          const recordedTrueCost = Number((pack.true_cost || (chemicalPortion + packagingPortion)).toFixed(2));
+                          const recordedTrueCost = Number(((chemicalPortion + packagingPortion) || pack.true_cost || 0).toFixed(2));
                           const profitMargin = Math.max(0, Number((pack.selling_price - recordedTrueCost).toFixed(2)));
 
                           return (

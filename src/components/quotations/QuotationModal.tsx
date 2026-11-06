@@ -35,7 +35,7 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
   onClose,
   onSaved,
 }) => {
-  const { customers, saveQuotation, quotations, products } = useApp();
+  const { customers, saveQuotation, quotations, products, formulations, rawMaterials } = useApp();
 
   // Quotation Type: 'private_label' vs 'standard_unit_price'
   const [quotationType, setQuotationType] = useState<QuotationType>('private_label');
@@ -258,6 +258,25 @@ export const QuotationModal: React.FC<QuotationModalProps> = ({
     setItems(prev => {
       const updated = [...prev];
       const item = { ...updated[index], [field]: value };
+
+      // When a product is selected and product_cost is 0, auto-fill from active formulation landed cost or product.cost_price
+      if (field === 'product_name' && value && !Number(item.product_cost || 0)) {
+        const matchedProd = products.find(p => p.name.trim().toLowerCase() === String(value).trim().toLowerCase());
+        if (matchedProd) {
+          const activeForm = formulations.find(f => f.product_id === matchedProd.id && !f.is_archived);
+          const yieldQty = Number(activeForm?.yield_quantity || 1);
+          if (activeForm && yieldQty > 0 && activeForm.items?.length > 0) {
+            const batchLandedCost = activeForm.items.reduce((sum, fi) => {
+              const rm = rawMaterials.find(r => r.id === fi.raw_material_id);
+              const rate = rm ? Number(rm.cost_per_unit || 0) : Number(fi.cost_per_unit || 0);
+              return sum + Number(fi.quantity || 0) * rate;
+            }, 0);
+            item.product_cost = Number((batchLandedCost / yieldQty).toFixed(2));
+          } else if (Number(matchedProd.cost_price || 0) > 0) {
+            item.product_cost = Number(Number(matchedProd.cost_price).toFixed(2));
+          }
+        }
+      }
 
       // Auto-sum the cost breakdown items into total_cost_per_unit
       const pCost = Number(item.product_cost || 0);

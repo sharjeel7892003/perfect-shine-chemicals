@@ -847,7 +847,7 @@ export const PaymentsModule: React.FC = () => {
                   <option value="drawings">Owner Withdrawals (-)</option>
                   <option value="advance">Customer Advances (+)</option>
                   <option value="expense">Operating Overheads (-)</option>
-                  <option value="transport">Purchase Trip Freight / Transport (-)</option>
+                  <option value="transport">Purchase & Trip Freight / Transport (-)</option>
                   <option value="commission">Sales Commission (-)</option>
                 </select>
 
@@ -913,7 +913,7 @@ export const PaymentsModule: React.FC = () => {
                         : isExpense 
                         ? `Overhead: ${p.reference_no || 'Expense'}` 
                         : isTransport
-                        ? `Transporter / Freight (${p.reference_no || 'Trip Transport'})`
+                        ? `${p.reference_no && /^Freight\s*-/i.test(p.reference_no) ? p.reference_no : `Freight - ${p.reference_no || 'Transport'}`} (Transporter)`
                         : (p.customer_name || p.supplier_name || 'Walk-in Retail');
 
                       const badgeVariant = isCapital 
@@ -970,7 +970,7 @@ export const PaymentsModule: React.FC = () => {
                           </td>
                           <td className="py-3 px-3 text-slate-400 max-w-xs truncate">
                             {p.reference_no ? <strong className="text-white mr-1">{p.reference_no}</strong> : null}
-                            {p.transaction_ref ? <span className="font-mono text-emerald-400 mr-1">[{p.transaction_ref}]</span> : null}
+                            {p.transaction_ref && p.transaction_ref !== p.reference_no ? <span className="font-mono text-emerald-400 mr-1">[{p.transaction_ref}]</span> : null}
                             {p.notes || '-'}
                           </td>
                           <td className="py-3 px-3 text-right font-mono font-bold text-sm">

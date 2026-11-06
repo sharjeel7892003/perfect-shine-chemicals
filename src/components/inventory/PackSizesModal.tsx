@@ -175,7 +175,7 @@ export const PackSizesModal: React.FC<PackSizesModalProps> = ({
 
       return {
         ...pack,
-        true_cost: pack.true_cost && pack.true_cost > 0 ? pack.true_cost : estimatedTrueCost,
+        true_cost: estimatedTrueCost > 0 ? estimatedTrueCost : (pack.true_cost || 0),
         bottles_per_box: Number(pack.bottles_per_box || (pack.size_in_base_unit <= 0.35 ? 24 : 12))
       };
     });

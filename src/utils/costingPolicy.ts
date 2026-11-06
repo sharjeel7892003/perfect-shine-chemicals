@@ -65,12 +65,12 @@ export function resolveNextRawMaterialCost({
 
   // Check if incoming purchase is backdated compared to existing purchases for this raw material
   if (rawMaterialId && existingPurchases.length > 0 && incomingPurchaseDate) {
-    const incomingTime = new Date(incomingPurchaseDate).getTime();
+    const incomingDay = incomingPurchaseDate.slice(0, 10);
 
     const hasNewerPurchase = existingPurchases.some(p => {
       if (!p.date) return false;
-      const pTime = new Date(p.date).getTime();
-      if (pTime > incomingTime) {
+      const pDay = p.date.slice(0, 10);
+      if (pDay > incomingDay) {
         return p.items?.some(it => it.raw_material_id === rawMaterialId);
       }
       return false;
@@ -87,30 +87,68 @@ export function resolveNextRawMaterialCost({
 }
 
 /**
- * Finds the unit landed cost of the most recent purchase for a raw material.
+ * Finds the unit landed cost of the most recent purchase for a raw material:
+ * (material cost + allocated freight) / quantity.
  * Returns null if no purchases exist for that raw material.
  */
 export function findLatestPurchaseRate(
   rawMaterialId: string,
   purchases: {
     date: string;
-    items?: { raw_material_id?: string; landed_cost?: number; unit_cost?: number; quantity?: number; allocated_freight?: number }[];
+    created_at?: string;
+    items?: {
+      raw_material_id?: string;
+      landed_cost?: number;
+      unit_cost?: number;
+      quantity?: number;
+      subtotal?: number;
+      allocated_freight?: number;
+    }[];
   }[]
 ): number | null {
   const matchingPurchases = purchases
     .filter(p => p.items?.some(it => it.raw_material_id === rawMaterialId))
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    .sort((a, b) => {
+      const dayA = (a.date || '').slice(0, 10);
+      const dayB = (b.date || '').slice(0, 10);
+      if (dayA !== dayB) {
+        return dayB.localeCompare(dayA);
+      }
+      const timeA = new Date(a.created_at || a.date || 0).getTime();
+      const timeB = new Date(b.created_at || b.date || 0).getTime();
+      return timeB - timeA;
+    });
 
   if (matchingPurchases.length === 0) return null;
 
   const latestPurchase = matchingPurchases[0];
-  const item = latestPurchase.items?.find(it => it.raw_material_id === rawMaterialId);
-  if (!item) return null;
+  const matchingItems = (latestPurchase.items || []).filter(it => it.raw_material_id === rawMaterialId);
+  if (matchingItems.length === 0) return null;
 
-  const qty = Number(item.quantity || 0);
-  const landed = item.landed_cost !== undefined
-    ? Number(item.landed_cost)
-    : (qty > 0 ? Number(item.unit_cost || 0) + (Number(item.allocated_freight || 0) / qty) : Number(item.unit_cost || 0));
+  let totalQty = 0;
+  let totalLandedAmount = 0;
+
+  for (const item of matchingItems) {
+    const qty = Number(item.quantity || 0);
+    const unitCost = Number(item.unit_cost || 0);
+    const materialCost = item.subtotal !== undefined && Number(item.subtotal) > 0
+      ? Number(item.subtotal)
+      : qty * unitCost;
+    const allocatedFreight = item.allocated_freight !== undefined
+      ? Number(item.allocated_freight || 0)
+      : (item.landed_cost !== undefined && qty > 0
+          ? Math.max(0, (Number(item.landed_cost) - unitCost) * qty)
+          : 0);
+
+    totalQty += qty;
+    totalLandedAmount += materialCost + allocatedFreight;
+  }
+
+  const landed = totalQty > 0
+    ? totalLandedAmount / totalQty
+    : (matchingItems[0].landed_cost !== undefined
+        ? Number(matchingItems[0].landed_cost)
+        : Number(matchingItems[0].unit_cost || 0));
 
   return Number(Number(landed).toFixed(2));
 }

@@ -29,7 +29,7 @@ export const ConvertToInvoiceModal: React.FC<ConvertToInvoiceModalProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const { customers, createSale, updateQuotationStatus } = useApp();
+  const { customers, products, rawMaterials, createSale, updateQuotationStatus } = useApp();
   const { currentUser } = useAuth();
 
   const isStandard = quotation.quotation_type === 'standard_unit_price';
@@ -52,22 +52,41 @@ export const ConvertToInvoiceModal: React.FC<ConvertToInvoiceModalProps> = ({
 
   // Calculate items and total amount
   const calculatedItems: SaleItem[] = quotation.items.map(item => {
+    const matchedProd = products.find(p => p.name.trim().toLowerCase() === (item.product_name || '').trim().toLowerCase());
+    const matchedRm = !matchedProd
+      ? rawMaterials.find(r => r.name.trim().toLowerCase() === (item.product_name || '').trim().toLowerCase())
+      : undefined;
+
     if (isStandard) {
       const ur = Number(item.unit_rate !== undefined ? item.unit_rate : (item.quoted_price_per_unit || 0));
       const qBottles = Math.max(1, Number(item.quantity_bottles || 1));
       const bpb = Number(item.bottles_per_box || 0);
       const subtotal = Number((qBottles * ur).toFixed(2));
 
+      const matchedPack = matchedProd?.pack_sizes?.find(ps => ps.name.trim().toLowerCase() === (item.size || '').trim().toLowerCase());
+      const resolvedCost = matchedPack?.true_cost
+        ? Number(matchedPack.true_cost)
+        : matchedProd
+          ? Number(matchedProd.cost_price || 0) * Number(matchedPack?.size_in_base_unit || 1)
+          : matchedRm
+            ? Number(matchedRm.cost_per_unit || 0)
+            : Number(item.product_cost || 0);
+
       return {
+        item_type: matchedRm ? 'raw_material' : 'finished_product',
+        product_id: matchedProd?.id,
+        raw_material_id: matchedRm?.id,
         product_name: item.product_name,
+        pack_size_id: matchedPack?.id,
         pack_size_name: item.size || 'Standard',
+        size_in_base_unit: matchedPack?.size_in_base_unit || 1,
         quantity: qBottles,
         bottle_qty: qBottles,
         bottles_per_box: bpb > 0 ? bpb : undefined,
         box_qty: bpb > 0 ? Number((qBottles / bpb).toFixed(2)) : undefined,
         unit_price: ur,
-        unit_cost: ur,
-        base_quantity: qBottles,
+        unit_cost: Number(resolvedCost.toFixed(2)),
+        base_quantity: Number((qBottles * Number(matchedPack?.size_in_base_unit || 1)).toFixed(4)),
         subtotal: subtotal,
       };
     }
@@ -75,13 +94,14 @@ export const ConvertToInvoiceModal: React.FC<ConvertToInvoiceModalProps> = ({
     // Private Label items
     const quotedUnit = Number(item.quoted_price_per_unit || item.total_cost_per_unit || 0);
     return {
+      product_id: matchedProd?.id,
       product_name: item.product_name,
       pack_size_name: item.size || 'Standard',
       is_private_label: true,
       quantity: 1,
       bottle_qty: 1,
       unit_price: quotedUnit,
-      unit_cost: Number(item.total_cost_per_unit || 0),
+      unit_cost: Number(item.total_cost_per_unit || matchedProd?.cost_price || 0),
       base_quantity: 1,
       subtotal: quotedUnit,
     };

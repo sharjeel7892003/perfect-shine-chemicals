@@ -30,6 +30,7 @@ import {
   PartnerCapitalTransaction
 } from '../types';
 import { ensureUUID, isValidUUID } from '../utils/uuid';
+import { allocateTripFreight } from '../utils/freightAllocation';
 
 
 function assertOnline() {
@@ -137,14 +138,16 @@ export const supabaseService = {
       const rmMap = new Map(normalizedRawMaterials.map((r: any) => [r.id, r]));
       const profMap = new Map((profRes.data || []).map((pr: any) => [pr.id, pr.name]));
 
-      // 1. Normalized Formulations (extract formulation_items into .items, enriched with correct rm.unit)
+      // 1. Normalized Formulations (extract formulation_items into .items, enriched with correct rm.unit and active landed cost_per_unit)
       const normalizedFormulations = (formRes.data || []).map((f: any) => {
         const rawItems = (f.formulation_items && f.formulation_items.length > 0) ? f.formulation_items : (f.items || []);
         const enrichedItems = rawItems.map((item: any) => {
           const linkedRm = item.raw_material_id ? rmMap.get(item.raw_material_id) : null;
           return {
             ...item,
+            raw_material_name: linkedRm ? linkedRm.name : (item.raw_material_name || 'Raw Material'),
             unit: linkedRm ? linkedRm.unit : (item.unit || 'kg'),
+            cost_per_unit: linkedRm ? Number(linkedRm.cost_per_unit || 0) : Number(item.cost_per_unit || 0),
           };
         });
         return {
@@ -241,26 +244,128 @@ export const supabaseService = {
         };
       });
 
-      // 4. Normalized Purchases (extract purchase_items into .items, preserve freight/landed cost)
-      const normalizedPurchases = (purchRes.data || []).map((p: any) => ({
-        ...p,
-        freight_cost: Number(p.freight_cost || 0),
-        trip_id: p.trip_id || undefined,
-        trip_number: p.trip_number || undefined,
-        items: (p.purchase_items || []).map((pi: any) => {
+      // 4. Normalized Purchases (extract purchase_items into .items, preserve freight/landed cost even when DB columns are unmigrated)
+      const normalizedPurchases = (purchRes.data || []).map((p: any) => {
+        let rawNotes = typeof p.notes === 'string' ? p.notes : '';
+        let poMeta: any = null;
+
+        if (rawNotes.includes('<!--PO_FREIGHT_DATA:')) {
+          try {
+            const match = rawNotes.match(/<!--PO_FREIGHT_DATA:(.*?)-->/);
+            if (match && match[1]) {
+              poMeta = JSON.parse(match[1]);
+            }
+          } catch (e) {
+            console.warn('Failed to parse PO_FREIGHT_DATA from purchase notes:', e);
+          }
+          rawNotes = rawNotes.replace(/\s*<!--PO_FREIGHT_DATA:.*?-->/g, '').trim();
+        }
+
+        let freightCost = Number(p.freight_cost || poMeta?.freight_cost || 0);
+        let tripId = p.trip_id || poMeta?.trip_id || undefined;
+        let tripNumber = p.trip_number || poMeta?.trip_number || undefined;
+
+        if (freightCost <= 0 && rawNotes) {
+          const singleMatch = rawNotes.match(/Includes single-purchase freight:\s*PKR\s*([0-9,]+(?:\.[0-9]+)?)/i);
+          const tripAllocMatch = rawNotes.match(/Allocated Transport:\s*PKR\s*([0-9,]+(?:\.[0-9]+)?)/i);
+          if (singleMatch && singleMatch[1]) {
+            freightCost = parseFloat(singleMatch[1].replace(/,/g, '')) || 0;
+          } else if (tripAllocMatch && tripAllocMatch[1]) {
+            freightCost = parseFloat(tripAllocMatch[1].replace(/,/g, '')) || 0;
+          }
+        }
+
+        if (!tripNumber && rawNotes) {
+          const tripNoMatch = rawNotes.match(/Purchase Trip\s+(TRIP-[A-Z0-9-]+)/i);
+          if (tripNoMatch && tripNoMatch[1]) {
+            tripNumber = tripNoMatch[1];
+          }
+        }
+
+        const metaItems: any[] = Array.isArray(poMeta?.items) ? poMeta.items : [];
+        const rawPurchaseItems: any[] = p.purchase_items || [];
+
+        let preliminaryItems = rawPurchaseItems.map((pi: any, idx: number) => {
+          const linkedRm = pi.raw_material_id ? rmMap.get(pi.raw_material_id) : null;
+          const mItem = metaItems.find((m: any) => m.idx === idx) || metaItems.find((m: any) => m.raw_material_id && m.raw_material_id === pi.raw_material_id);
+          const unit = pi.unit || mItem?.unit || (linkedRm ? linkedRm.unit : 'kg');
           const qty = Number(pi.quantity || 0);
           const uCost = Number(pi.unit_cost || 0);
-          const allocFreight = Number(pi.allocated_freight || 0);
-          const landedCost = Number(pi.landed_cost || (qty > 0 ? (uCost + (allocFreight / qty)) : uCost));
+          const subtotal = pi.subtotal !== undefined && Number(pi.subtotal) > 0
+            ? Number(pi.subtotal)
+            : Number((qty * uCost).toFixed(2));
+          const hasExplicitAlloc = pi.allocated_freight !== undefined || mItem?.allocated_freight !== undefined;
+          const allocFreight = pi.allocated_freight !== undefined
+            ? Number(pi.allocated_freight)
+            : (mItem?.allocated_freight !== undefined ? Number(mItem.allocated_freight) : 0);
+          const landedCost = pi.landed_cost !== undefined
+            ? Number(pi.landed_cost)
+            : (mItem?.landed_cost !== undefined
+                ? Number(mItem.landed_cost)
+                : (qty > 0 ? uCost + (allocFreight / qty) : uCost));
+
           return {
             ...pi,
+            unit,
+            quantity: qty,
+            unit_cost: uCost,
+            subtotal,
+            _hasExplicitAlloc: hasExplicitAlloc,
             allocated_freight: allocFreight,
             landed_cost: Number(landedCost.toFixed(2)),
-            trip_id: pi.trip_id || p.trip_id || undefined,
-            trip_number: pi.trip_number || p.trip_number || undefined,
+            trip_id: pi.trip_id || tripId || undefined,
+            trip_number: pi.trip_number || tripNumber || undefined,
           };
-        })
-      }));
+        });
+
+        const totalAllocatedSoFar = preliminaryItems.reduce((acc, it) => acc + Number(it.allocated_freight || 0), 0);
+        const anyExplicitAlloc = preliminaryItems.some(it => it._hasExplicitAlloc && Number(it.allocated_freight || 0) > 0);
+
+        if (freightCost > 0 && totalAllocatedSoFar <= 0 && !anyExplicitAlloc && preliminaryItems.length > 0) {
+          const allocation = allocateTripFreight(
+            preliminaryItems.map(it => ({
+              raw_material_id: it.raw_material_id,
+              product_or_material_name: it.product_or_material_name,
+              unit: it.unit || 'kg',
+              quantity: it.quantity,
+              unit_cost: it.unit_cost,
+              subtotal: it.subtotal,
+            })),
+            freightCost,
+            true
+          );
+
+          preliminaryItems = preliminaryItems.map((it, idx) => {
+            const alloc = allocation.allocatedItems[idx];
+            const allocFreight = alloc ? Number(alloc.allocated_freight || 0) : 0;
+            const landedCost = alloc
+              ? Number(alloc.landed_cost || it.unit_cost)
+              : (it.quantity > 0 ? it.unit_cost + (allocFreight / it.quantity) : it.unit_cost);
+            return {
+              ...it,
+              allocated_freight: Number(allocFreight.toFixed(2)),
+              landed_cost: Number(landedCost.toFixed(2)),
+            };
+          });
+        }
+
+        const finalItems = preliminaryItems.map(({ _hasExplicitAlloc, ...rest }) => rest);
+
+        return {
+          ...p,
+          notes: rawNotes,
+          freight_cost: freightCost,
+          freight_payment_status: p.freight_payment_status || poMeta?.freight_payment_status || (freightCost > 0 ? 'paid' : undefined),
+          freight_payment_method: p.freight_payment_method || poMeta?.freight_payment_method || (freightCost > 0 ? (p.payment_method || 'cash') : undefined),
+          freight_amount_paid: p.freight_amount_paid !== undefined
+            ? Number(p.freight_amount_paid)
+            : (poMeta?.freight_amount_paid !== undefined ? Number(poMeta.freight_amount_paid) : (freightCost > 0 ? freightCost : 0)),
+          freight_payment_date: p.freight_payment_date || poMeta?.freight_payment_date || p.date,
+          trip_id: tripId,
+          trip_number: tripNumber,
+          items: finalItems,
+        };
+      });
 
       // 4B. Normalized Purchase Trips
       const normalizedPurchaseTrips: PurchaseTrip[] = (tripRes?.data || []).map((t: any) => ({
@@ -285,19 +390,47 @@ export const supabaseService = {
       // 5. Normalized Payments (enrich customer/supplier names and detect tagged categories)
       const normalizedPayments = (payRes.data || []).map((p: any) => {
         let related_to = p.related_to;
-        if (p.notes?.includes('[Capital Injection]')) {
+        let reference_no = p.reference_no || p.transaction_ref || undefined;
+        let notes = p.notes || '';
+
+        if (notes.includes('[Capital Injection]')) {
           related_to = 'capital_injection';
-        } else if (p.notes?.includes('[Owner Withdrawal]')) {
+        } else if (notes.includes('[Owner Withdrawal]')) {
           related_to = 'owner_withdrawal';
-        } else if (p.notes?.includes('[Customer Advance]')) {
+        } else if (notes.includes('[Customer Advance]')) {
           related_to = 'customer_advance';
-        } else if (p.notes?.includes('[Sales Return Refund:')) {
+        } else if (notes.includes('[Sales Return Refund:')) {
           related_to = 'sales_return_refund';
+        } else if (
+          notes.includes('[Transport Outflow:') ||
+          /^Freight\s*-\s*(PO-|TRIP-)/i.test(notes) ||
+          /^Freight\s*-\s*(PO-|TRIP-)/i.test(p.transaction_ref || '')
+        ) {
+          related_to = 'transport';
+          const match = notes.match(/\[Transport Outflow:\s*([^\]]+)\]/);
+          if (match && match[1]) {
+            reference_no = match[1].trim();
+            notes = notes.replace(/\[Transport Outflow:\s*[^\]]+\]\s*/, '').trim();
+          } else if (p.transaction_ref && /^Freight\s*-/i.test(p.transaction_ref)) {
+            reference_no = p.transaction_ref;
+          }
+        } else if (notes.includes('[Expense Outflow:')) {
+          related_to = 'expense';
+          const match = notes.match(/\[Expense Outflow:\s*([^\]]+)\]/);
+          if (match && match[1]) {
+            reference_no = match[1].trim();
+          }
+        } else if (notes.includes('[Sales Commission:')) {
+          related_to = 'sales_commission';
+        } else if (notes.includes('[Fixed Asset Outflow:')) {
+          related_to = 'fixed_asset';
         }
 
         return {
           ...p,
           related_to,
+          reference_no,
+          notes,
           customer_name: p.customer_id ? custMap.get(p.customer_id) || '' : '',
           supplier_name: p.supplier_id ? suppMap.get(p.supplier_id) || '' : '',
         };
@@ -689,6 +822,17 @@ export const supabaseService = {
       console.error('Supabase upsertRawMaterial error:', error);
       throw new Error(`Raw material database write failed: ${error.message}`);
     }
+
+    // Keep formulation_items in Supabase synced with this raw material's active landed cost_per_unit
+    try {
+      await supabase
+        .from('formulation_items')
+        .update({ cost_per_unit: payload.cost_per_unit })
+        .eq('raw_material_id', validId);
+    } catch (e) {
+      // Non-fatal if formulation_items table update fails
+    }
+
     return (data as RawMaterial) || rm;
   },
 
@@ -1108,6 +1252,39 @@ export const supabaseService = {
     const validId = ensureUUID(purchase.id);
     purchase.id = validId;
 
+    const cleanNotes = (purchase.notes || '').replace(/\s*<!--PO_FREIGHT_DATA:.*?-->/g, '').trim();
+    purchase.notes = cleanNotes;
+
+    const freightCostVal = Number(purchase.freight_cost || 0);
+    const hasMetaToPersist =
+      freightCostVal > 0 ||
+      Boolean(purchase.trip_id) ||
+      Boolean(purchase.trip_number) ||
+      (purchase.items || []).some(it => Number(it.allocated_freight || 0) > 0 || Boolean(it.unit));
+
+    let persistedNotes = cleanNotes;
+    if (hasMetaToPersist) {
+      const poMeta = {
+        freight_cost: freightCostVal,
+        freight_payment_status: purchase.freight_payment_status || (freightCostVal > 0 ? 'paid' : undefined),
+        freight_payment_method: purchase.freight_payment_method || (freightCostVal > 0 ? (purchase.payment_method || 'cash') : undefined),
+        freight_amount_paid: purchase.freight_amount_paid !== undefined
+          ? Number(purchase.freight_amount_paid)
+          : ( (purchase.freight_payment_status || 'paid') === 'paid' ? freightCostVal : 0 ),
+        freight_payment_date: purchase.freight_payment_date || purchase.date,
+        trip_id: purchase.trip_id || undefined,
+        trip_number: purchase.trip_number || undefined,
+        items: (purchase.items || []).map((it, idx) => ({
+          idx,
+          raw_material_id: it.raw_material_id || undefined,
+          unit: it.unit || undefined,
+          allocated_freight: Number(it.allocated_freight || 0),
+          landed_cost: Number(it.landed_cost ?? it.unit_cost ?? 0),
+        })),
+      };
+      persistedNotes = `${cleanNotes} <!--PO_FREIGHT_DATA:${JSON.stringify(poMeta)}-->`.trim();
+    }
+
     // 1. Insert parent purchase
     const payload: any = {
       id: validId,
@@ -1119,7 +1296,7 @@ export const supabaseService = {
       amount_paid: Number(purchase.amount_paid || 0),
       payment_status: purchase.payment_status || 'unpaid',
       payment_method: purchase.payment_method || 'cash',
-      notes: purchase.notes || ''
+      notes: persistedNotes
     };
 
     if (purchase.freight_cost) payload.freight_cost = Number(purchase.freight_cost);
@@ -1313,7 +1490,7 @@ export const supabaseService = {
       supplier_id: isValidUUID(payment.supplier_id) ? payment.supplier_id : null,
       amount: Number(payment.amount || 0),
       payment_method: payment.payment_method || 'cash',
-      transaction_ref: payment.transaction_ref || '',
+      transaction_ref: payment.transaction_ref || payment.reference_no || '',
       notes: payment.notes || '',
       date: payment.date || new Date().toISOString(),
       created_by: isValidUUID(payment.created_by) ? payment.created_by : null
@@ -1329,6 +1506,10 @@ export const supabaseService = {
         if (payload.related_to === 'expense') {
           fallbackRelatedTo = 'supplier_balance';
           prefix = `[Expense Outflow: ${payment.reference_no || 'Overhead'}]`;
+        } else if (payload.related_to === 'transport') {
+          fallbackRelatedTo = 'supplier_balance';
+          const refLabel = payment.reference_no || payment.transaction_ref || 'Freight';
+          prefix = `[Transport Outflow: ${refLabel}]`;
         } else if (payload.related_to === 'capital_injection') {
           fallbackRelatedTo = 'customer_balance';
           prefix = '[Capital Injection]';
@@ -1341,20 +1522,29 @@ export const supabaseService = {
         } else if (payload.related_to === 'sales_return_refund') {
           fallbackRelatedTo = 'customer_balance';
           prefix = `[Sales Return Refund: ${payment.reference_no || 'CRN'}]`;
+        } else if (payload.related_to === 'sales_commission') {
+          fallbackRelatedTo = 'supplier_balance';
+          prefix = `[Sales Commission: ${payment.reference_no || 'Commission'}]`;
+        } else if (payload.related_to === 'fixed_asset') {
+          fallbackRelatedTo = 'supplier_balance';
+          prefix = `[Fixed Asset Outflow: ${payment.reference_no || 'Asset'}]`;
         }
 
         if (fallbackRelatedTo) {
           console.warn(`payments_related_to_check rejected "${payload.related_to}". Retrying with fallback "${fallbackRelatedTo}"...`);
+          const cleanNote = (payload.notes || '').replace(/^\[Transport Outflow:[^\]]+\]\s*/, '').trim();
           const fallbackPayload = {
             ...payload,
             related_to: fallbackRelatedTo,
-            notes: `${prefix} ${payload.notes}`.trim()
+            notes: `${prefix} ${cleanNote}`.trim()
           };
           const retryRes = await supabase.from('payments').upsert(fallbackPayload).select().single();
           if (!retryRes.error) {
             return {
               ...(retryRes.data as Payment),
-              related_to: payment.related_to // retain high-level related_to in local memory
+              related_to: payment.related_to, // retain high-level related_to in local memory
+              reference_no: payment.reference_no || payment.transaction_ref || undefined,
+              notes: payment.notes || '',
             };
           }
         }
@@ -1362,7 +1552,10 @@ export const supabaseService = {
       console.error('Supabase upsertPayment error:', error);
       throw new Error(`Payment database write failed: ${error.message}`);
     }
-    return (data as Payment) || payment;
+    return {
+      ...((data as Payment) || payment),
+      reference_no: payment.reference_no || payment.transaction_ref || undefined,
+    };
   },
 
   async deletePayment(id: string): Promise<void> {

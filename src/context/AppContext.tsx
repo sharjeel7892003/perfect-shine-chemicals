@@ -207,6 +207,7 @@ interface AppContextType {
   deleteSalesReturnRecord: (returnId: string, user: Profile) => Promise<{ success: boolean; message: string }>;
   
   createPurchase: (purchaseData: Omit<Purchase, 'id' | 'invoice_number' | 'created_at'>) => Promise<Purchase>;
+  updatePurchase: (purchaseId: string, purchaseData: Omit<Purchase, 'id' | 'invoice_number' | 'created_at'>) => Promise<Purchase>;
   deletePurchaseInvoice: (purchaseId: string, user: Profile, forceAllowNegativeStock?: boolean) => Promise<{ 
     success: boolean; 
     hasNegativeStockWarning?: boolean; 
@@ -442,6 +443,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
             if (p.reference_no && !validPoInvs.has(p.reference_no)) {
               return false;
+            }
+          }
+          if (p.related_to === 'transport') {
+            if (p.reference_no && /^Freight\s*-\s*PO-/i.test(p.reference_no)) {
+              const poInv = p.reference_no.replace(/^Freight\s*-\s*/i, '').trim();
+              if (!validPoInvs.has(poInv)) {
+                return false;
+              }
             }
           }
           return true;
@@ -2562,16 +2571,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // ==============================================================================
-  // TRANSACTIONS: PURCHASE ENTRY & PURCHASE DELETION (SUPABASE-FIRST)
+  // TRANSACTIONS: PURCHASE ENTRY, EDIT & PURCHASE DELETION (SUPABASE-FIRST)
   // ==============================================================================
   const createPurchase = async (purchaseData: Omit<Purchase, 'id' | 'invoice_number' | 'created_at'>): Promise<Purchase> => {
     const invoiceNum = generateInvoiceNumber('PO');
-    
-    // Allocate freight across items if freight_cost was provided on single purchase
-    let processedItems = [...purchaseData.items];
-    const singleFreight = Number(purchaseData.freight_cost || 0);
+    const now = new Date().toISOString();
 
-    if (singleFreight > 0) {
+    // Normalize line items (resolve unit from rawMaterials and ensure subtotal = quantity * unit_cost)
+    let processedItems: PurchaseItem[] = (purchaseData.items || []).map(it => {
+      const rm = it.raw_material_id ? rawMaterials.find(r => r.id === it.raw_material_id) : undefined;
+      const qty = Number(it.quantity || 0);
+      const uCost = Number(it.unit_cost || 0);
+      const sub = Number(it.subtotal) > 0 ? Number(it.subtotal) : Number((qty * uCost).toFixed(2));
+      return {
+        ...it,
+        unit: it.unit || rm?.unit || 'kg',
+        quantity: qty,
+        unit_cost: uCost,
+        subtotal: sub,
+        allocated_freight: 0,
+        landed_cost: uCost,
+      };
+    });
+
+    // Allocate freight across items if freight_cost was provided on single purchase
+    const singleFreight = Math.max(0, Number(purchaseData.freight_cost || 0));
+
+    if (singleFreight > 0 && processedItems.length > 0) {
       const { allocatedItems } = allocateTripFreight(
         processedItems.map(it => ({
           ...it,
@@ -2588,18 +2614,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }));
     }
 
+    const materialTotal = Number(
+      processedItems.reduce((sum, it) => sum + Number(it.subtotal || 0), 0).toFixed(2)
+    );
+
+    const freightPaymentStatus: 'paid' | 'partial' | 'unpaid' = singleFreight > 0
+      ? (purchaseData.freight_payment_status || 'paid')
+      : 'paid';
+    const freightPaymentMethod: PaymentMethod = purchaseData.freight_payment_method || 'cash';
+    const freightPaymentDate: string = purchaseData.freight_payment_date || purchaseData.date || now;
+    const freightAmountPaid: number = singleFreight <= 0
+      ? 0
+      : freightPaymentStatus === 'unpaid'
+        ? 0
+        : freightPaymentStatus === 'partial'
+          ? Math.min(singleFreight, Math.max(0, Number(purchaseData.freight_amount_paid || 0)))
+          : singleFreight;
+
     const newPurchase: Purchase = {
       ...purchaseData,
       id: generateId(),
       invoice_number: invoiceNum,
+      total_amount: materialTotal > 0 ? materialTotal : Number(purchaseData.total_amount || 0),
+      freight_cost: singleFreight,
+      freight_payment_status: singleFreight > 0 ? freightPaymentStatus : undefined,
+      freight_payment_method: singleFreight > 0 ? freightPaymentMethod : undefined,
+      freight_amount_paid: singleFreight > 0 ? freightAmountPaid : undefined,
+      freight_payment_date: singleFreight > 0 ? freightPaymentDate : undefined,
       items: processedItems,
-      created_at: new Date().toISOString(),
+      created_at: now,
     };
 
     const savedPurchase = await supabaseService.upsertPurchase(newPurchase);
-    setPurchases(prev => [savedPurchase, ...prev]);
+    const nextPurchasesList = [savedPurchase, ...purchases];
+    setPurchases(nextPurchasesList);
 
-    // Raw Materials addition with weighted average landed cost
+    // Raw Materials addition with landed cost per unit: (material cost + freight) / quantity
     const updatedRawMaterials = [...rawMaterials];
     const rawMovementsToAdd: RawMaterialMovement[] = [];
 
@@ -2609,13 +2659,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (rmIdx !== -1) {
           const rm = updatedRawMaterials[rmIdx];
           const prevStk = Number(rm.current_stock || 0);
-          const nextStk = prevStk + Number(item.quantity);
-          const itemLandedCost = item.landed_cost || (item.quantity > 0 ? Number((Number(item.unit_cost) + (Number(item.allocated_freight || 0) / Number(item.quantity))).toFixed(2)) : item.unit_cost);
-          
+          const qty = Number(item.quantity || 0);
+          const nextStk = prevStk + qty;
+          const itemMaterialCost = Number(item.subtotal || (qty * Number(item.unit_cost || 0)));
+          const itemFreight = Number(item.allocated_freight || 0);
+          const itemLandedCost = qty > 0
+            ? Number(((itemMaterialCost + itemFreight) / qty).toFixed(2))
+            : Number(item.landed_cost || item.unit_cost || 0);
+
           const nextCost = resolveNextRawMaterialCost({
             currentStock: prevStk,
             currentCostPerUnit: Number(rm.cost_per_unit || 0),
-            incomingQuantity: Number(item.quantity),
+            incomingQuantity: qty,
             incomingLandedCost: itemLandedCost,
             incomingPurchaseDate: savedPurchase.date,
             existingPurchases: purchases,
@@ -2626,23 +2681,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             ...rm, 
             current_stock: nextStk, 
             cost_per_unit: nextCost, 
-            updated_at: new Date().toISOString() 
+            updated_at: now 
           };
           updatedRawMaterials[rmIdx] = updatedRm;
           await supabaseService.upsertRawMaterial(updatedRm);
 
-          const hasFreight = item.allocated_freight && item.allocated_freight > 0;
+          const hasFreight = itemFreight > 0;
           const rmMvt: RawMaterialMovement = {
             id: generateId(),
             raw_material_id: rm.id,
             raw_material_name: rm.name,
             movement_type: 'purchase_in',
-            quantity: Number(item.quantity),
+            quantity: qty,
             previous_stock: prevStk,
             new_stock: nextStk,
             reference_id: savedPurchase.invoice_number,
             notes: hasFreight 
-              ? `Received from PO ${invoiceNum} (${savedPurchase.supplier_name}) - Base: PKR ${item.unit_cost}, Freight: PKR ${item.allocated_freight} (Landed: PKR ${itemLandedCost}/${rm.unit})`
+              ? `Received from PO ${invoiceNum} (${savedPurchase.supplier_name}) - Base: PKR ${item.unit_cost}, Freight: PKR ${itemFreight} (Landed: PKR ${itemLandedCost}/${rm.unit})`
               : `Received from PO ${invoiceNum} (${savedPurchase.supplier_name})`,
             date: savedPurchase.date,
           };
@@ -2657,7 +2712,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (prod) {
           const prevStk = Number(prod.current_stock);
           const nextStk = prevStk + Number(item.quantity);
-          const updatedProd = { ...prod, current_stock: nextStk, cost_price: item.unit_cost || prod.cost_price, updated_at: new Date().toISOString() };
+          const updatedProd = { ...prod, current_stock: nextStk, cost_price: item.landed_cost || item.unit_cost || prod.cost_price, updated_at: now };
           await supabaseService.upsertProduct(updatedProd);
 
           const prodMvt: StockMovement = {
@@ -2680,20 +2735,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (rawMovementsToAdd.length > 0) {
       setRawMaterials(updatedRawMaterials);
       setRawMaterialMovements(prev => [...rawMovementsToAdd, ...prev]);
+      const rmMap = new Map(updatedRawMaterials.map(r => [r.id, r]));
+      setFormulations(prev => prev.map(f => ({
+        ...f,
+        items: (f.items || []).map(fi => {
+          const linked = rmMap.get(fi.raw_material_id);
+          return linked ? { ...fi, cost_per_unit: linked.cost_per_unit, unit: linked.unit } : fi;
+        })
+      })));
     }
 
-    // Update supplier balance if unpaid
-    const unpaid = savedPurchase.total_amount - savedPurchase.amount_paid;
+    // Update supplier balance if unpaid (Material cost ONLY; freight is NEVER added to vendor balance)
+    const unpaid = Math.max(0, Number(savedPurchase.total_amount || 0) - Number(savedPurchase.amount_paid || 0));
     if (savedPurchase.supplier_id && unpaid > 0) {
       const supp = suppliers.find(s => s.id === savedPurchase.supplier_id);
       if (supp) {
-        const updatedSupp = { ...supp, current_balance: (supp.current_balance || 0) + unpaid, updated_at: new Date().toISOString() };
+        const updatedSupp = { ...supp, current_balance: (supp.current_balance || 0) + unpaid, updated_at: now };
         await supabaseService.upsertSupplier(updatedSupp);
         setSuppliers(prev => prev.map(s => s.id === savedPurchase.supplier_id ? updatedSupp : s));
       }
     }
 
-    // Log payment made
+    const newPaymentsToAdd: Payment[] = [];
+
+    // 1. Log material payment made to supplier
     if (savedPurchase.amount_paid > 0) {
       const pay: Payment = {
         id: generateId(),
@@ -2706,11 +2771,245 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         payment_method: savedPurchase.payment_method,
         notes: `Paid to supplier for PO ${invoiceNum}`,
         date: savedPurchase.date,
-        created_at: new Date().toISOString(),
+        created_at: now,
       };
       const savedPay = await supabaseService.upsertPayment(pay);
-      setPayments(prev => [savedPay, ...prev]);
+      newPaymentsToAdd.push(savedPay);
     }
+
+    // 2. Log SEPARATE freight cash outflow to transporter (if freight > 0 and paid)
+    if (singleFreight > 0 && freightAmountPaid > 0) {
+      const freightLabel = `Freight - ${savedPurchase.invoice_number}`;
+      const freightPay: Payment = {
+        id: generateId(),
+        related_to: 'transport',
+        reference_id: savedPurchase.id,
+        reference_no: freightLabel,
+        transaction_ref: freightLabel,
+        amount: freightAmountPaid,
+        payment_method: freightPaymentMethod,
+        notes: `${freightLabel} (Transporter payment for PO ${savedPurchase.invoice_number})`,
+        date: freightPaymentDate,
+        created_at: now,
+      };
+      const savedFreightPay = await supabaseService.upsertPayment(freightPay);
+      newPaymentsToAdd.push(savedFreightPay);
+    }
+
+    if (newPaymentsToAdd.length > 0) {
+      setPayments(prev => [...newPaymentsToAdd, ...prev]);
+    }
+
+    return savedPurchase;
+  };
+
+  const updatePurchase = async (
+    purchaseId: string,
+    purchaseData: Omit<Purchase, 'id' | 'invoice_number' | 'created_at'>
+  ): Promise<Purchase> => {
+    const existingPurchase = purchases.find(p => p.id === purchaseId);
+    if (!existingPurchase) {
+      throw new Error('Purchase order not found.');
+    }
+
+    const invoiceNum = existingPurchase.invoice_number;
+    const now = new Date().toISOString();
+
+    // 1. Normalize items and allocate freight
+    let processedItems: PurchaseItem[] = (purchaseData.items || []).map(it => {
+      const rm = it.raw_material_id ? rawMaterials.find(r => r.id === it.raw_material_id) : undefined;
+      const qty = Number(it.quantity || 0);
+      const uCost = Number(it.unit_cost || 0);
+      const sub = Number(it.subtotal) > 0 ? Number(it.subtotal) : Number((qty * uCost).toFixed(2));
+      return {
+        ...it,
+        unit: it.unit || rm?.unit || 'kg',
+        quantity: qty,
+        unit_cost: uCost,
+        subtotal: sub,
+        allocated_freight: 0,
+        landed_cost: uCost,
+      };
+    });
+
+    const singleFreight = Math.max(0, Number(purchaseData.freight_cost || 0));
+    if (singleFreight > 0 && processedItems.length > 0) {
+      const { allocatedItems } = allocateTripFreight(
+        processedItems.map(it => ({
+          ...it,
+          raw_material_name: it.product_or_material_name || '',
+          unit: it.unit || 'kg',
+        })),
+        singleFreight,
+        false
+      );
+      processedItems = allocatedItems.map((alloc, idx) => ({
+        ...processedItems[idx],
+        allocated_freight: alloc.allocated_freight,
+        landed_cost: alloc.landed_cost,
+      }));
+    }
+
+    const materialTotal = Number(
+      processedItems.reduce((sum, it) => sum + Number(it.subtotal || 0), 0).toFixed(2)
+    );
+
+    const freightPaymentStatus: 'paid' | 'partial' | 'unpaid' = singleFreight > 0
+      ? (purchaseData.freight_payment_status || 'paid')
+      : 'paid';
+    const freightPaymentMethod: PaymentMethod = purchaseData.freight_payment_method || 'cash';
+    const freightPaymentDate: string = purchaseData.freight_payment_date || purchaseData.date || now;
+    const freightAmountPaid: number = singleFreight <= 0
+      ? 0
+      : freightPaymentStatus === 'unpaid'
+        ? 0
+        : freightPaymentStatus === 'partial'
+          ? Math.min(singleFreight, Math.max(0, Number(purchaseData.freight_amount_paid || 0)))
+          : singleFreight;
+
+    const updatedPurchaseObj: Purchase = {
+      ...existingPurchase,
+      ...purchaseData,
+      id: purchaseId,
+      invoice_number: invoiceNum,
+      total_amount: materialTotal > 0 ? materialTotal : Number(purchaseData.total_amount || 0),
+      freight_cost: singleFreight,
+      freight_payment_status: singleFreight > 0 ? freightPaymentStatus : undefined,
+      freight_payment_method: singleFreight > 0 ? freightPaymentMethod : undefined,
+      freight_amount_paid: singleFreight > 0 ? freightAmountPaid : undefined,
+      freight_payment_date: singleFreight > 0 ? freightPaymentDate : undefined,
+      items: processedItems,
+    };
+
+    const savedPurchase = await supabaseService.upsertPurchase(updatedPurchaseObj);
+    const nextPurchasesList = purchases.map(p => (p.id === purchaseId ? savedPurchase : p));
+    setPurchases(nextPurchasesList);
+
+    // 2. Reconcile Raw Material stock deltas and landed cost_per_unit
+    const affectedRmIds = new Set<string>();
+    (existingPurchase.items || []).forEach(it => {
+      if (it.raw_material_id) affectedRmIds.add(it.raw_material_id);
+    });
+    (savedPurchase.items || []).forEach(it => {
+      if (it.raw_material_id) affectedRmIds.add(it.raw_material_id);
+    });
+
+    const updatedRawMaterials = [...rawMaterials];
+    for (const rmId of affectedRmIds) {
+      const rmIdx = updatedRawMaterials.findIndex(r => r.id === rmId);
+      if (rmIdx === -1) continue;
+      const rm = updatedRawMaterials[rmIdx];
+
+      const oldQty = (existingPurchase.items || [])
+        .filter(it => it.raw_material_id === rmId)
+        .reduce((sum, it) => sum + Number(it.quantity || 0), 0);
+      const newQty = (savedPurchase.items || [])
+        .filter(it => it.raw_material_id === rmId)
+        .reduce((sum, it) => sum + Number(it.quantity || 0), 0);
+
+      const nextStk = Math.max(0, Number((Number(rm.current_stock || 0) - oldQty + newQty).toFixed(4)));
+      const latestRate = findLatestPurchaseRate(rmId, nextPurchasesList);
+      const nextCost = latestRate !== null ? latestRate : Number(rm.cost_per_unit || 0);
+
+      const updatedRm: RawMaterial = {
+        ...rm,
+        current_stock: nextStk,
+        cost_per_unit: nextCost,
+        updated_at: now,
+      };
+      updatedRawMaterials[rmIdx] = updatedRm;
+      await supabaseService.upsertRawMaterial(updatedRm);
+    }
+
+    setRawMaterials(updatedRawMaterials);
+    const rmMap = new Map(updatedRawMaterials.map(r => [r.id, r]));
+    setFormulations(prev => prev.map(f => ({
+      ...f,
+      items: (f.items || []).map(fi => {
+        const linked = rmMap.get(fi.raw_material_id);
+        return linked ? { ...fi, cost_per_unit: linked.cost_per_unit, unit: linked.unit } : fi;
+      })
+    })));
+
+    // 3. Reverse existing material & freight payments for this purchase and reapply updated payments
+    const freightLabel = `Freight - ${invoiceNum}`;
+    const oldLinkedPayments = payments.filter(p =>
+      p.reference_id === purchaseId ||
+      p.reference_no === invoiceNum ||
+      p.reference_no === freightLabel ||
+      p.transaction_ref === freightLabel ||
+      ((p.related_to === 'purchase' || p.related_to === 'transport') && p.notes?.includes(invoiceNum))
+    );
+
+    for (const oldPay of oldLinkedPayments) {
+      try {
+        await supabaseService.deletePayment(oldPay.id);
+      } catch (err) {
+        console.warn('Could not delete old purchase/freight payment during updatePurchase:', err);
+      }
+    }
+
+    const remainingPayments = payments.filter(p => !oldLinkedPayments.some(op => op.id === p.id));
+    const reappliedPayments: Payment[] = [];
+
+    if (savedPurchase.amount_paid > 0) {
+      const matPay: Payment = {
+        id: generateId(),
+        related_to: 'purchase',
+        reference_id: savedPurchase.id,
+        reference_no: invoiceNum,
+        supplier_id: savedPurchase.supplier_id,
+        supplier_name: savedPurchase.supplier_name,
+        amount: savedPurchase.amount_paid,
+        payment_method: savedPurchase.payment_method,
+        notes: `Paid to supplier for PO ${invoiceNum}`,
+        date: savedPurchase.date,
+        created_at: now,
+      };
+      const savedMatPay = await supabaseService.upsertPayment(matPay);
+      reappliedPayments.push(savedMatPay);
+    }
+
+    if (singleFreight > 0 && freightAmountPaid > 0) {
+      const freightPay: Payment = {
+        id: generateId(),
+        related_to: 'transport',
+        reference_id: savedPurchase.id,
+        reference_no: freightLabel,
+        transaction_ref: freightLabel,
+        amount: freightAmountPaid,
+        payment_method: freightPaymentMethod,
+        notes: `${freightLabel} (Transporter payment for PO ${invoiceNum})`,
+        date: freightPaymentDate,
+        created_at: now,
+      };
+      const savedFreightPay = await supabaseService.upsertPayment(freightPay);
+      reappliedPayments.push(savedFreightPay);
+    }
+
+    const nextPaymentsList = [...reappliedPayments, ...remainingPayments];
+    setPayments(nextPaymentsList);
+
+    // 4. Reconcile affected supplier payable balance(s) (Material cost only)
+    const affectedSupplierIds = new Set<string>();
+    if (existingPurchase.supplier_id) affectedSupplierIds.add(existingPurchase.supplier_id);
+    if (savedPurchase.supplier_id) affectedSupplierIds.add(savedPurchase.supplier_id);
+
+    const updatedSuppliersList = [...suppliers];
+    for (const sId of affectedSupplierIds) {
+      const sIdx = updatedSuppliersList.findIndex(s => s.id === sId);
+      if (sIdx === -1) continue;
+      const supp = updatedSuppliersList[sIdx];
+      const summary = calculateSupplierFinancials(supp, nextPurchasesList, nextPaymentsList);
+      const updatedSupp = {
+        ...supp,
+        current_balance: summary.outstandingPayable,
+        updated_at: now,
+      };
+      updatedSuppliersList[sIdx] = updatedSupp;
+      await supabaseService.upsertSupplier(updatedSupp);
+    }
+    setSuppliers(updatedSuppliersList);
 
     return savedPurchase;
   };
@@ -2755,21 +3054,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const now = new Date().toISOString();
+    const remainingPurchases = purchases.filter(p => p.id !== purchaseId);
 
-    // 1. Subtract received inventory
+    // 1. Subtract received inventory and recalculate raw material landed cost from remaining purchases
+    const updatedRMs = [...rawMaterials];
     for (const item of targetPurchase.items) {
       if (item.raw_material_id) {
-        const rm = rawMaterials.find(r => r.id === item.raw_material_id);
-        if (rm) {
+        const rmIdx = updatedRMs.findIndex(r => r.id === item.raw_material_id);
+        if (rmIdx !== -1) {
+          const rm = updatedRMs[rmIdx];
           const prevStk = Number(rm.current_stock);
-          const nextStk = Math.max(0, prevStk - Number(item.quantity));
-          const remainingPurchases = purchases.filter(p => p.id !== purchaseId);
+          const nextStk = Math.max(0, Number((prevStk - Number(item.quantity)).toFixed(4)));
           const latestRate = ACTIVE_RAW_MATERIAL_COSTING_METHOD === 'latest_purchase_price'
             ? findLatestPurchaseRate(rm.id, remainingPurchases)
             : null;
           const updatedCost = latestRate !== null ? latestRate : rm.cost_per_unit;
 
           const updatedRm = { ...rm, current_stock: nextStk, cost_per_unit: updatedCost, updated_at: now };
+          updatedRMs[rmIdx] = updatedRm;
           await supabaseService.upsertRawMaterial(updatedRm);
 
           const rmMvt: RawMaterialMovement = {
@@ -2814,6 +3116,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
     }
+    setRawMaterials(updatedRMs);
 
     // 2. Reverse supplier balance
     const unpaid = targetPurchase.total_amount - targetPurchase.amount_paid;
@@ -2825,17 +3128,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // 3. Delete associated payments/disbursements from Supabase
+    // 3. Delete associated payments/disbursements (both supplier material payment AND freight outflow) from Supabase
+    const freightLabel = `Freight - ${targetPurchase.invoice_number}`;
     const associatedPurchPayments = payments.filter(p => 
-      (p.related_to === 'purchase' && (p.reference_id === purchaseId || p.reference_no === targetPurchase.invoice_number || p.notes?.includes(targetPurchase.invoice_number))) ||
       p.reference_id === purchaseId ||
-      (p.reference_no && p.reference_no === targetPurchase.invoice_number)
+      p.reference_no === targetPurchase.invoice_number ||
+      p.reference_no === freightLabel ||
+      p.transaction_ref === freightLabel ||
+      ((p.related_to === 'purchase' || p.related_to === 'transport') && p.notes?.includes(targetPurchase.invoice_number))
     );
     for (const pay of associatedPurchPayments) {
       try {
         await supabaseService.deletePayment(pay.id);
       } catch (err) {
-        console.warn('Could not auto-delete associated purchase payment record:', err);
+        console.warn('Could not auto-delete associated purchase/freight payment record:', err);
       }
     }
     setPayments(prev => prev.filter(p => !associatedPurchPayments.some(ap => ap.id === p.id)));
@@ -3060,14 +3366,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (transportAmountPaid > 0) {
       try {
+        const freightLabel = `Freight - ${tripNumber}`;
         const transportPayment: Payment = {
           id: generateId(),
           related_to: 'transport',
           reference_id: tripId,
-          reference_no: tripNumber,
+          reference_no: freightLabel,
+          transaction_ref: freightLabel,
           amount: transportAmountPaid,
           payment_method: tripData.transport_payment_method || 'cash',
-          notes: `Transportation freight for Purchase Trip ${tripNumber}${tripData.vehicle_or_driver ? ` (${tripData.vehicle_or_driver})` : ''}`,
+          notes: `${freightLabel} (Transportation freight for Purchase Trip ${tripNumber}${tripData.vehicle_or_driver ? ` - ${tripData.vehicle_or_driver}` : ''})`,
           date: tripData.transport_payment_date || tripDate,
           created_at: now,
         };
@@ -3140,7 +3448,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const now = new Date().toISOString();
 
-    // 1. Reverse raw material inventory
+    // 1. Reverse raw material inventory and recalculate cost_per_unit from remaining purchases
+    const remainingPurchases = purchases.filter(p => p.trip_id !== tripId && p.trip_number !== targetTrip.trip_number);
     let updatedRMs = [...rawMaterials];
     for (const item of targetTrip.items) {
       const rmIdx = updatedRMs.findIndex(r => r.id === item.raw_material_id);
@@ -3148,7 +3457,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const rm = updatedRMs[rmIdx];
         const prevStk = Number(rm.current_stock);
         const nextStk = Math.max(0, Number((prevStk - Number(item.quantity)).toFixed(4)));
-        const updated = { ...rm, current_stock: nextStk, updated_at: now };
+        const latestRate = ACTIVE_RAW_MATERIAL_COSTING_METHOD === 'latest_purchase_price'
+          ? findLatestPurchaseRate(rm.id, remainingPurchases)
+          : null;
+        const updatedCost = latestRate !== null ? latestRate : rm.cost_per_unit;
+        const updated = { ...rm, current_stock: nextStk, cost_per_unit: updatedCost, updated_at: now };
         updatedRMs[rmIdx] = updated;
         await supabaseService.upsertRawMaterial(updated);
 
@@ -3206,12 +3519,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // 3B. Delete associated payments for linked POs and trip transport
+    const tripFreightLabel = `Freight - ${targetTrip.trip_number}`;
     const associatedPayments = payments.filter(p => 
       (p.reference_id && linkedPOs.some(po => po.id === p.reference_id)) ||
       (p.reference_no && linkedPOs.some(po => po.invoice_number === p.reference_no)) ||
       p.reference_id === tripId ||
       p.reference_no === targetTrip.trip_number ||
-      (p.related_to === 'transport' && (p.reference_id === tripId || p.reference_no === targetTrip.trip_number))
+      p.reference_no === tripFreightLabel ||
+      p.transaction_ref === tripFreightLabel ||
+      (p.related_to === 'transport' && (
+        p.reference_id === tripId ||
+        p.reference_no === targetTrip.trip_number ||
+        p.reference_no === tripFreightLabel ||
+        p.notes?.includes(targetTrip.trip_number)
+      ))
     );
     for (const pay of associatedPayments) {
       try {
@@ -3393,14 +3714,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, message: 'Transport cost is already fully paid.' };
     }
 
+    const freightLabel = `Freight - ${trip.trip_number}`;
     const pay: Payment = {
       id: generateId(),
       related_to: 'transport',
       reference_id: trip.id,
-      reference_no: trip.trip_number,
+      reference_no: freightLabel,
+      transaction_ref: freightLabel,
       amount: amountToPay,
       payment_method: paymentMethod,
-      notes: notes || `Transport freight settlement for Trip ${trip.trip_number}${trip.vehicle_or_driver ? ` (${trip.vehicle_or_driver})` : ''}`,
+      notes: notes || `${freightLabel} (Transport freight settlement for Trip ${trip.trip_number}${trip.vehicle_or_driver ? ` - ${trip.vehicle_or_driver}` : ''})`,
       date: effectiveDate,
       created_at: now,
     };
@@ -4542,6 +4865,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         processSalesReturn,
         deleteSalesReturnRecord,
         createPurchase,
+        updatePurchase,
         deletePurchaseInvoice,
         purchaseTrips,
         createPurchaseTrip,

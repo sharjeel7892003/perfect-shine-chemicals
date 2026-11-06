@@ -21,7 +21,8 @@ import {
   Square,
   Wallet,
   CreditCard,
-  DollarSign
+  DollarSign,
+  Edit2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
@@ -40,6 +41,7 @@ export const PurchasesModule: React.FC = () => {
     purchases, 
     purchaseTrips, 
     createPurchase, 
+    updatePurchase,
     deletePurchaseInvoice,
     markPurchasesAsPaid 
   } = useApp();
@@ -75,12 +77,16 @@ export const PurchasesModule: React.FC = () => {
   const activeProducts = products.filter(p => !p.is_archived && p.is_active);
 
   // Single Purchase Form State
+  const [editingPurchase, setEditingPurchase] = useState<Purchase | null>(null);
   const [purchaseDate, setPurchaseDate] = useState(getTodayDateString());
   const [supplierId, setSupplierId] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [paymentStatus, setPaymentStatus] = useState<'paid' | 'partial' | 'unpaid'>('paid');
   const [amountPaid, setAmountPaid] = useState<number>(0);
   const [singleFreightCost, setSingleFreightCost] = useState<number>(0);
+  const [freightPaymentStatus, setFreightPaymentStatus] = useState<'paid' | 'unpaid'>('paid');
+  const [freightPaymentMethod, setFreightPaymentMethod] = useState<PaymentMethod>('cash');
+  const [freightPaymentDate, setFreightPaymentDate] = useState<string>(getTodayDateString());
   const [notes, setNotes] = useState('');
   
   const [items, setItems] = useState<PurchaseItem[]>([
@@ -90,6 +96,53 @@ export const PurchasesModule: React.FC = () => {
   const selectedSupplier = suppliers.find(s => s.id === supplierId);
   const totalMaterialAmount = items.reduce((acc, item) => acc + item.subtotal, 0);
   const totalLandedAmount = totalMaterialAmount + singleFreightCost;
+
+  const resetPurchaseForm = () => {
+    const today = getTodayDateString();
+    setEditingPurchase(null);
+    setSupplierId('');
+    setPurchaseDate(today);
+    setPaymentMethod('cash');
+    setPaymentStatus('paid');
+    setItems([{ item_type: 'raw_material', raw_material_id: '', product_or_material_name: '', quantity: 1, unit_cost: 0, subtotal: 0 }]);
+    setAmountPaid(0);
+    setSingleFreightCost(0);
+    setFreightPaymentStatus('paid');
+    setFreightPaymentMethod('cash');
+    setFreightPaymentDate(today);
+    setNotes('');
+    setSubmitError(null);
+  };
+
+  const handleOpenEditPurchase = (p: Purchase) => {
+    const pDate = (p.date || '').slice(0, 10) || getTodayDateString();
+    const fDate = (p.freight_payment_date || p.date || '').slice(0, 10) || pDate;
+    const cleanNote = (p.notes || '')
+      .replace(/\s*•?\s*Includes single-purchase freight:\s*PKR\s*[0-9,]+(?:\.[0-9]+)?/gi, '')
+      .trim();
+
+    setEditingPurchase(p);
+    setPurchaseDate(pDate);
+    setSupplierId(p.supplier_id || '');
+    setPaymentMethod(p.payment_method || 'cash');
+    setPaymentStatus(p.payment_status || 'paid');
+    setAmountPaid(Number(p.amount_paid || 0));
+    setSingleFreightCost(Number(p.freight_cost || 0));
+    setFreightPaymentStatus(p.freight_payment_status === 'unpaid' ? 'unpaid' : 'paid');
+    setFreightPaymentMethod(p.freight_payment_method || 'cash');
+    setFreightPaymentDate(fDate);
+    setNotes(cleanNote);
+    setItems(
+      (p.items || []).map(it => ({
+        ...it,
+        quantity: Number(it.quantity || 0),
+        unit_cost: Number(it.unit_cost || 0),
+        subtotal: Number(it.subtotal || Number(it.quantity || 0) * Number(it.unit_cost || 0)),
+      }))
+    );
+    setSubmitError(null);
+    setIsModalOpen(true);
+  };
 
   const handleAddItemRow = () => {
     setItems(prev => [
@@ -112,6 +165,7 @@ export const PurchasesModule: React.FC = () => {
         const rm = rawMaterials.find(m => m.id === value);
         if (rm) {
           item.item_type = 'raw_material';
+          item.product_id = undefined;
           item.product_or_material_name = rm.name;
           item.unit = rm.unit;
           item.unit_cost = rm.cost_per_unit;
@@ -123,14 +177,15 @@ export const PurchasesModule: React.FC = () => {
         const prod = products.find(p => p.id === value);
         if (prod) {
           item.item_type = 'finished_product';
+          item.raw_material_id = undefined;
           item.product_or_material_name = prod.name;
           item.unit = prod.base_unit || prod.unit;
           item.unit_cost = prod.cost_price;
         }
       }
 
-      if (field === 'quantity' || field === 'unit_cost') {
-        item.subtotal = Number(item.quantity || 0) * Number(item.unit_cost || 0);
+      if (field === 'quantity' || field === 'unit_cost' || field === 'raw_material_id' || field === 'product_id') {
+        item.subtotal = Number((Number(item.quantity || 0) * Number(item.unit_cost || 0)).toFixed(2));
       }
 
       updated[index] = item;
@@ -158,34 +213,41 @@ export const PurchasesModule: React.FC = () => {
       return;
     }
 
-    const finalPaid = paymentStatus === 'paid' ? totalMaterialAmount : amountPaid;
+    const finalPaid = paymentStatus === 'paid' ? totalMaterialAmount : (paymentStatus === 'unpaid' ? 0 : amountPaid);
+    const cleanNote = (notes || '')
+      .replace(/\s*•?\s*Includes single-purchase freight:\s*PKR\s*[0-9,]+(?:\.[0-9]+)?/gi, '')
+      .trim();
+
+    const purchasePayload: Omit<Purchase, 'id' | 'invoice_number' | 'created_at'> = {
+      supplier_id: supplierId,
+      supplier_name: selectedSupplier ? selectedSupplier.name : 'Unknown Supplier',
+      date: formatSelectedDateToIso(purchaseDate),
+      items,
+      total_amount: totalMaterialAmount,
+      amount_paid: finalPaid,
+      payment_status: paymentStatus,
+      payment_method: paymentMethod,
+      freight_cost: singleFreightCost > 0 ? singleFreightCost : undefined,
+      freight_payment_status: singleFreightCost > 0 ? freightPaymentStatus : undefined,
+      freight_payment_method: singleFreightCost > 0 ? freightPaymentMethod : undefined,
+      freight_amount_paid: singleFreightCost > 0 ? (freightPaymentStatus === 'paid' ? singleFreightCost : 0) : undefined,
+      freight_payment_date: singleFreightCost > 0 ? formatSelectedDateToIso(freightPaymentDate || purchaseDate) : undefined,
+      notes: singleFreightCost > 0 
+        ? `${cleanNote ? `${cleanNote} • ` : ''}Includes single-purchase freight: PKR ${singleFreightCost}`
+        : cleanNote,
+    };
 
     setIsSubmitting(true);
     setSubmitError(null);
     try {
-      await createPurchase({
-        supplier_id: supplierId,
-        supplier_name: selectedSupplier ? selectedSupplier.name : 'Unknown Supplier',
-        date: formatSelectedDateToIso(purchaseDate),
-        items,
-        total_amount: totalMaterialAmount,
-        amount_paid: finalPaid,
-        payment_status: paymentStatus,
-        payment_method: paymentMethod,
-        freight_cost: singleFreightCost > 0 ? singleFreightCost : undefined,
-        notes: singleFreightCost > 0 
-          ? `${notes ? `${notes} • ` : ''}Includes single-purchase freight: PKR ${singleFreightCost}`
-          : notes,
-      });
+      if (editingPurchase) {
+        await updatePurchase(editingPurchase.id, purchasePayload);
+      } else {
+        await createPurchase(purchasePayload);
+      }
 
       setIsModalOpen(false);
-      // Reset form
-      setSupplierId('');
-      setPurchaseDate(getTodayDateString());
-      setItems([{ item_type: 'raw_material', raw_material_id: '', product_or_material_name: '', quantity: 1, unit_cost: 0, subtotal: 0 }]);
-      setAmountPaid(0);
-      setSingleFreightCost(0);
-      setNotes('');
+      resetPurchaseForm();
     } catch (err: any) {
       setSubmitError(err?.message || 'Failed to record purchase. Please check your connection.');
     } finally {
@@ -317,8 +379,7 @@ export const PurchasesModule: React.FC = () => {
 
             <button
               onClick={() => {
-                setPurchaseDate(getTodayDateString());
-                setSingleFreightCost(0);
+                resetPurchaseForm();
                 setIsModalOpen(true);
               }}
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold transition-all"
@@ -541,6 +602,17 @@ export const PurchasesModule: React.FC = () => {
                               <span>View</span>
                             </button>
 
+                            {canManagePurchases && !p.trip_id && !p.trip_number && (
+                              <button
+                                onClick={() => handleOpenEditPurchase(p)}
+                                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 text-xs font-semibold transition-colors"
+                                title={`Edit PO ${p.invoice_number} (Items, Freight & Payments)`}
+                              >
+                                <Edit2 className="w-3.5 h-3.5 text-amber-400" />
+                                <span>Edit</span>
+                              </button>
+                            )}
+
                             {isOwner ? (
                               <button
                                 onClick={() => {
@@ -683,12 +755,15 @@ export const PurchasesModule: React.FC = () => {
         </div>
       )}
 
-      {/* Record Single Purchase Modal */}
+      {/* Record / Edit Single Purchase Modal */}
       <Modal
         isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        title="Record Single Supplier Purchase"
-        subtitle="Log material arrival from a single vendor with direct freight."
+        onClose={() => {
+          setIsModalOpen(false);
+          setEditingPurchase(null);
+        }}
+        title={editingPurchase ? `Edit Supplier Purchase: ${editingPurchase.invoice_number}` : 'Record Single Supplier Purchase'}
+        subtitle={editingPurchase ? 'Update items, landed freight, and payment outflows (automatically reverses & reapplies ledger vouchers).' : 'Log material arrival from a single vendor with direct freight.'}
         maxWidth="2xl"
       >
         <form onSubmit={handleCreatePurchase} className="space-y-4">
@@ -839,28 +914,83 @@ export const PurchasesModule: React.FC = () => {
           </div>
 
           {/* Freight / Additional Transportation Cost */}
-          <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 space-y-2">
+          <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 space-y-2.5">
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold text-slate-300 uppercase flex items-center gap-1.5">
                 <Truck className="w-3.5 h-3.5 text-amber-400" />
                 <span>Freight / Additional Transport Cost (PKR)</span>
               </label>
-              <span className="text-[10px] text-slate-400">Direct delivery for this vendor</span>
+              <span className="text-[10px] text-slate-400">Paid to transporter (not added to vendor payable)</span>
             </div>
             <input
               type="number"
               min="0"
               step="any"
-              placeholder="0 (e.g. 1500 for direct transport)"
+              placeholder="0 (e.g. 900 for direct transport)"
               value={singleFreightCost || ''}
-              onChange={(e) => setSingleFreightCost(parseFloat(e.target.value) || 0)}
+              onChange={(e) => {
+                const nextVal = parseFloat(e.target.value) || 0;
+                setSingleFreightCost(nextVal);
+                if (nextVal > 0 && !freightPaymentDate) {
+                  setFreightPaymentDate(purchaseDate);
+                }
+              }}
               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-amber-400 font-mono focus:outline-none focus:border-amber-400 placeholder-slate-600"
             />
             {singleFreightCost > 0 && (
-              <div className="p-2 rounded-lg bg-amber-950/30 border border-amber-800/40 text-[11px] text-amber-300 flex items-center justify-between font-mono">
-                <span>Material: {formatPKR(totalMaterialAmount)} + Freight: {formatPKR(singleFreightCost)}</span>
-                <span>Total Landed: <strong className="text-white">{formatPKR(totalLandedAmount)}</strong></span>
-              </div>
+              <>
+                <div className="p-2 rounded-lg bg-amber-950/30 border border-amber-800/40 text-[11px] text-amber-300 flex items-center justify-between font-mono">
+                  <span>Material: {formatPKR(totalMaterialAmount)} + Freight: {formatPKR(singleFreightCost)}</span>
+                  <span>Total Landed: <strong className="text-white">{formatPKR(totalLandedAmount)}</strong></span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                  <div>
+                    <label className="block text-[10px] font-bold text-amber-300/90 uppercase mb-1">
+                      Freight Payment Status
+                    </label>
+                    <select
+                      value={freightPaymentStatus}
+                      onChange={(e) => setFreightPaymentStatus(e.target.value as 'paid' | 'unpaid')}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white"
+                    >
+                      <option value="paid">Paid to Transporter</option>
+                      <option value="unpaid">Unpaid (Pay Later)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-amber-300/90 uppercase mb-1">
+                      Freight Payment Method
+                    </label>
+                    <select
+                      value={freightPaymentMethod}
+                      onChange={(e) => setFreightPaymentMethod(e.target.value as PaymentMethod)}
+                      disabled={freightPaymentStatus === 'unpaid'}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white disabled:opacity-50"
+                    >
+                      <option value="cash">Cash (Default)</option>
+                      <option value="bank">Bank Transfer (HBL)</option>
+                      <option value="jazzcash">JazzCash</option>
+                      <option value="easypaisa">EasyPaisa</option>
+                      <option value="cheque">Cheque</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-amber-300/90 uppercase mb-1">
+                      Freight Payment Date
+                    </label>
+                    <input
+                      type="date"
+                      value={freightPaymentDate || purchaseDate}
+                      onChange={(e) => setFreightPaymentDate(e.target.value)}
+                      disabled={freightPaymentStatus === 'unpaid'}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white disabled:opacity-50"
+                    />
+                  </div>
+                </div>
+              </>
             )}
           </div>
 
@@ -944,7 +1074,11 @@ export const PurchasesModule: React.FC = () => {
               className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60"
             >
               {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              <span>{isSubmitting ? 'Recording Purchase...' : 'Confirm Purchase & Receive Stock'}</span>
+              <span>
+                {isSubmitting
+                  ? (editingPurchase ? 'Updating Purchase...' : 'Recording Purchase...')
+                  : (editingPurchase ? 'Save Changes & Reapply Ledger' : 'Confirm Purchase & Receive Stock')}
+              </span>
             </button>
           </div>
         </form>
