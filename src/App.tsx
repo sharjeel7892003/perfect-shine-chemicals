@@ -29,7 +29,7 @@ const MainLayout: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [reportsInitialTab, setReportsInitialTab] = useState<ReportType>('sales');
   const [reportsInitialRMId, setReportsInitialRMId] = useState<string | undefined>();
-  const { isLoadingCloudData, cloudSyncError, isOnline, refreshCloudData } = useApp();
+  const { isLoadingCloudData, cloudSyncError, isOnline, refreshCloudData, allowStaffBatchSheetAccess } = useApp();
   const { 
     currentUser, 
     isAuthenticated, 
@@ -79,7 +79,13 @@ const MainLayout: React.FC = () => {
           />
         ) : <DashboardView onNavigate={setActiveTab} />;
       case 'formulations':
-        return canAccessFormulations ? <FormulationsModule /> : <DashboardView onNavigate={setActiveTab} />;
+        return (isOwner || (currentUser.role === 'general_staff' && allowStaffBatchSheetAccess)) ? (
+          <FormulationsModule
+            onStartProductionBatchFromCalculator={() => {
+              setActiveTab('production');
+            }}
+          />
+        ) : <DashboardView onNavigate={setActiveTab} />;
       case 'production':
         return canAccessProduction ? (
           <ProductionModule 

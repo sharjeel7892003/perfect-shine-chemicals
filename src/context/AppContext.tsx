@@ -118,6 +118,12 @@ interface AppContextType {
 
   // Formulation (BOM) Actions
   saveFormulation: (formulation: Omit<ProductFormulation, 'id' | 'created_at'> & { id?: string }) => Promise<ProductFormulation>;
+  lockFormulation: (id: string, user: Profile) => Promise<ProductFormulation>;
+  unlockFormulationToNewVersion: (id: string, user: Profile) => Promise<ProductFormulation>;
+  allowStaffBatchSheetAccess: boolean;
+  updateStaffBatchSheetAccess: (allowed: boolean, user: Profile) => Promise<void>;
+  pendingCalculatorBatch: { productId: string; targetQuantity: number; formulationVersion?: number } | null;
+  setPendingCalculatorBatch: React.Dispatch<React.SetStateAction<{ productId: string; targetQuantity: number; formulationVersion?: number } | null>>;
   deleteOrArchiveFormulation: (id: string, user: Profile) => Promise<{ action: 'deleted' | 'archived'; message: string }>;
   unarchiveFormulation: (id: string) => Promise<void>;
 
@@ -314,6 +320,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [products, setProducts] = useState<Product[]>([]);
   const [rawMaterials, setRawMaterials] = useState<RawMaterial[]>([]);
   const [formulations, setFormulations] = useState<ProductFormulation[]>([]);
+  const [allowStaffBatchSheetAccess, setAllowStaffBatchSheetAccess] = useState<boolean>(false);
+  const [pendingCalculatorBatch, setPendingCalculatorBatch] = useState<{ productId: string; targetQuantity: number; formulationVersion?: number } | null>(null);
   const [productionBatches, setProductionBatches] = useState<ProductionBatch[]>([]);
   const [rawMaterialMovements, setRawMaterialMovements] = useState<RawMaterialMovement[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -508,6 +516,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setProducts(cloudData.products || []);
         setRawMaterials(cloudData.rawMaterials || []);
         setFormulations(cloudData.formulations || []);
+        setAllowStaffBatchSheetAccess(Boolean((cloudData as any).allowStaffBatchSheetAccess));
         setProductionBatches(cloudData.productionBatches || []);
         setRawMaterialMovements(cloudData.rawMaterialMovements || []);
         setCustomers(reconciledCustomers);
@@ -824,20 +833,155 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const saveFormulation = async (formData: Omit<ProductFormulation, 'id' | 'created_at'> & { id?: string }): Promise<ProductFormulation> => {
     if (formData.id) {
       const existing = formulations.find(f => f.id === formData.id);
-      const updated = { ...(existing || {}), ...formData, id: formData.id, updated_at: new Date().toISOString() } as ProductFormulation;
-      const saved = await supabaseService.upsertFormulation(updated);
+      if (existing?.is_locked) {
+        throw new Error(`Formulation v${existing.version || 1} is locked and cannot be edited directly. Unlock it to create a new version first.`);
+      }
+      const updated: ProductFormulation = {
+        ...(existing || {}),
+        ...formData,
+        id: formData.id,
+        version: existing?.version || formData.version || 1,
+        is_locked: Boolean(existing?.is_locked),
+        updated_at: new Date().toISOString()
+      } as ProductFormulation;
+      const saved = await supabaseService.upsertFormulation(updated, allowStaffBatchSheetAccess);
       setFormulations(prev => prev.map(f => f.id === formData.id ? saved : f));
       return saved;
     } else {
+      // Determine version number if prior versions exist for this product
+      const priorVersions = formulations
+        .filter(f => f.product_id === formData.product_id)
+        .map(f => Number(f.version || 1));
+      const nextVersion = formData.version || (priorVersions.length > 0 ? Math.max(...priorVersions) + 1 : 1);
+
       const newForm: ProductFormulation = {
         ...formData,
         id: generateId(),
+        version: nextVersion,
+        is_locked: Boolean(formData.is_locked),
         created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       };
-      const saved = await supabaseService.upsertFormulation(newForm);
+      const saved = await supabaseService.upsertFormulation(newForm, allowStaffBatchSheetAccess);
       setFormulations(prev => [saved, ...prev]);
       return saved;
     }
+  };
+
+  const lockFormulation = async (id: string, user: Profile): Promise<ProductFormulation> => {
+    if (user.role !== 'owner') {
+      throw new Error('Only Admin can lock formulations.');
+    }
+    const target = formulations.find(f => f.id === id);
+    if (!target) throw new Error('Formulation not found.');
+    if (target.is_locked) return target;
+
+    const now = new Date().toISOString();
+    const lockedFormulation: ProductFormulation = {
+      ...target,
+      version: Number(target.version || 1),
+      is_locked: true,
+      locked_at: now,
+      locked_by: user.name || 'Admin',
+      updated_at: now,
+    };
+
+    const saved = await supabaseService.upsertFormulation(lockedFormulation, allowStaffBatchSheetAccess);
+    setFormulations(prev => prev.map(f => f.id === id ? saved : f));
+    return saved;
+  };
+
+  const unlockFormulationToNewVersion = async (id: string, user: Profile): Promise<ProductFormulation> => {
+    if (user.role !== 'owner') {
+      throw new Error('Only Admin can unlock a formulation to create a new version.');
+    }
+    const target = formulations.find(f => f.id === id);
+    if (!target) throw new Error('Formulation not found.');
+
+    const now = new Date().toISOString();
+    const allProductVersions = formulations
+      .filter(f => f.product_id === target.product_id)
+      .map(f => Number(f.version || 1));
+    const currentVersion = Number(target.version || 1);
+    const nextVersion = Math.max(currentVersion, ...allProductVersions) + 1;
+
+    // 1. Create an immutable snapshot of the locked version (v1, v2...) to keep in version_history
+    const snapshotId = `${target.id}_v${currentVersion}`;
+    const lockedSnapshot = {
+      id: snapshotId,
+      version: currentVersion,
+      is_locked: true,
+      locked_at: target.locked_at || now,
+      locked_by: target.locked_by || user.name || 'Admin',
+      created_at: target.created_at,
+      updated_at: target.updated_at || now,
+      base_unit: target.base_unit,
+      yield_quantity: target.yield_quantity || 1.0,
+      instructions: target.instructions || '',
+      items: (target.items || []).map(it => ({
+        raw_material_id: it.raw_material_id,
+        raw_material_name: it.raw_material_name,
+        quantity: Number(it.quantity),
+        unit: it.unit,
+        cost_per_unit: Number(it.cost_per_unit || 0),
+      })),
+    };
+
+    const existingSnapshots = Array.isArray(target.version_history) ? target.version_history : [];
+    const updatedVersionHistory = [
+      lockedSnapshot,
+      ...existingSnapshots.filter(s => Number(s.version) !== currentVersion),
+    ];
+
+    // 2. Advance the formulation record to the new unlocked version (v2, v3...) with full version_history preserved in Supabase
+    const newVersionFormulation: ProductFormulation = {
+      ...target,
+      version: nextVersion,
+      is_locked: false,
+      locked_at: undefined,
+      locked_by: undefined,
+      parent_formulation_id: snapshotId,
+      is_historical_version: false,
+      is_archived: false,
+      version_history: updatedVersionHistory,
+      updated_at: now,
+    };
+
+    const savedNewVersion = await supabaseService.upsertFormulation(newVersionFormulation, allowStaffBatchSheetAccess);
+
+    // 3. Also expose the locked snapshot as a historical formulation entry in state for the Version History viewer
+    const historicalEntry: ProductFormulation = {
+      id: snapshotId,
+      product_id: target.product_id,
+      product_name: target.product_name,
+      base_unit: target.base_unit,
+      yield_quantity: target.yield_quantity || 1.0,
+      items: lockedSnapshot.items,
+      instructions: lockedSnapshot.instructions,
+      version: currentVersion,
+      is_locked: true,
+      locked_at: lockedSnapshot.locked_at,
+      locked_by: lockedSnapshot.locked_by,
+      is_historical_version: true,
+      is_archived: true,
+      created_at: target.created_at,
+      updated_at: lockedSnapshot.updated_at,
+    };
+
+    setFormulations(prev => [
+      ...prev.map(f => f.id === target.id ? savedNewVersion : f),
+      historicalEntry,
+    ]);
+
+    return savedNewVersion;
+  };
+
+  const updateStaffBatchSheetAccess = async (allowed: boolean, user: Profile): Promise<void> => {
+    if (user.role !== 'owner') {
+      throw new Error('Only Admin can change formulation access settings.');
+    }
+    setAllowStaffBatchSheetAccess(Boolean(allowed));
+    await supabaseService.updateStaffBatchSheetAccessInSupabase(Boolean(allowed), formulations, user.name);
   };
 
   const deleteOrArchiveFormulation = async (id: string, user: Profile): Promise<{ action: 'deleted' | 'archived'; message: string }> => {
@@ -899,7 +1043,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const targetProduct = products.find(p => p.id === params.productId);
     if (!targetProduct) return { success: false, message: 'Target product not found' };
 
-    const formulation = formulations.find(f => f.product_id === targetProduct.id && !f.is_archived);
+    const formulation = formulations
+      .filter(f => f.product_id === targetProduct.id && !f.is_archived && !f.is_historical_version)
+      .sort((a, b) => Number(b.version || 1) - Number(a.version || 1))[0];
     if (!formulation) return { success: false, message: `No active formulation (BOM) found for ${targetProduct.name}` };
 
     const actualProduced = Number(params.quantityProduced);
@@ -1052,6 +1198,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       batch_number: finalBatchNumber,
       product_id: targetProduct.id,
       product_name: targetProduct.name,
+      formulation_id: formulation.id,
+      formulation_version: Number(formulation.version || 1),
       formulation_batch_size: nominalScale,
       quantity_produced: actualProduced,
       base_unit: (targetProduct.base_unit || 'liter') as any,
@@ -4830,6 +4978,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         unarchiveRawMaterial,
         adjustRawMaterialStock,
         saveFormulation,
+        lockFormulation,
+        unlockFormulationToNewVersion,
+        allowStaffBatchSheetAccess,
+        updateStaffBatchSheetAccess,
+        pendingCalculatorBatch,
+        setPendingCalculatorBatch,
         deleteOrArchiveFormulation,
         unarchiveFormulation,
         recordProductionBatch,

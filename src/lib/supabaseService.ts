@@ -139,7 +139,27 @@ export const supabaseService = {
       const profMap = new Map((profRes.data || []).map((pr: any) => [pr.id, pr.name]));
 
       // 1. Normalized Formulations (extract formulation_items into .items, enriched with correct rm.unit and active landed cost_per_unit)
-      const normalizedFormulations = (formRes.data || []).map((f: any) => {
+      let allowStaffBatchSheetAccess = false;
+      const normalizedFormulations: ProductFormulation[] = [];
+
+      for (const f of (formRes.data || []) as any[]) {
+        let rawInstructions = typeof f.instructions === 'string' ? f.instructions : '';
+        let bomMeta: any = null;
+        if (rawInstructions.includes('<!--BOM_META:')) {
+          try {
+            const match = rawInstructions.match(/<!--BOM_META:(.*?)-->/);
+            if (match && match[1]) {
+              bomMeta = JSON.parse(match[1]);
+              if (bomMeta.allow_staff_batch_sheets === true) {
+                allowStaffBatchSheetAccess = true;
+              }
+            }
+          } catch (e) {
+            console.warn('Failed to parse BOM_META from formulation instructions:', e);
+          }
+          rawInstructions = rawInstructions.replace(/\s*<!--BOM_META:.*?-->/g, '').trim();
+        }
+
         const rawItems = (f.formulation_items && f.formulation_items.length > 0) ? f.formulation_items : (f.items || []);
         const enrichedItems = rawItems.map((item: any) => {
           const linkedRm = item.raw_material_id ? rmMap.get(item.raw_material_id) : null;
@@ -150,17 +170,109 @@ export const supabaseService = {
             cost_per_unit: linkedRm ? Number(linkedRm.cost_per_unit || 0) : Number(item.cost_per_unit || 0),
           };
         });
-        return {
+
+        const version = f.version !== undefined && f.version !== null
+          ? Number(f.version)
+          : (bomMeta?.version !== undefined ? Number(bomMeta.version) : 1);
+        const is_locked = f.is_locked !== undefined && f.is_locked !== null
+          ? Boolean(f.is_locked)
+          : Boolean(bomMeta?.is_locked);
+        const locked_at = f.locked_at || bomMeta?.locked_at || undefined;
+        const locked_by = f.locked_by || bomMeta?.locked_by || undefined;
+        const parent_formulation_id = f.parent_formulation_id || bomMeta?.parent_formulation_id || undefined;
+        const is_historical_version = f.is_historical_version !== undefined && f.is_historical_version !== null
+          ? Boolean(f.is_historical_version)
+          : Boolean(bomMeta?.is_historical_version);
+        const is_archived = f.is_archived !== undefined && f.is_archived !== null
+          ? Boolean(f.is_archived)
+          : Boolean(bomMeta?.is_archived || is_historical_version);
+        const resolvedProductId = f.product_id || bomMeta?.product_id || '';
+        const versionHistory: any[] = Array.isArray(bomMeta?.version_history) ? bomMeta.version_history : [];
+
+        normalizedFormulations.push({
           ...f,
+          product_id: resolvedProductId,
+          instructions: rawInstructions,
+          version: version > 0 ? version : 1,
+          is_locked,
+          locked_at,
+          locked_by,
+          parent_formulation_id,
+          is_historical_version,
+          version_history: versionHistory,
+          is_archived,
           items: enrichedItems
+        });
+
+        // Also unpack embedded version_history snapshots into historical formulation entries for full version history browsing
+        for (const snap of versionHistory) {
+          if (snap && snap.version) {
+            const snapId = snap.id || `${f.id}_v${snap.version}`;
+            const alreadySeparateRow = (formRes.data || []).some((row: any) => row.id === snapId);
+            if (!alreadySeparateRow) {
+              normalizedFormulations.push({
+                id: snapId,
+                product_id: resolvedProductId,
+                product_name: f.product_name,
+                base_unit: snap.base_unit || f.base_unit || 'kg',
+                yield_quantity: Number(snap.yield_quantity || f.yield_quantity || 1),
+                instructions: snap.instructions || '',
+                version: Number(snap.version),
+                is_locked: true,
+                locked_at: snap.locked_at,
+                locked_by: snap.locked_by,
+                is_historical_version: true,
+                is_archived: true,
+                created_at: snap.created_at || f.created_at,
+                updated_at: snap.updated_at || snap.locked_at || f.updated_at,
+                items: (snap.items || []).map((it: any) => {
+                  const linkedRm = it.raw_material_id ? rmMap.get(it.raw_material_id) : null;
+                  return {
+                    ...it,
+                    raw_material_name: linkedRm ? linkedRm.name : (it.raw_material_name || 'Raw Material'),
+                    unit: linkedRm ? linkedRm.unit : (it.unit || 'kg'),
+                    cost_per_unit: Number(it.cost_per_unit || (linkedRm ? linkedRm.cost_per_unit : 0)),
+                  };
+                }),
+              });
+            }
+          }
+        }
+      }
+
+      // 2. Normalized Batches (extract formulation_id and formulation_version from columns or <!--BATCH_META:...--> in notes)
+      const normalizedBatches = (batchRes.data || []).map((b: any) => {
+        let rawNotes = typeof b.notes === 'string' ? b.notes : '';
+        let batchMeta: any = null;
+        if (rawNotes.includes('<!--BATCH_META:')) {
+          try {
+            const match = rawNotes.match(/<!--BATCH_META:(.*?)-->/);
+            if (match && match[1]) {
+              batchMeta = JSON.parse(match[1]);
+            }
+          } catch (e) {
+            console.warn('Failed to parse BATCH_META from batch notes:', e);
+          }
+          rawNotes = rawNotes.replace(/\s*<!--BATCH_META:.*?-->/g, '').trim();
+        }
+
+        const formulation_id = b.formulation_id || batchMeta?.formulation_id || undefined;
+        const formulation_version = b.formulation_version !== undefined && b.formulation_version !== null
+          ? Number(b.formulation_version)
+          : (batchMeta?.formulation_version !== undefined ? Number(batchMeta.formulation_version) : 1);
+        const formulation_batch_size = b.formulation_batch_size !== undefined && b.formulation_batch_size !== null
+          ? Number(b.formulation_batch_size)
+          : (batchMeta?.formulation_batch_size !== undefined ? Number(batchMeta.formulation_batch_size) : Number(b.quantity_produced || 0));
+
+        return {
+          ...b,
+          notes: rawNotes,
+          formulation_id,
+          formulation_version: formulation_version > 0 ? formulation_version : 1,
+          formulation_batch_size,
+          raw_materials_consumed: b.raw_materials_consumed || (b as any).consumed_materials || []
         };
       });
-
-      // 2. Normalized Batches
-      const normalizedBatches = (batchRes.data || []).map((b: any) => ({
-        ...b,
-        raw_materials_consumed: b.raw_materials_consumed || (b as any).consumed_materials || []
-      }));
 
       // 3. Normalized Sales (extract sale_items into .items, resolve raw_material_id if unmigrated, restore Private Label metadata)
       const normalizedSales = (salesRes.data || []).map((s: any) => {
@@ -519,6 +631,7 @@ export const supabaseService = {
         suppliers: (suppRes.data as Supplier[]) || [],
         rawMaterials: normalizedRawMaterials,
         formulations: (normalizedFormulations as ProductFormulation[]) || [],
+        allowStaffBatchSheetAccess,
         productionBatches: (normalizedBatches as ProductionBatch[]) || [],
         sales: (normalizedSales as Sale[]) || [],
         salesReturns: normalizedSalesReturns,
@@ -850,28 +963,68 @@ export const supabaseService = {
   // ============================================================================
   // PRODUCT FORMULATIONS (BOM) & FORMULATION ITEMS
   // ============================================================================
-  async upsertFormulation(formulation: ProductFormulation): Promise<ProductFormulation> {
+  async upsertFormulation(formulation: ProductFormulation, allowStaffBatchSheets?: boolean): Promise<ProductFormulation> {
     if (!isSupabaseConfigured || !supabase) return formulation;
     assertOnline();
 
     const validId = ensureUUID(formulation.id);
     formulation.id = validId;
 
-    const payload: any = {
+    const versionNum = Number(formulation.version) > 0 ? Number(formulation.version) : 1;
+    const isLocked = Boolean(formulation.is_locked);
+    const isHistorical = Boolean(formulation.is_historical_version);
+    const isArchived = Boolean(formulation.is_archived || isHistorical);
+
+    let cleanInstructions = (formulation.instructions || '').replace(/\s*<!--BOM_META:.*?-->/g, '').trim();
+    const bomMeta: Record<string, any> = {
+      product_id: formulation.product_id || undefined,
+      version: versionNum,
+      is_locked: isLocked,
+      locked_at: formulation.locked_at || undefined,
+      locked_by: formulation.locked_by || undefined,
+      parent_formulation_id: formulation.parent_formulation_id || undefined,
+      is_historical_version: isHistorical,
+      is_archived: isArchived,
+      version_history: Array.isArray(formulation.version_history) ? formulation.version_history : undefined,
+    };
+    if (allowStaffBatchSheets !== undefined) {
+      bomMeta.allow_staff_batch_sheets = Boolean(allowStaffBatchSheets);
+    }
+
+    const instructionsWithMeta = `${cleanInstructions}\n<!--BOM_META:${JSON.stringify(bomMeta)}-->`.trim();
+
+    const basePayload: any = {
       id: validId,
       product_id: isValidUUID(formulation.product_id) ? formulation.product_id : null,
       product_name: formulation.product_name,
       base_unit: formulation.base_unit || 'liter',
       yield_quantity: Number(formulation.yield_quantity || 1.0),
-      instructions: formulation.instructions || '',
-      is_archived: Boolean(formulation.is_archived),
+      instructions: instructionsWithMeta,
       updated_at: new Date().toISOString()
     };
 
-    let { error: formError } = await supabase.from('product_formulations').upsert(payload);
-    if (formError && formError.message?.includes('is_archived')) {
-      delete payload.is_archived;
-      const retry = await supabase.from('product_formulations').upsert(payload);
+    const fullPayload: any = {
+      ...basePayload,
+      version: versionNum,
+      is_locked: isLocked,
+      locked_at: formulation.locked_at || null,
+      locked_by: formulation.locked_by || null,
+      parent_formulation_id: (formulation.parent_formulation_id && isValidUUID(formulation.parent_formulation_id))
+        ? formulation.parent_formulation_id
+        : null,
+      is_historical_version: isHistorical,
+      is_archived: isArchived,
+    };
+
+    let { error: formError } = await supabase.from('product_formulations').upsert(fullPayload);
+    if (formError && (
+      formError.code === 'PGRST204' ||
+      formError.code === '42703' ||
+      formError.message?.includes('is_archived') ||
+      formError.message?.includes('version') ||
+      formError.message?.includes('is_locked')
+    )) {
+      const retry = await supabase.from('product_formulations').upsert(basePayload);
       formError = retry.error;
     }
     if (formError) {
@@ -910,7 +1063,54 @@ export const supabaseService = {
       }
     }
 
-    return formulation;
+    return {
+      ...formulation,
+      instructions: cleanInstructions,
+      version: versionNum,
+      is_locked: isLocked,
+      is_historical_version: isHistorical,
+      is_archived: isArchived,
+    };
+  },
+
+  async updateStaffBatchSheetAccessInSupabase(allowed: boolean, formulationsList: ProductFormulation[], updatedBy?: string): Promise<void> {
+    if (!isSupabaseConfigured || !supabase) return;
+    assertOnline();
+
+    // 1. Try updating app_settings table if migrated
+    try {
+      await supabase.from('app_settings').upsert({
+        key: 'formulation_access',
+        value: { allow_production_staff_batch_sheets: Boolean(allowed) },
+        updated_at: new Date().toISOString(),
+        updated_by: updatedBy || 'Admin'
+      });
+    } catch (e) {
+      // Ignore if app_settings table is not yet created
+    }
+
+    // 2. Also persist in BOM_META on formulations in Supabase so it works even before DDL migration
+    for (const f of formulationsList) {
+      if (f.is_historical_version) continue;
+      let cleanInstructions = (f.instructions || '').replace(/\s*<!--BOM_META:.*?-->/g, '').trim();
+      const bomMeta = {
+        product_id: f.product_id || undefined,
+        version: Number(f.version || 1),
+        is_locked: Boolean(f.is_locked),
+        locked_at: f.locked_at || undefined,
+        locked_by: f.locked_by || undefined,
+        parent_formulation_id: f.parent_formulation_id || undefined,
+        is_historical_version: Boolean(f.is_historical_version),
+        is_archived: Boolean(f.is_archived || f.is_historical_version),
+        version_history: Array.isArray(f.version_history) ? f.version_history : undefined,
+        allow_staff_batch_sheets: Boolean(allowed),
+      };
+      const instructionsWithMeta = `${cleanInstructions}\n<!--BOM_META:${JSON.stringify(bomMeta)}-->`.trim();
+      await supabase
+        .from('product_formulations')
+        .update({ instructions: instructionsWithMeta })
+        .eq('id', f.id);
+    }
   },
 
   async deleteFormulation(id: string): Promise<void> {
@@ -938,6 +1138,16 @@ export const supabaseService = {
     const validId = ensureUUID(batch.id);
     batch.id = validId;
     const consumed = batch.raw_materials_consumed || (batch as any).consumed_materials || [];
+    const formVersion = Number(batch.formulation_version) > 0 ? Number(batch.formulation_version) : 1;
+    const formBatchSize = Number(batch.formulation_batch_size || batch.quantity_produced || 0);
+
+    let cleanNotes = (batch.notes || '').replace(/\s*<!--BATCH_META:.*?-->/g, '').trim();
+    const batchMeta = {
+      formulation_id: batch.formulation_id || undefined,
+      formulation_version: formVersion,
+      formulation_batch_size: formBatchSize,
+    };
+    const notesWithMeta = `${cleanNotes}\n<!--BATCH_META:${JSON.stringify(batchMeta)}-->`.trim();
 
     const basePayload = {
       id: validId,
@@ -951,16 +1161,24 @@ export const supabaseService = {
       total_batch_cost: Number(batch.total_batch_cost || 0),
       cost_per_base_unit: Number(batch.cost_per_base_unit || 0),
       raw_materials_consumed: consumed,
-      notes: batch.notes || ''
+      notes: notesWithMeta
     };
 
-    const payloadWithFormulationSize = {
+    const fullPayload = {
       ...basePayload,
-      formulation_batch_size: Number(batch.formulation_batch_size || batch.quantity_produced || 0)
+      formulation_id: (batch.formulation_id && isValidUUID(batch.formulation_id)) ? batch.formulation_id : null,
+      formulation_version: formVersion,
+      formulation_batch_size: formBatchSize
     };
 
-    let { data, error } = await supabase.from('production_batches').upsert(payloadWithFormulationSize).select().single();
-    if (error && (error.message?.includes('formulation_batch_size') || error.code === '42703')) {
+    let { data, error } = await supabase.from('production_batches').upsert(fullPayload).select().single();
+    if (error && (
+      error.code === '42703' ||
+      error.code === 'PGRST204' ||
+      error.message?.includes('formulation_batch_size') ||
+      error.message?.includes('formulation_id') ||
+      error.message?.includes('formulation_version')
+    )) {
       const retry = await supabase.from('production_batches').upsert(basePayload).select().single();
       data = retry.data;
       error = retry.error;
@@ -970,7 +1188,13 @@ export const supabaseService = {
       console.error('Supabase upsertProductionBatch error:', error);
       throw new Error(`Production batch database write failed: ${error.message}`);
     }
-    return (data as ProductionBatch) || batch;
+    return {
+      ...((data as ProductionBatch) || batch),
+      notes: cleanNotes,
+      formulation_id: batch.formulation_id,
+      formulation_version: formVersion,
+      formulation_batch_size: formBatchSize,
+    };
   },
 
   async deleteProductionBatch(id: string): Promise<void> {

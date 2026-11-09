@@ -62,9 +62,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
     canAccessRawMaterials,
   } = useAuth();
   
-  const { lowStockProducts, lowStockRawMaterials, resetToDefaultData } = useApp();
+  const { lowStockProducts, lowStockRawMaterials, allowStaffBatchSheetAccess, resetToDefaultData } = useApp();
 
   const totalLowAlerts = lowStockProducts.length + lowStockRawMaterials.length;
+
+  const canViewFormulationsModule = isOwner || (currentUser?.role === 'general_staff' && allowStaffBatchSheetAccess);
 
   const navItems = [
     { id: 'dashboard' as ActiveTab, label: 'Dashboard', icon: LayoutDashboard, visible: true },
@@ -86,7 +88,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
       badge: lowStockRawMaterials.length > 0 ? `${lowStockRawMaterials.length} Low` : undefined,
       badgeColor: 'amber' as const
     },
-    { id: 'formulations' as ActiveTab, label: 'Formulations (BOM)', icon: Layers, visible: canAccessFormulations },
+    { id: 'formulations' as ActiveTab, label: isOwner ? 'Formulations & Calculator' : 'Batch Calculator (BOM)', icon: Layers, visible: canViewFormulationsModule },
     { id: 'production' as ActiveTab, label: 'Production Batches', icon: Factory, visible: canAccessProduction },
     { id: 'packing' as ActiveTab, label: 'Bottling & Packing', icon: Boxes, visible: canAccessProduction },
     { id: 'purchases' as ActiveTab, label: 'Purchases (Raw/Goods)', icon: Truck, visible: canManagePurchases },

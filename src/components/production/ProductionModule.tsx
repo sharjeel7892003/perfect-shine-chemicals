@@ -41,7 +41,9 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
     formulations, 
     productionBatches, 
     recordProductionBatch,
-    deleteProductionBatch 
+    deleteProductionBatch,
+    pendingCalculatorBatch,
+    setPendingCalculatorBatch,
   } = useApp();
   
   const { currentUser, isOwner, canRecordProduction, canDeleteData } = useAuth();
@@ -64,11 +66,38 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
   const [productionDate, setProductionDate] = useState(getTodayDateString());
   const [notes, setNotes] = useState('');
 
+  // Helper to get active latest formulation for a product
+  const getActiveFormulationForProduct = (prodId: string): ProductFormulation | undefined => {
+    return formulations
+      .filter(f => f.product_id === prodId && !f.is_archived && !f.is_historical_version)
+      .sort((a, b) => Number(b.version || 1) - Number(a.version || 1))[0];
+  };
+
+  // Auto-open Record Production Batch modal if navigated from Batch Calculator ("Start Production Batch")
+  useEffect(() => {
+    if (pendingCalculatorBatch && products.length > 0) {
+      const targetProd = products.find(p => p.id === pendingCalculatorBatch.productId);
+      if (targetProd) {
+        setSelectedProductId(targetProd.id);
+        const qty = Number(pendingCalculatorBatch.targetQuantity) > 0 ? Number(pendingCalculatorBatch.targetQuantity) : 1;
+        setFormulationBatchSize(qty);
+        setQuantityProduced(qty);
+        setBatchNumber(getNextBatchNumberForProduct(targetProd.id, productionBatches, targetProd));
+        setProductionDate(getTodayDateString());
+        setNotes(`Pre-filled from Batch Calculator (Formulation v${pendingCalculatorBatch.formulationVersion || 1})`);
+        setSubmitError(null);
+        setActiveView('batches');
+        setIsRecordModalOpen(true);
+      }
+      setPendingCalculatorBatch(null);
+    }
+  }, [pendingCalculatorBatch, products, productionBatches, setPendingCalculatorBatch]);
+
   // Auto-sync initial product and batch number
   useEffect(() => {
     if (!selectedProductId && products.length > 0) {
       setSelectedProductId(products[0].id);
-      const form = formulations.find(f => f.product_id === products[0].id);
+      const form = getActiveFormulationForProduct(products[0].id);
       const initialYield = form?.yield_quantity && form.yield_quantity > 0 ? form.yield_quantity : 1;
       setFormulationBatchSize(initialYield);
       setQuantityProduced(initialYield);
@@ -80,7 +109,7 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
   const openRecordModal = () => {
     const prodId = selectedProductId || (products[0] ? products[0].id : '');
     const prod = products.find(p => p.id === prodId) || products[0];
-    const form = formulations.find(f => f.product_id === prodId);
+    const form = getActiveFormulationForProduct(prodId);
     setSelectedProductId(prodId);
     const initialYield = form?.yield_quantity && form.yield_quantity > 0 ? form.yield_quantity : 1;
     setFormulationBatchSize(initialYield);
@@ -98,7 +127,7 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
   const handleProductChange = (newProductId: string) => {
     setSelectedProductId(newProductId);
     const targetProd = products.find(p => p.id === newProductId);
-    const form = formulations.find(f => f.product_id === newProductId);
+    const form = getActiveFormulationForProduct(newProductId);
     const initialYield = form?.yield_quantity && form.yield_quantity > 0 ? form.yield_quantity : 1;
     setFormulationBatchSize(initialYield);
     setQuantityProduced(initialYield);
@@ -109,7 +138,7 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
   };
 
   const selectedProduct = products.find(p => p.id === selectedProductId);
-  const selectedFormulation = formulations.find(f => f.product_id === selectedProductId);
+  const selectedFormulation = getActiveFormulationForProduct(selectedProductId);
   const baseUnit = selectedProduct?.base_unit || selectedProduct?.unit || 'liter';
 
   // Calculate live raw materials needed for recipe run scale with exact decimal precision
@@ -311,7 +340,14 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
                   <tr key={batch.id} className="hover:bg-slate-800/40 transition-colors">
                     <td className="py-3 px-3 font-mono font-bold text-emerald-400">{batch.batch_number}</td>
                     <td className="py-3 px-3 text-slate-400">{formatDate(batch.date)}</td>
-                    <td className="py-3 px-3 font-bold text-white">{batch.product_name}</td>
+                    <td className="py-3 px-3 font-bold text-white">
+                      <div className="flex items-center gap-1.5">
+                        <span>{batch.product_name}</span>
+                        <span className="px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 font-mono text-[10px]">
+                          v{batch.formulation_version || 1}
+                        </span>
+                      </div>
+                    </td>
                     <td className="py-3 px-3 text-right font-mono font-bold text-white">
                       +{formatQuantity(batch.quantity_produced)} <span className="text-[11px] font-normal text-slate-400">{batch.base_unit}</span>
                       {batch.formulation_batch_size !== undefined && Number(batch.formulation_batch_size) !== Number(batch.quantity_produced) && (
@@ -697,8 +733,13 @@ export const ProductionModule: React.FC<ProductionModuleProps> = ({ onNavigateTo
           <div className="space-y-4 text-xs">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950/60 p-3 rounded-xl border border-slate-800">
               <div>
-                <span className="text-slate-400 text-[10px] uppercase font-semibold">Product</span>
-                <p className="font-bold text-white">{selectedBatchDetails.product_name}</p>
+                <span className="text-slate-400 text-[10px] uppercase font-semibold">Product & Formula</span>
+                <p className="font-bold text-white flex items-center gap-1.5">
+                  <span>{selectedBatchDetails.product_name}</span>
+                  <span className="px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono text-[10px]">
+                    v{selectedBatchDetails.formulation_version || 1}
+                  </span>
+                </p>
                 {selectedBatchDetails.formulation_batch_size !== undefined && (
                   <p className="text-[10px] text-slate-400 font-mono mt-0.5">
                     Recipe Scale: {formatQuantity(selectedBatchDetails.formulation_batch_size)} {selectedBatchDetails.base_unit}

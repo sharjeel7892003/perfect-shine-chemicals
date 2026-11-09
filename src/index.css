@@ -78,7 +78,8 @@
   #printable-commission-drilldown, #printable-commission-drilldown *,
   #printable-fixed-assets-report, #printable-fixed-assets-report *,
   #printable-asset-register, #printable-asset-register *,
-  #printable-partner-capital, #printable-partner-capital * {
+  #printable-partner-capital, #printable-partner-capital *,
+  #printable-batch-sheet, #printable-batch-sheet * {
     visibility: visible;
   }
 
@@ -92,7 +93,8 @@
   #printable-commission-drilldown,
   #printable-fixed-assets-report,
   #printable-asset-register,
-  #printable-partner-capital {
+  #printable-partner-capital,
+  #printable-batch-sheet {
     visibility: visible !important;
     position: static !important;
     display: block !important;

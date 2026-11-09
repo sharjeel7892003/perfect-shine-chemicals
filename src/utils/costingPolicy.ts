@@ -137,8 +137,8 @@ export function findLatestPurchaseRate(
     const allocatedFreight = item.allocated_freight !== undefined
       ? Number(item.allocated_freight || 0)
       : (item.landed_cost !== undefined && qty > 0
-          ? Math.max(0, (Number(item.landed_cost) - unitCost) * qty)
-          : 0);
+        ? Math.max(0, (Number(item.landed_cost) - unitCost) * qty)
+        : 0);
 
     totalQty += qty;
     totalLandedAmount += materialCost + allocatedFreight;
@@ -147,8 +147,8 @@ export function findLatestPurchaseRate(
   const landed = totalQty > 0
     ? totalLandedAmount / totalQty
     : (matchingItems[0].landed_cost !== undefined
-        ? Number(matchingItems[0].landed_cost)
-        : Number(matchingItems[0].unit_cost || 0));
+      ? Number(matchingItems[0].landed_cost)
+      : Number(matchingItems[0].unit_cost || 0));
 
   return Number(Number(landed).toFixed(2));
 }

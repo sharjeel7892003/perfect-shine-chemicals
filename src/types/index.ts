@@ -90,6 +90,20 @@ export interface FormulationItem {
   cost_per_unit?: number;
 }
 
+export interface FormulationVersionSnapshot {
+  id: string;
+  version: number;
+  is_locked: boolean;
+  locked_at?: string;
+  locked_by?: string;
+  created_at?: string;
+  updated_at?: string;
+  base_unit: BaseUnit;
+  yield_quantity: number;
+  instructions?: string;
+  items: FormulationItem[];
+}
+
 export interface ProductFormulation {
   id: string;
   product_id: string;
@@ -98,6 +112,13 @@ export interface ProductFormulation {
   yield_quantity: number; // Standard 1 (base unit)
   items: FormulationItem[];
   instructions?: string;
+  version?: number; // Version number (v1, v2, v3...) - defaults to 1
+  is_locked?: boolean; // True when locked by Admin
+  locked_at?: string; // ISO timestamp when locked
+  locked_by?: string; // Admin name who locked it
+  parent_formulation_id?: string; // Previous locked formulation version ID
+  is_historical_version?: boolean; // True when superseded by a newer version
+  version_history?: FormulationVersionSnapshot[]; // Preserved locked prior versions (v1, v2...)
   is_archived?: boolean;
   created_at?: string;
   updated_at?: string;
@@ -118,6 +139,8 @@ export interface ProductionBatch {
   batch_number: string; // e.g. "BATCH-202609-001"
   product_id: string;
   product_name: string;
+  formulation_id?: string; // Formulation record used
+  formulation_version?: number; // Formulation version used (v1, v2...)
   formulation_batch_size?: number; // Theoretical recipe scale (e.g. 1.000 kg) determining raw material consumption
   quantity_produced: number; // Actual physical output produced (e.g. 1.500 kg)
   base_unit: BaseUnit;
