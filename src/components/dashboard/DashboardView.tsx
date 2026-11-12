@@ -22,7 +22,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
 import { formatPKR, formatDate } from '../../utils/formatters';
-import { calculateFinancialMetrics } from '../../utils/financialEngine';
+import { calculateFinancialMetrics, getSaleRevenueBreakdown } from '../../utils/financialEngine';
 import { Badge } from '../common/Badge';
 import { ActiveTab } from '../layout/Sidebar';
 
@@ -66,27 +66,31 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   });
 
   const totalSalesRevenue = overallFinancials.totalSalesRevenue;
+  const totalProductSalesRevenue = overallFinancials.productSalesRevenue;
+  const totalServiceChargesRevenue = overallFinancials.serviceChargesRevenue;
   const totalReceivables = overallFinancials.totalUncollectedCredit;
   const totalPayables = overallFinancials.supplierSummaries.reduce((acc, s) => acc + s.outstandingPayable, 0);
 
   const totalCOGS = sales.reduce((acc, s) => 
     acc + (s.items || []).reduce((iAcc, item) => iAcc + ((item.unit_cost || 0) * (item.quantity || 0)), 0), 0
   );
-  const grossProfit = totalSalesRevenue - totalCOGS;
+  // Gross Profit is strictly Product-Only (Net Profit = Gross Profit + Service Charges Income - Operating Expenses)
+  const grossProfit = Number((totalProductSalesRevenue - totalCOGS).toFixed(2));
   const totalExpensesAmount = expenses
     .filter(e => !(e as any).is_archived && !(e as any).is_deleted)
     .reduce((acc, e) => acc + Number(e.amount || 0), 0);
-  const netProfit = grossProfit - totalExpensesAmount;
+  const netProfit = Number((grossProfit + totalServiceChargesRevenue - totalExpensesAmount).toFixed(2));
 
   // This month metrics using local calendar bounds
   const currentMonthKey = thisMonthOverheads?.monthKey || new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0');
   const thisMonthSales = sales.filter(s => s.date && s.date.slice(0, 7) === currentMonthKey);
-  const thisMonthRevenue = thisMonthSales.reduce((acc, s) => acc + (s.total_amount || 0), 0);
+  const thisMonthProductRevenue = thisMonthSales.reduce((acc, s) => acc + getSaleRevenueBreakdown(s).netProductSales, 0);
+  const thisMonthServiceCharges = thisMonthSales.reduce((acc, s) => acc + getSaleRevenueBreakdown(s).netServiceCharges, 0);
   const thisMonthCOGS = thisMonthSales.reduce((acc, s) => 
     acc + (s.items || []).reduce((iAcc, item) => iAcc + ((item.unit_cost || 0) * (item.quantity || 0)), 0), 0
   );
-  const thisMonthGrossProfit = thisMonthRevenue - thisMonthCOGS;
-  const thisMonthNetProfit = thisMonthGrossProfit - thisMonthExpenses;
+  const thisMonthGrossProfit = Number((thisMonthProductRevenue - thisMonthCOGS).toFixed(2));
+  const thisMonthNetProfit = Number((thisMonthGrossProfit + thisMonthServiceCharges - thisMonthExpenses).toFixed(2));
 
   const combinedFactoryValuation = totalProductsValuation + totalRawMaterialsValuation;
 
@@ -153,9 +157,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             </div>
           </div>
           <p className="text-2xl font-black text-white mt-3">{formatPKR(totalSalesRevenue)}</p>
-          <div className="flex items-center justify-between text-xs text-slate-400 mt-2">
-            <span>{sales.length} orders billed</span>
-            <span className="text-emerald-400 font-medium">Base stock auto-deducted</span>
+          <div className="flex items-center justify-between text-[11px] text-slate-400 mt-2">
+            <span>Prod: <strong className="text-emerald-400 font-mono">{formatPKR(totalProductSalesRevenue)}</strong></span>
+            <span>Charges: <strong className="text-amber-300 font-mono">{formatPKR(totalServiceChargesRevenue)}</strong></span>
           </div>
         </div>
 

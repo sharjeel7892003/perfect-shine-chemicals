@@ -1,18 +1,20 @@
 import React, { useState } from 'react';
-import { Sale } from '../../types';
+import { Sale, InvoiceCharge } from '../../types';
 import { formatPKR, formatDate } from '../../utils/formatters';
-import { Printer, X, Trash2, Award, TrendingUp } from 'lucide-react';
+import { Printer, X, Trash2, Award, TrendingUp, Edit3 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { printElement } from '../../utils/printHelper';
 import { InvoiceProfitModal } from './InvoiceProfitModal';
+import { getEffectiveSaleCharges, getSaleProductSubtotal, getSaleServiceChargesTotal } from '../../utils/financialEngine';
 
 interface InvoiceModalProps {
   sale: Sale | null;
   onClose: () => void;
   onDelete?: () => void;
+  onEdit?: () => void;
 }
 
-export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDelete }) => {
+export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDelete, onEdit }) => {
   const { allUsers } = useAuth();
   const [showProfitModal, setShowProfitModal] = useState<boolean>(false);
   if (!sale) return null;
@@ -34,8 +36,7 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDel
   const isPrivateLabel = Boolean(
     sale.invoice_type === 'private_label' || 
     sale.is_private_label || 
-    sale.items.some(i => i.is_private_label) ||
-    (sale.notes && sale.notes.includes('<!--PL_DATA:'))
+    sale.items.some(i => i.is_private_label)
   );
 
   // Extract client brand name if private label
@@ -47,20 +48,19 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDel
     return '';
   })();
 
-  // Calculate bottles and labour
-  const totalBottles = sale.labour_bottle_qty !== undefined
-    ? Number(sale.labour_bottle_qty)
-    : sale.items.reduce((sum, it) => sum + Number(it.bottle_qty || it.quantity || 0), 0);
+  // Unified Charge Lines (includes automatic Private Label Labour + any Additional Charges)
+  const effectiveCharges: InvoiceCharge[] = getEffectiveSaleCharges(sale);
+  const productsSubtotal = getSaleProductSubtotal(sale);
+  const serviceChargesTotal = getSaleServiceChargesTotal(sale);
 
-  const labourRate = sale.labour_rate_per_bottle !== undefined
-    ? Number(sale.labour_rate_per_bottle)
-    : 3.5;
-
-  const labourAmount = sale.labour_total_amount !== undefined
-    ? Number(sale.labour_total_amount)
-    : Number((totalBottles * labourRate).toFixed(2));
-
-  const productsSubtotal = sale.items.reduce((sum, it) => sum + Number(it.subtotal || 0), 0);
+  const formatChargeTitle = (ch: InvoiceCharge) => {
+    const baseType = (ch.type || 'Service').replace(/\/Delivery/i, '');
+    const typeLabel = baseType.toLowerCase().includes('charge') ? baseType : `${baseType} Charges`;
+    if (!ch.description || ch.description.trim().toLowerCase() === ch.type.trim().toLowerCase() || ch.description.trim().toLowerCase() === typeLabel.toLowerCase()) {
+      return typeLabel;
+    }
+    return typeLabel;
+  };
 
   const advanceApplied = Number(sale.advance_amount_applied || 0);
   const remainingBalance = Math.max(0, sale.total_amount - sale.amount_paid);
@@ -91,7 +91,18 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDel
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            {onEdit && (
+              <button
+                type="button"
+                onClick={onEdit}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 font-bold text-xs transition-colors"
+                title="Edit invoice charges, discount, or payment details"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                <span>Edit Invoice / Charges</span>
+              </button>
+            )}
             {onDelete && (
               <button
                 onClick={onDelete}
@@ -266,26 +277,37 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDel
                     );
                   })}
 
-                  {/* AUTOMATIC LABOUR LINE */}
-                  <tr className="bg-amber-50/80 border-t-2 border-slate-300 font-semibold text-slate-900">
-                    <td className="py-2.5 px-3 font-bold text-slate-900">
-                      <div className="flex items-center gap-1.5">
-                        <span>Labour</span>
-                        <span className="text-[10px] text-slate-600 font-normal">(Packing & Bottling)</span>
-                      </div>
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono text-slate-800">
-                      {formatPKR(labourRate)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono text-slate-400">-</td>
-                    <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-900">
-                      {totalBottles}
-                    </td>
-                    <td className="py-2.5 px-3 text-center font-mono text-slate-400">-</td>
-                    <td className="py-2.5 px-3 text-right font-mono font-black text-amber-950">
-                      {formatPKR(labourAmount)}
-                    </td>
-                  </tr>
+                  {/* UNIFIED ADDITIONAL / SERVICE CHARGES LINES */}
+                  {effectiveCharges.map((ch, cIdx) => {
+                    const isQtyRate = ch.calc_mode === 'qty_rate' && Number(ch.quantity || 0) > 0 && Number(ch.rate || 0) > 0;
+                    const chargeTitle = formatChargeTitle(ch);
+                    const showSubDesc = ch.description && ch.description.trim().toLowerCase() !== chargeTitle.toLowerCase() && ch.description.trim().toLowerCase() !== ch.type.trim().toLowerCase();
+                    return (
+                      <tr key={ch.id || `ch-${cIdx}`} className="bg-amber-50/80 border-t border-slate-300 font-semibold text-slate-900">
+                        <td className="py-2.5 px-3 font-bold text-slate-900">
+                          <div>
+                            <span>{chargeTitle}</span>
+                            {showSubDesc && (
+                              <span className="block text-[10px] text-slate-600 font-normal">
+                                {ch.description}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono text-slate-800">
+                          {isQtyRate ? formatPKR(Number(ch.rate || 0)) : 'Fixed'}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-mono text-slate-400">-</td>
+                        <td className="py-2.5 px-3 text-center font-mono font-bold text-slate-900">
+                          {isQtyRate ? Number(ch.quantity || 0) : '-'}
+                        </td>
+                        <td className="py-2.5 px-3 text-center font-mono text-slate-400">-</td>
+                        <td className="py-2.5 px-3 text-right font-mono font-black text-amber-950">
+                          {formatPKR(Number(ch.amount || 0))}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -325,6 +347,40 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDel
                       <td className="py-2.5 px-2 text-right font-mono font-bold">{formatPKR(item.subtotal)}</td>
                     </tr>
                   ))}
+
+                  {/* ADDITIONAL SERVICE CHARGES LINES (AFTER PRODUCTS) */}
+                  {effectiveCharges.map((ch, cIdx) => {
+                    const isQtyRate = ch.calc_mode === 'qty_rate' && Number(ch.quantity || 0) > 0 && Number(ch.rate || 0) > 0;
+                    const chargeTitle = formatChargeTitle(ch);
+                    const showSubDesc = ch.description && ch.description.trim().toLowerCase() !== chargeTitle.toLowerCase() && ch.description.trim().toLowerCase() !== ch.type.trim().toLowerCase();
+                    return (
+                      <tr key={ch.id || `ch-${cIdx}`} className="bg-amber-50/70 border-t border-slate-200 font-semibold text-slate-900">
+                        <td className="py-2.5 px-2 text-amber-700 font-mono text-[10px]">CHG</td>
+                        <td className="py-2.5 px-2 font-bold text-slate-900">
+                          <div>
+                            <span>{chargeTitle}</span>
+                            {showSubDesc && (
+                              <span className="block text-[11px] text-slate-600 font-normal">
+                                {ch.description}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-2 text-center font-mono font-bold text-slate-800">
+                          {isQtyRate ? Number(ch.quantity || 0) : '-'}
+                        </td>
+                        <td className="py-2.5 px-2 text-center font-mono text-slate-500 text-[11px]">
+                          {isQtyRate ? `${Number(ch.quantity || 0)} × PKR ${Number(ch.rate || 0)}` : 'Service Charge'}
+                        </td>
+                        <td className="py-2.5 px-2 text-right font-mono text-slate-800">
+                          {isQtyRate ? formatPKR(Number(ch.rate || 0)) : 'Fixed'}
+                        </td>
+                        <td className="py-2.5 px-2 text-right font-mono font-bold text-slate-900">
+                          {formatPKR(Number(ch.amount || 0))}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -332,17 +388,32 @@ export const InvoiceModal: React.FC<InvoiceModalProps> = ({ sale, onClose, onDel
 
           {/* Calculation Summary */}
           <div className="flex justify-end pt-4 border-t-2 border-slate-200">
-            <div className="w-72 space-y-1.5 text-xs">
-              {isPrivateLabel && (
+            <div className="w-80 space-y-1.5 text-xs">
+              {effectiveCharges.length > 0 && (
                 <>
                   <div className="flex justify-between text-slate-600">
                     <span>Products Subtotal:</span>
                     <span className="font-mono font-semibold">{formatPKR(productsSubtotal)}</span>
                   </div>
-                  <div className="flex justify-between text-slate-600">
-                    <span>Packing Labour ({totalBottles} bottles):</span>
-                    <span className="font-mono font-semibold">{formatPKR(labourAmount)}</span>
-                  </div>
+                  {effectiveCharges.map((ch, idx) => {
+                    const isQtyRate = ch.calc_mode === 'qty_rate' && Number(ch.quantity || 0) > 0 && Number(ch.rate || 0) > 0;
+                    const chargeTitle = formatChargeTitle(ch);
+                    return (
+                      <div key={ch.id || `sum-ch-${idx}`} className="flex justify-between text-slate-700">
+                        <span>
+                          {chargeTitle}
+                          {isQtyRate ? ` (${Number(ch.quantity)} × ${Number(ch.rate)})` : ''}:
+                        </span>
+                        <span className="font-mono font-semibold">{formatPKR(Number(ch.amount || 0))}</span>
+                      </div>
+                    );
+                  })}
+                  {effectiveCharges.length > 1 && (
+                    <div className="flex justify-between text-slate-600 border-t border-slate-200 pt-1">
+                      <span>Total Service Charges:</span>
+                      <span className="font-mono font-semibold">{formatPKR(serviceChargesTotal)}</span>
+                    </div>
+                  )}
                 </>
               )}
               <div className="flex justify-between text-slate-600 font-medium">

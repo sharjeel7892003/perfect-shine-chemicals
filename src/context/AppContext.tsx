@@ -36,7 +36,8 @@ import {
   FixedAsset,
   FixedAssetFunding,
   Partner,
-  PartnerCapitalTransaction
+  PartnerCapitalTransaction,
+  InvoiceCharge
 } from '../types';
 import { generateInvoiceNumber, formatPKR } from '../utils/formatters';
 import { allocateTripFreight, calculateWeightedAverageLandedCost } from '../utils/freightAllocation';
@@ -61,7 +62,11 @@ import {
   calculateSupplierFinancials, 
   calculateMonthlyOverheads, 
   getLocalMonthBounds,
-  MonthlyOverheadsSummary 
+  MonthlyOverheadsSummary,
+  DEFAULT_INVOICE_CHARGE_TYPES,
+  getEffectiveSaleCharges,
+  getSaleProductSubtotal,
+  getSaleServiceChargesTotal
 } from '../utils/financialEngine';
 
 interface AppContextType {
@@ -197,7 +202,12 @@ interface AppContextType {
 
   // Transaction Actions
   createSale: (saleData: Omit<Sale, 'id' | 'invoice_number' | 'created_at'>) => Promise<Sale>;
+  updateSale: (saleId: string, updates: Partial<Sale>) => Promise<Sale>;
   deleteSaleInvoice: (saleId: string, user: Profile) => Promise<{ success: boolean; message: string }>;
+  invoiceChargeTypes: string[];
+  addInvoiceChargeType: (newType: string, userName?: string) => Promise<void>;
+  includeServiceChargesInCommission: boolean;
+  updateCommissionServiceChargesSetting: (include: boolean, userName?: string) => Promise<void>;
   processSalesReturn: (returnData: {
     sale_id: string;
     invoice_number: string;
@@ -401,6 +411,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [fixedAssets, setFixedAssets] = useState<FixedAsset[]>([]);
   const [partners, setPartners] = useState<Partner[]>([]);
   const [partnerCapitalTransactions, setPartnerCapitalTransactions] = useState<PartnerCapitalTransaction[]>([]);
+  const [invoiceChargeTypes, setInvoiceChargeTypes] = useState<string[]>(DEFAULT_INVOICE_CHARGE_TYPES);
+  const [includeServiceChargesInCommission, setIncludeServiceChargesInCommission] = useState<boolean>(false);
 
   // Cloud status states
   const [isLoadingCloudData, setIsLoadingCloudData] = useState<boolean>(true);
@@ -517,6 +529,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setRawMaterials(cloudData.rawMaterials || []);
         setFormulations(cloudData.formulations || []);
         setAllowStaffBatchSheetAccess(Boolean((cloudData as any).allowStaffBatchSheetAccess));
+        if (Array.isArray((cloudData as any).invoiceChargeTypes) && (cloudData as any).invoiceChargeTypes.length > 0) {
+          setInvoiceChargeTypes((cloudData as any).invoiceChargeTypes);
+        }
+        if ((cloudData as any).includeServiceChargesInCommission !== undefined) {
+          setIncludeServiceChargesInCommission(Boolean((cloudData as any).includeServiceChargesInCommission));
+        }
         setProductionBatches(cloudData.productionBatches || []);
         setRawMaterialMovements(cloudData.rawMaterialMovements || []);
         setCustomers(reconciledCustomers);
@@ -2200,6 +2218,168 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
         const savedPay = await supabaseService.upsertPayment(pay);
         setPayments(prev => [savedPay, ...prev]);
+      }
+    }
+
+    return savedSale;
+  };
+
+  const addInvoiceChargeType = async (newType: string, userName?: string): Promise<void> => {
+    const trimmed = newType.trim();
+    if (!trimmed) return;
+    const nextTypes = Array.from(new Set([...invoiceChargeTypes, trimmed]));
+    setInvoiceChargeTypes(nextTypes);
+    await supabaseService.updateInvoiceChargeTypesInSupabase(nextTypes, formulations, userName);
+  };
+
+  const updateCommissionServiceChargesSetting = async (include: boolean, userName?: string): Promise<void> => {
+    setIncludeServiceChargesInCommission(Boolean(include));
+    await supabaseService.updateCommissionServiceChargesSettingInSupabase(Boolean(include), formulations, userName);
+  };
+
+  const updateSale = async (saleId: string, updates: Partial<Sale>): Promise<Sale> => {
+    const existingSale = sales.find(s => s.id === saleId);
+    if (!existingSale) throw new Error('Invoice not found.');
+
+    if (isMonthClosed(existingSale.date)) {
+      throw new Error(
+        `Cannot edit invoice ${existingSale.invoice_number} because commission for month ${existingSale.date.slice(0, 7)} has been closed. Please reopen the month first.`
+      );
+    }
+
+    const nextItems = updates.items !== undefined ? updates.items : existingSale.items;
+    const nextChargesRaw = updates.charges !== undefined ? updates.charges : getEffectiveSaleCharges(existingSale);
+    const nextCharges = (nextChargesRaw || []).filter(c => c && Number(c.amount || 0) > 0);
+    const nextDiscount = updates.discount !== undefined ? Number(updates.discount || 0) : Number(existingSale.discount || 0);
+
+    const productSubtotal = Number(
+      (nextItems || []).reduce((acc, it) => acc + Number(it.subtotal || 0), 0).toFixed(2)
+    );
+    const serviceChargesTotal = Number(
+      nextCharges.reduce((acc, c) => acc + Number(c.amount || 0), 0).toFixed(2)
+    );
+    const nextSubtotal = Number((productSubtotal + serviceChargesTotal).toFixed(2));
+    const nextTotalAmount = Math.max(0, Number((nextSubtotal - nextDiscount).toFixed(2)));
+
+    // Keep Private Label labour_* fields synced if a Labour charge line exists on a Private Label invoice
+    const isPL = Boolean(
+      (updates.invoice_type ?? existingSale.invoice_type) === 'private_label' ||
+      (updates.is_private_label ?? existingSale.is_private_label)
+    );
+    const plLabourCharge = nextCharges.find(c => c.is_auto_private_label || c.type === 'Labour');
+    const nextLabourTotal = isPL ? (plLabourCharge ? Number(plLabourCharge.amount || 0) : 0) : undefined;
+    const nextLabourBottles = isPL ? (plLabourCharge?.quantity !== undefined ? Number(plLabourCharge.quantity) : existingSale.labour_bottle_qty) : undefined;
+    const nextLabourRate = isPL ? (plLabourCharge?.rate !== undefined ? Number(plLabourCharge.rate) : existingSale.labour_rate_per_bottle) : undefined;
+
+    // Resolve payment status and amount paid
+    let nextPaymentStatus = updates.payment_status ?? existingSale.payment_status;
+    let nextAmountPaid = updates.amount_paid !== undefined ? Number(updates.amount_paid) : Number(existingSale.amount_paid || 0);
+
+    if (updates.amount_paid === undefined) {
+      if (nextPaymentStatus === 'paid') {
+        nextAmountPaid = nextTotalAmount;
+      } else if (nextPaymentStatus === 'credit' || nextPaymentStatus === 'unpaid') {
+        const adv = Number(updates.advance_amount_applied ?? existingSale.advance_amount_applied ?? 0);
+        nextAmountPaid = adv > 0 ? Math.min(adv, nextTotalAmount) : 0;
+      } else if (nextAmountPaid > nextTotalAmount) {
+        nextAmountPaid = nextTotalAmount;
+      }
+    }
+
+    if (nextAmountPaid >= nextTotalAmount && nextTotalAmount > 0) {
+      nextPaymentStatus = 'paid';
+      nextAmountPaid = nextTotalAmount;
+    } else if (nextAmountPaid > 0 && nextAmountPaid < nextTotalAmount) {
+      nextPaymentStatus = 'partial';
+    } else if (nextAmountPaid <= 0) {
+      nextPaymentStatus = 'credit';
+      nextAmountPaid = 0;
+    }
+
+    const updatedSaleObj: Sale = {
+      ...existingSale,
+      ...updates,
+      id: existingSale.id,
+      invoice_number: existingSale.invoice_number,
+      items: nextItems,
+      charges: nextCharges,
+      service_charges_total: serviceChargesTotal,
+      product_subtotal: productSubtotal,
+      subtotal: nextSubtotal,
+      discount: nextDiscount,
+      total_amount: nextTotalAmount,
+      amount_paid: nextAmountPaid,
+      payment_status: nextPaymentStatus,
+      labour_total_amount: nextLabourTotal,
+      labour_bottle_qty: nextLabourBottles,
+      labour_rate_per_bottle: nextLabourRate,
+    };
+
+    const savedSale = await supabaseService.upsertSale(updatedSaleObj);
+    const nextSalesList = sales.map(s => (s.id === saleId ? savedSale : s));
+    setSales(nextSalesList);
+
+    // Reconcile linked checkout payment voucher if amount_paid changed
+    let nextPaymentsList = [...payments];
+    const linkedSalePay = payments.find(
+      p => p.related_to === 'sale' && (p.reference_id === saleId || p.reference_no === existingSale.invoice_number)
+    );
+    const advanceApplied = Number(savedSale.advance_amount_applied || 0);
+    const expectedFreshCashPaid = Math.max(0, Number((savedSale.amount_paid - advanceApplied).toFixed(2)));
+
+    if (linkedSalePay) {
+      if (expectedFreshCashPaid <= 0) {
+        await supabaseService.deletePayment(linkedSalePay.id);
+        nextPaymentsList = nextPaymentsList.filter(p => p.id !== linkedSalePay.id);
+        setPayments(nextPaymentsList);
+      } else if (
+        Math.abs(Number(linkedSalePay.amount || 0) - expectedFreshCashPaid) > 0.01 ||
+        linkedSalePay.payment_method !== savedSale.payment_method
+      ) {
+        const updatedPay: Payment = {
+          ...linkedSalePay,
+          amount: expectedFreshCashPaid,
+          payment_method: savedSale.payment_method,
+          date: savedSale.date,
+        };
+        const savedPay = await supabaseService.upsertPayment(updatedPay);
+        nextPaymentsList = nextPaymentsList.map(p => (p.id === savedPay.id ? savedPay : p));
+        setPayments(nextPaymentsList);
+      }
+    } else if (expectedFreshCashPaid > 0) {
+      const newPay: Payment = {
+        id: generateId(),
+        related_to: 'sale',
+        reference_id: savedSale.id,
+        reference_no: savedSale.invoice_number,
+        customer_id: savedSale.customer_id,
+        customer_name: savedSale.customer_name,
+        amount: expectedFreshCashPaid,
+        payment_method: savedSale.payment_method,
+        notes: `Received for invoice ${savedSale.invoice_number}`,
+        date: savedSale.date,
+        created_by: savedSale.salesperson_name,
+        created_at: new Date().toISOString(),
+      };
+      const savedPay = await supabaseService.upsertPayment(newPay);
+      nextPaymentsList = [savedPay, ...nextPaymentsList];
+      setPayments(nextPaymentsList);
+    }
+
+    // Reconcile customer receivable balance using authoritative financialEngine
+    const affectedCustomerIds = new Set<string>(
+      [existingSale.customer_id, savedSale.customer_id].filter(Boolean) as string[]
+    );
+    for (const cId of affectedCustomerIds) {
+      const cust = customers.find(c => c.id === cId);
+      if (cust) {
+        const summary = calculateCustomerFinancials(cust, nextSalesList, nextPaymentsList, salesReturns);
+        const updatedCust: Customer = {
+          ...cust,
+          current_balance: summary.outstandingReceivable,
+        };
+        await supabaseService.upsertCustomer(updatedCust);
+        setCustomers(prev => prev.map(c => (c.id === cId ? updatedCust : c)));
       }
     }
 
@@ -5014,7 +5194,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteOrArchiveSupplier,
         unarchiveSupplier,
         createSale,
+        updateSale,
         deleteSaleInvoice,
+        invoiceChargeTypes,
+        addInvoiceChargeType,
+        includeServiceChargesInCommission,
+        updateCommissionServiceChargesSetting,
         salesReturns,
         processSalesReturn,
         deleteSalesReturnRecord,

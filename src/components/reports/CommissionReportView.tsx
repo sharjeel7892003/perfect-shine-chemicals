@@ -43,6 +43,8 @@ export const CommissionReportView: React.FC = () => {
     commissionPayments, 
     products, 
     rawMaterials,
+    includeServiceChargesInCommission,
+    updateCommissionServiceChargesSetting,
     closeCommissionMonth,
     reopenCommissionMonth,
     paySalesCommission,
@@ -98,6 +100,7 @@ export const CommissionReportView: React.FC = () => {
       products,
       rawMaterials,
       includeDepreciation,
+      includeServiceCharges: includeServiceChargesInCommission,
     });
   }, [
     selectedMonth, 
@@ -109,7 +112,8 @@ export const CommissionReportView: React.FC = () => {
     existingClosure, 
     products, 
     rawMaterials, 
-    includeDepreciation
+    includeDepreciation,
+    includeServiceChargesInCommission
   ]);
 
   // Handle Close Month submission
@@ -322,27 +326,45 @@ export const CommissionReportView: React.FC = () => {
         </div>
       </div>
 
-      {/* Settings Bar (Include Depreciation Toggle & Notes) (Hidden on print) */}
-      <div className="no-print print:hidden flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-3 rounded-2xl bg-slate-900/60 border border-slate-800/80 text-xs text-slate-300">
-        <label className="flex items-center gap-2.5 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={includeDepreciation}
-            onChange={(e) => setIncludeDepreciation(e.target.checked)}
-            className="rounded border-slate-700 bg-slate-800 text-indigo-500 focus:ring-0 w-4 h-4 cursor-pointer"
-          />
-          <span className="font-semibold text-slate-200">
-            Include Depreciation in monthly expenses
-          </span>
-          <span className="text-[11px] text-slate-500 font-normal">
-            (Default: No — cash overhead only)
-          </span>
-        </label>
+      {/* Settings Bar (Include Depreciation & Include Service Charges in Commission Base) (Hidden on print) */}
+      <div className="no-print print:hidden flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-3 rounded-2xl bg-slate-900/60 border border-slate-800/80 text-xs text-slate-300 flex-wrap">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4 flex-wrap">
+          <label className="flex items-center gap-2.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={includeDepreciation}
+              onChange={(e) => setIncludeDepreciation(e.target.checked)}
+              className="rounded border-slate-700 bg-slate-800 text-indigo-500 focus:ring-0 w-4 h-4 cursor-pointer"
+            />
+            <span className="font-semibold text-slate-200">
+              Include Depreciation in monthly expenses
+            </span>
+            <span className="text-[11px] text-slate-500 font-normal">
+              (Default: No)
+            </span>
+          </label>
+
+          <label className={`flex items-center gap-2.5 select-none ${isOwner ? 'cursor-pointer' : 'opacity-60 cursor-not-allowed'}`}>
+            <input
+              type="checkbox"
+              disabled={!isOwner}
+              checked={includeServiceChargesInCommission}
+              onChange={(e) => updateCommissionServiceChargesSetting(e.target.checked)}
+              className="rounded border-slate-700 bg-slate-800 text-amber-500 focus:ring-0 w-4 h-4 cursor-pointer disabled:cursor-not-allowed"
+            />
+            <span className="font-semibold text-amber-300">
+              Include Service Charges in Commission Base
+            </span>
+            <span className="text-[11px] text-slate-500 font-normal">
+              (Default: Excluded — Product Profit Only • Admin Setting)
+            </span>
+          </label>
+        </div>
 
         <div className="text-[11px] text-slate-400 flex items-center gap-2">
           <span>Formula:</span>
           <span className="font-mono bg-slate-950/80 px-2 py-0.5 rounded border border-slate-800 text-slate-300">
-            Commission = Rate × Gross Profit × Coverage Factor
+            Commission = Rate × {includeServiceChargesInCommission ? '(Product Profit + Service Charges)' : 'Product Gross Profit'} × Coverage Factor
           </span>
         </div>
       </div>

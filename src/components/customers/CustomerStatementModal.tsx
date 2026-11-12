@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { Customer, Sale, Payment, SalesReturn } from '../../types';
 import { useApp } from '../../context/AppContext';
 import { formatPKR, formatDate, formatDateTime, getTodayDateString } from '../../utils/formatters';
+import { getEffectiveSaleCharges, getSaleServiceChargesTotal } from '../../utils/financialEngine';
 import { printElement } from '../../utils/printHelper';
 import { 
   Printer, 
@@ -97,10 +98,15 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = ({
     // Filter sales for this customer
     const custSales = sales.filter(s => s.customer_id === customer.id);
     custSales.forEach(sale => {
+      const charges = getEffectiveSaleCharges(sale);
+      const chargesTotal = getSaleServiceChargesTotal(sale);
+      const chargesText = chargesTotal > 0
+        ? ` + Charges: ${charges.map(c => `${c.type} ${formatPKR(c.amount)}`).join(', ')}`
+        : '';
       rawRows.push({
         date: sale.date,
         ref: sale.invoice_number,
-        description: `Sale Invoice (${sale.items?.length || 0} items)`,
+        description: `Sale Invoice (${sale.items?.length || 0} items${chargesText})`,
         method: sale.payment_method,
         debit: Number(sale.total_amount || 0),
         credit: 0,

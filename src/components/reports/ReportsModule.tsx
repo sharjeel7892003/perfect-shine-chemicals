@@ -39,7 +39,9 @@ import {
   calculateCustomerFinancials, 
   calculateSupplierFinancials,
   calculateMonthlyOverheads,
-  getLocalMonthBounds
+  getLocalMonthBounds,
+  getEffectiveSaleCharges,
+  getSaleRevenueBreakdown
 } from '../../utils/financialEngine';
 import { ProductionReportView } from './ProductionReportView';
 import { ProductionVolumeReportView } from './ProductionVolumeReportView';
@@ -78,6 +80,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
     salespersons = [],
     monthlyCommissionClosures = [],
     commissionPayments = [],
+    includeServiceChargesInCommission = false,
     fixedAssets = [],
     partners = [],
     partnerCapitalTransactions = [],
@@ -264,13 +267,30 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
   const totalPurchaseSpend = filteredPurchases.reduce((acc, p) => acc + p.total_amount, 0);
   const totalPurchasePaid = filteredPurchases.reduce((acc, p) => acc + p.amount_paid, 0);
 
-  // ================= 3. PROFIT & LOSS REPORT DATA =================
-  let grossBilledSales = 0;
+  // ================= 3. PROFIT & LOSS REPORT DATA (PRODUCT PROFIT + SERVICE CHARGES INCOME) =================
+  let grossBilledSales = 0; // Total invoice billed (Products + Service Charges)
+  let grossProductBilledSales = 0; // Product-only sales (net of product discount)
+  let serviceChargesIncome = 0; // Non-product service charges income (Labour, Transportation/Delivery, Packing, Other)
   let grossCOGS = 0;
+  const serviceChargesByTypeMap: Record<string, { type: string; amount: number; count: number }> = {};
   const productProfitMap: { [key: string]: { name: string; qtySold: number; revenue: number; cost: number; profit: number } } = {};
 
   filteredSales.forEach(sale => {
     grossBilledSales += sale.total_amount;
+    const revBreakdown = getSaleRevenueBreakdown(sale);
+    grossProductBilledSales += revBreakdown.netProductSales;
+    serviceChargesIncome += revBreakdown.netServiceCharges;
+
+    const saleCharges = getEffectiveSaleCharges(sale);
+    saleCharges.forEach(ch => {
+      const chType = ch.type || 'Other';
+      if (!serviceChargesByTypeMap[chType]) {
+        serviceChargesByTypeMap[chType] = { type: chType, amount: 0, count: 0 };
+      }
+      serviceChargesByTypeMap[chType].amount = Number((serviceChargesByTypeMap[chType].amount + Number(ch.amount || 0)).toFixed(2));
+      serviceChargesByTypeMap[chType].count += 1;
+    });
+
     const isPL = sale.invoice_type === 'private_label' || sale.is_private_label || sale.items.some(i => i.is_private_label);
     sale.items.forEach(item => {
       const isItemPL = Boolean(item.is_private_label || isPL);
@@ -337,7 +357,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
     });
   });
 
-  // Reversal of revenue and cost for sales returns
+  // Reversal of revenue and cost for sales returns (applies to product lines only)
   let returnRevenue = 0;
   let returnCOGS = 0;
 
@@ -366,9 +386,11 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
     });
   });
 
-  const profitRevenue = Math.max(0, grossBilledSales - returnRevenue);
-  const profitCOGS = Math.max(0, grossCOGS - returnCOGS);
-  const estimatedGrossProfit = profitRevenue - profitCOGS;
+  grossProductBilledSales = Number(grossProductBilledSales.toFixed(2));
+  serviceChargesIncome = Number(serviceChargesIncome.toFixed(2));
+  const profitRevenue = Number(Math.max(0, grossProductBilledSales - returnRevenue).toFixed(2)); // Net Product Sales
+  const profitCOGS = Number(Math.max(0, grossCOGS - returnCOGS).toFixed(2));
+  const estimatedGrossProfit = Number((profitRevenue - profitCOGS).toFixed(2)); // Product Gross Profit
   const grossMarginPercent = profitRevenue > 0 ? ((estimatedGrossProfit / profitRevenue) * 100).toFixed(1) : '0';
 
   // Filter Operating Expenses in selected timeframe (excluding archived/deleted)
@@ -413,7 +435,8 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
         closure: null,
         products,
         rawMaterials,
-        includeDepreciation: false
+        includeDepreciation: false,
+        includeServiceCharges: includeServiceChargesInCommission
       });
       totalSalesCommissionExpense += Number(mSummary.total_commission || 0);
     }
@@ -425,9 +448,10 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
     calculateDepreciationExpenseForPeriod(fixedAssets, startDate, endDate).toFixed(2)
   );
 
-  // NET PROFIT = Gross Profit - Operating Expenses - Accrued Sales Commission - Non-Cash Depreciation
-  const netProfit = Number((estimatedGrossProfit - totalOperatingExpenses - totalSalesCommissionExpense - totalDepreciationExpense).toFixed(2));
-  const netMarginPercent = profitRevenue > 0 ? ((netProfit / profitRevenue) * 100).toFixed(1) : '0';
+  // NET PROFIT = Gross Profit + Service Charges Income - Operating Expenses - Accrued Sales Commission - Non-Cash Depreciation
+  const totalCombinedTurnover = Number((profitRevenue + serviceChargesIncome).toFixed(2));
+  const netProfit = Number((estimatedGrossProfit + serviceChargesIncome - totalOperatingExpenses - totalSalesCommissionExpense - totalDepreciationExpense).toFixed(2));
+  const netMarginPercent = totalCombinedTurnover > 0 ? ((netProfit / totalCombinedTurnover) * 100).toFixed(1) : '0';
 
 
   // ================= 4. RECEIVABLES REPORT DATA (CENTRAL ENGINE) =================
@@ -763,9 +787,10 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
     } else if (activeReport === 'profit') {
       const headers = ['Accounting Component', 'Description', 'Amount (PKR)'];
       const rows = [
-        ['Operating Revenue (Net Turnover)', `Gross sales less returns (${filteredSales.length} invoices)`, profitRevenue],
-        ['Cost of Goods Sold (COGS)', 'Chemical raw materials & packaging consumed', -profitCOGS],
-        ['Gross Operating Profit', `Gross Margin: ${grossMarginPercent}%`, estimatedGrossProfit],
+        ['Product Sales Revenue (Net of Returns)', `Gross product sales less returns (${filteredSales.length} invoices)`, profitRevenue],
+        ['Cost of Goods Sold (Product COGS)', 'Chemical raw materials & packaging consumed', -profitCOGS],
+        ['Gross Profit (Products Only)', `Product Gross Margin: ${grossMarginPercent}%`, estimatedGrossProfit],
+        ['Service Charges Income', 'Non-product invoice charges (Labour, Transportation/Delivery, Packing)', serviceChargesIncome],
         ['Operating Overhead Expenses', `${filteredOperatingExpenses.length} overhead records`, -totalOperatingExpenses],
         ['Sales Commission (Accrued)', 'Accrued performance commission payouts', -totalSalesCommissionExpense],
         ['Depreciation Expense (Fixed Assets)', 'Non-cash straight-line depreciation charge', -totalDepreciationExpense],
@@ -1210,23 +1235,31 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
       {/* ================= REPORT 1: SALES REPORT ================= */}
       {activeReport === 'sales' && (
         <div className="space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-4">
             <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-400 uppercase">Net Sales Revenue</span>
+                <span className="text-xs font-semibold text-slate-400 uppercase">Product Sales</span>
                 {totalReturnsAmount > 0 && (
                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
                     Returns Deducted
                   </span>
                 )}
               </div>
-              <p className="text-xl font-black text-emerald-400 mt-1 font-mono">{formatPKR(totalSalesRevenue)}</p>
+              <p className="text-xl font-black text-emerald-400 mt-1 font-mono">{formatPKR(financialMetrics.productSalesRevenue)}</p>
               <p className="text-[11px] text-slate-500 mt-0.5">
                 {totalReturnsAmount > 0 ? (
-                  <span>Gross {formatPKR(grossBilledSales)} &bull; Returns -{formatPKR(totalReturnsAmount)}</span>
+                  <span>Gross {formatPKR(financialMetrics.grossProductSalesRevenue)} &bull; Returns -{formatPKR(totalReturnsAmount)}</span>
                 ) : (
-                  <span>{filteredSales.length} Orders Invoiced</span>
+                  <span>Net product revenue ({filteredSales.length} invoices)</span>
                 )}
+              </p>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-slate-900 border border-amber-500/25">
+              <span className="text-xs font-semibold text-amber-300 uppercase">Service Charges</span>
+              <p className="text-xl font-black text-amber-300 mt-1 font-mono">{formatPKR(financialMetrics.serviceChargesRevenue)}</p>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Total Net Sales: <span className="font-mono font-bold text-white">{formatPKR(totalSalesRevenue)}</span>
               </p>
             </div>
 
@@ -1449,13 +1482,13 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
       {activeReport === 'profit' && (
         <div className="space-y-6">
           {/* Executive P&L KPI Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
-            {/* 1. Revenue */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-8 gap-3">
+            {/* 1. Product Revenue */}
             <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
-              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">1. Net Revenue</span>
+              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">1. Product Sales</span>
               <p className="text-lg font-black text-white mt-1 font-mono">{formatPKR(profitRevenue)}</p>
               <p className="text-[10px] text-slate-500 mt-0.5">
-                {returnRevenue > 0 ? `Gross ${formatPKR(grossBilledSales)} (-${formatPKR(returnRevenue)} ret)` : `${filteredSales.length} Invoices`}
+                {returnRevenue > 0 ? `Gross ${formatPKR(grossProductBilledSales)} (-${formatPKR(returnRevenue)} ret)` : `${filteredSales.length} Invoices`}
               </p>
             </div>
 
@@ -1468,35 +1501,42 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
               </p>
             </div>
 
-            {/* 3. Gross Profit */}
+            {/* 3. Gross Profit (Product-Only) */}
             <div className="p-4 rounded-2xl bg-slate-900 border border-emerald-500/30">
               <span className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider">3. Gross Profit</span>
               <p className="text-lg font-black text-emerald-400 mt-1 font-mono">{formatPKR(estimatedGrossProfit)}</p>
-              <p className="text-[10px] text-emerald-300/80 mt-0.5">Margin: <strong>{grossMarginPercent}%</strong></p>
+              <p className="text-[10px] text-emerald-300/80 mt-0.5">Product Margin: <strong>{grossMarginPercent}%</strong></p>
             </div>
 
-            {/* 4. Operating Expenses */}
+            {/* 4. Service Charges Income */}
+            <div className="p-4 rounded-2xl bg-slate-900 border border-amber-500/30">
+              <span className="text-[10px] font-semibold text-amber-300 uppercase tracking-wider">4. Service Charges</span>
+              <p className="text-lg font-black text-amber-300 mt-1 font-mono">+ {formatPKR(serviceChargesIncome)}</p>
+              <p className="text-[10px] text-amber-300/80 mt-0.5">Labour &amp; Transport Income</p>
+            </div>
+
+            {/* 5. Operating Expenses */}
             <div className="p-4 rounded-2xl bg-slate-900 border border-rose-500/30">
-              <span className="text-[10px] font-semibold text-rose-400 uppercase tracking-wider">4. Less: Overheads</span>
+              <span className="text-[10px] font-semibold text-rose-400 uppercase tracking-wider">5. Less: Overheads</span>
               <p className="text-lg font-black text-rose-400 mt-1 font-mono">- {formatPKR(totalOperatingExpenses)}</p>
               <p className="text-[10px] text-rose-300/80 mt-0.5">{filteredOperatingExpenses.length} Expense items</p>
             </div>
 
-            {/* 5. Sales Commission (Accrued) */}
+            {/* 6. Sales Commission (Accrued) */}
             <div className="p-4 rounded-2xl bg-slate-900 border border-amber-500/30">
-              <span className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider">5. Less: Commission</span>
+              <span className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider">6. Less: Commission</span>
               <p className="text-lg font-black text-amber-400 mt-1 font-mono">- {formatPKR(totalSalesCommissionExpense)}</p>
               <p className="text-[10px] text-amber-300/80 mt-0.5">Accrued payouts</p>
             </div>
 
-            {/* 6. Depreciation (Non-Cash) */}
+            {/* 7. Depreciation (Non-Cash) */}
             <div className="p-4 rounded-2xl bg-slate-900 border border-sky-500/30">
-              <span className="text-[10px] font-semibold text-sky-400 uppercase tracking-wider">6. Less: Depreciation</span>
+              <span className="text-[10px] font-semibold text-sky-400 uppercase tracking-wider">7. Less: Depreciation</span>
               <p className="text-lg font-black text-sky-400 mt-1 font-mono">- {formatPKR(totalDepreciationExpense)}</p>
               <p className="text-[10px] text-sky-300/80 mt-0.5">Non-cash charge</p>
             </div>
 
-            {/* 7. Net Profit */}
+            {/* 8. Net Profit */}
             <div className={`p-4 rounded-2xl border ${
               netProfit >= 0 
                 ? 'bg-gradient-to-br from-emerald-950/80 to-slate-900 border-emerald-500/40' 
@@ -1505,7 +1545,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
               <span className={`text-[10px] font-bold uppercase tracking-wider ${
                 netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'
               }`}>
-                7. Net Profit (Owner)
+                8. Net Profit (Owner)
               </span>
               <p className={`text-lg font-black mt-1 font-mono ${
                 netProfit >= 0 ? 'text-emerald-400' : 'text-rose-400'
@@ -1541,19 +1581,19 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
 
             {/* Structured Financial Breakdown */}
             <div className="space-y-4 text-xs">
-              {/* SECTION A: REVENUE */}
+              {/* SECTION A: PRODUCT REVENUE */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between font-bold text-white uppercase tracking-wider text-[11px] bg-slate-800/60 p-2.5 rounded-xl">
-                  <span>A. Operating Revenue (Net Sales Turnover)</span>
+                  <span>A. Product Sales Revenue (Net of Returns)</span>
                   <span className="font-mono text-emerald-400 font-black">{formatPKR(profitRevenue)}</span>
                 </div>
                 <div className="px-4 py-1.5 flex items-center justify-between text-slate-400">
-                  <span className="pl-3">• Gross Invoiced Billed Sales ({filteredSales.length} invoices)</span>
-                  <span className="font-mono text-slate-300">{formatPKR(grossBilledSales)}</span>
+                  <span className="pl-3">• Gross Invoiced Product Sales ({filteredSales.length} invoices)</span>
+                  <span className="font-mono text-slate-300">{formatPKR(grossProductBilledSales)}</span>
                 </div>
                 {returnRevenue > 0 && (
                   <div className="px-4 py-1.5 flex items-center justify-between text-amber-400">
-                    <span className="pl-3">• Less: Sales Returns & Credit Notes ({filteredReturns.length} credit notes)</span>
+                    <span className="pl-3">• Less: Sales Returns &amp; Credit Notes ({filteredReturns.length} credit notes)</span>
                     <span className="font-mono text-amber-400">- {formatPKR(returnRevenue)}</span>
                   </div>
                 )}
@@ -1566,7 +1606,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
                   <span className="font-mono text-rose-400 font-black">- {formatPKR(profitCOGS)}</span>
                 </div>
                 <div className="px-4 py-1.5 flex items-center justify-between text-slate-400">
-                  <span className="pl-3">• Direct Chemical Raw Materials & Packaging Consumed</span>
+                  <span className="pl-3">• Direct Chemical Raw Materials &amp; Packaging Consumed</span>
                   <span className="font-mono text-slate-300">- {formatPKR(grossCOGS)}</span>
                 </div>
                 {returnCOGS > 0 && (
@@ -1577,17 +1617,44 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
                 )}
               </div>
 
-              {/* GROSS PROFIT SUB-TOTAL */}
+              {/* GROSS PROFIT SUB-TOTAL (PRODUCT-ONLY) */}
               <div className="p-3 rounded-xl bg-slate-800/90 border border-slate-700/80 flex items-center justify-between font-bold">
                 <div className="flex items-center gap-2">
-                  <span className="text-white uppercase tracking-wider">Gross Operating Profit</span>
+                  <span className="text-white uppercase tracking-wider">Gross Profit (Products Only)</span>
                   <span className="text-[11px] px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                    Gross Margin: {grossMarginPercent}%
+                    Product Margin: {grossMarginPercent}%
                   </span>
                 </div>
                 <span className="text-base font-black text-emerald-400 font-mono">
                   {formatPKR(estimatedGrossProfit)}
                 </span>
+              </div>
+
+              {/* SECTION B2: SERVICE CHARGES INCOME */}
+              <div className="space-y-1.5 pt-2">
+                <div className="flex items-center justify-between font-bold text-white uppercase tracking-wider text-[11px] bg-amber-500/15 border border-amber-500/30 p-2.5 rounded-xl">
+                  <div className="flex items-center gap-2">
+                    <span>Service Charges Income</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-normal">
+                      Non-Product Charges (Actual payouts recorded in Expenses)
+                    </span>
+                  </div>
+                  <span className="font-mono text-amber-300 font-black">+ {formatPKR(serviceChargesIncome)}</span>
+                </div>
+                {Object.values(serviceChargesByTypeMap).length === 0 ? (
+                  <div className="px-4 py-2 text-slate-500 italic pl-6">
+                    No non-product service charges billed on invoices in this period (PKR 0).
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-800/40 pl-3">
+                    {Object.values(serviceChargesByTypeMap).map((sc) => (
+                      <div key={sc.type} className="px-4 py-1.5 flex items-center justify-between text-slate-300">
+                        <span className="pl-3">• {sc.type} Charges ({sc.count} invoice line{sc.count > 1 ? 's' : ''})</span>
+                        <span className="font-mono text-amber-300 font-semibold">+ {formatPKR(sc.amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* SECTION C: OPERATING OVERHEAD EXPENSES */}
@@ -1648,7 +1715,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
                   <span className="font-mono text-sky-400 font-black">- {formatPKR(totalDepreciationExpense)}</span>
                 </div>
                 <div className="px-4 py-2 flex items-center justify-between text-slate-300">
-                  <span className="pl-3">• Straight-line monthly depreciation on plant equipment & machines (omitted from Cash Book)</span>
+                  <span className="pl-3">• Straight-line monthly depreciation on plant equipment &amp; machines (omitted from Cash Book)</span>
                   <span className="font-mono text-sky-400">- {formatPKR(totalDepreciationExpense)}</span>
                 </div>
               </div>
@@ -1673,7 +1740,7 @@ export const ReportsModule: React.FC<ReportsModuleProps> = ({ initialReport = 's
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-400 mt-1">
-                    Calculated as: Total Revenue ({formatPKR(profitRevenue)}) − COGS ({formatPKR(profitCOGS)}) − Operating Overheads ({formatPKR(totalOperatingExpenses)})
+                    Calculated as: Gross Profit ({formatPKR(estimatedGrossProfit)}) + Service Charges Income ({formatPKR(serviceChargesIncome)}) − Operating Expenses ({formatPKR(totalOperatingExpenses)})
                   </p>
                 </div>
 

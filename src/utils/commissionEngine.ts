@@ -10,21 +10,24 @@ import {
   MonthlyCommissionClosure, 
   CommissionPayment 
 } from '../types';
-import { getLocalMonthBounds, isExpenseInCalendarMonth } from './financialEngine';
+import { getLocalMonthBounds, isExpenseInCalendarMonth, getSaleServiceChargesTotal } from './financialEngine';
 
 /**
- * Standardizes calculation of invoice gross profit (Revenue - COGS)
- * Exactly mirrors InvoiceProfitModal logic for consistency factory-wide.
+ * Standardizes calculation of invoice gross profit (Revenue - COGS).
+ * By default (`includeServiceCharges = false`), excludes non-product service charges
+ * so product profit and sales commissions stay strictly product-only.
+ * When Admin enables `includeServiceCharges = true`, service charges are added to the commission base.
  */
 export const calculateInvoiceProfitBreakdown = (
   sale: Sale,
   products: Product[] = [],
-  rawMaterials: RawMaterial[] = []
-): { revenue: number; cogs: number; grossProfit: number } => {
-  if (!sale) return { revenue: 0, cogs: 0, grossProfit: 0 };
+  rawMaterials: RawMaterial[] = [],
+  includeServiceCharges: boolean = false
+): { revenue: number; cogs: number; grossProfit: number; serviceCharges: number } => {
+  if (!sale) return { revenue: 0, cogs: 0, grossProfit: 0, serviceCharges: 0 };
 
   const isPL = sale.invoice_type === 'private_label' || sale.is_private_label || (sale.items || []).some(i => i.is_private_label);
-  const labourTotal = Number(sale.labour_total_amount || 0);
+  const serviceCharges = getSaleServiceChargesTotal(sale);
   const discount = Number(sale.discount || 0);
 
   // Pre-index master product formulation costs
@@ -119,13 +122,17 @@ export const calculateInvoiceProfitBreakdown = (
     }
   });
 
-  const grandRevenue = Number((productsRevenue + labourTotal - discount).toFixed(2));
-  const grossProfit = Number((grandRevenue - totalCost).toFixed(2));
+  const productNetRevenue = Math.max(0, Number((productsRevenue - discount).toFixed(2)));
+  const effectiveRevenue = includeServiceCharges
+    ? Number((productNetRevenue + serviceCharges).toFixed(2))
+    : productNetRevenue;
+  const grossProfit = Number((effectiveRevenue - totalCost).toFixed(2));
 
   return {
-    revenue: grandRevenue,
+    revenue: effectiveRevenue,
     cogs: totalCost,
-    grossProfit
+    grossProfit,
+    serviceCharges,
   };
 };
 
@@ -196,6 +203,7 @@ export interface CalculateMonthlyCommissionOptions {
   products?: Product[];
   rawMaterials?: RawMaterial[];
   includeDepreciation?: boolean;
+  includeServiceCharges?: boolean;
 }
 
 /**
@@ -222,6 +230,7 @@ export const calculateMonthlyCommissionSummary = ({
   products = [],
   rawMaterials = [],
   includeDepreciation = false,
+  includeServiceCharges = false,
 }: CalculateMonthlyCommissionOptions): MonthlyCommissionSummary => {
   // If the month is closed and a snapshot is present, return closed figures unless asked to recalculate
   const [yearStr, monthStr] = monthKey.split('-');
@@ -270,7 +279,7 @@ export const calculateMonthlyCommissionSummary = ({
   let allInvoicesGrossProfit = 0;
 
   monthSales.forEach(sale => {
-    const breakdown = calculateInvoiceProfitBreakdown(sale, products, rawMaterials);
+    const breakdown = calculateInvoiceProfitBreakdown(sale, products, rawMaterials, includeServiceCharges);
     allInvoicesRevenue += breakdown.revenue;
     allInvoicesGrossProfit += breakdown.grossProfit;
 

@@ -1,8 +1,9 @@
 import React, { useState, useMemo } from 'react';
-import { Sale, SaleItem } from '../../types';
+import { Sale, SaleItem, InvoiceCharge } from '../../types';
 import { useApp } from '../../context/AppContext';
 import { formatPKR, formatDate, formatDateTime } from '../../utils/formatters';
 import { printElement } from '../../utils/printHelper';
+import { getEffectiveSaleCharges, getSaleRevenueBreakdown } from '../../utils/financialEngine';
 import { 
   X, 
   Printer, 
@@ -52,7 +53,7 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
   onClose,
   sale,
 }) => {
-  const { products, rawMaterials, salespersons } = useApp();
+  const { products, rawMaterials, salespersons, includeServiceChargesInCommission } = useApp();
   const [isPrinting, setIsPrinting] = useState(false);
 
   const assignedSalesperson = useMemo(() => {
@@ -65,14 +66,13 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
     };
   }, [sale, salespersons]);
 
-  // Compute detailed profit and margin analysis
+  // Compute detailed profit and margin analysis (PRODUCT-ONLY Gross Profit + separate Service Charges block)
   const analysis = useMemo(() => {
     if (!sale) return null;
 
     const isPL = sale.invoice_type === 'private_label' || sale.is_private_label || sale.items.some(i => i.is_private_label);
-    const labourTotal = Number(sale.labour_total_amount || 0);
-    const labourBottles = Number(sale.labour_bottle_qty || 0);
-    const labourRate = Number(sale.labour_rate_per_bottle || 0);
+    const effectiveCharges: InvoiceCharge[] = getEffectiveSaleCharges(sale);
+    const revBreakdown = getSaleRevenueBreakdown(sale);
     const discount = Number(sale.discount || 0);
 
     // Pre-index master product formulation costs by ID and normalized name
@@ -251,28 +251,35 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
     const totalCost = lineBreakdowns.reduce((acc, it) => acc + it.totalCost, 0);
     const productsProfit = Number((productsRevenue - totalCost).toFixed(2));
 
-    // Grand totals including Labour & Discount
-    const grandRevenue = Number((productsRevenue + labourTotal - discount).toFixed(2));
+    // Product-only Net Revenue & Gross Profit (Service Charges are kept separate so product profit stays clean)
+    const grandRevenue = Number(revBreakdown.netProductSales.toFixed(2));
     const netProfit = Number((grandRevenue - totalCost).toFixed(2));
     const overallMarginPercent = grandRevenue > 0 ? Number(((netProfit / grandRevenue) * 100).toFixed(1)) : 0;
     const overallMarkupPercent = totalCost > 0 ? Number(((netProfit / totalCost) * 100).toFixed(1)) : 0;
+
+    const serviceChargesTotal = revBreakdown.serviceChargesTotal;
+    const totalInvoiceBilled = revBreakdown.totalInvoiced;
+    const commissionBaseProfit = includeServiceChargesInCommission
+      ? Number((netProfit + revBreakdown.netServiceCharges).toFixed(2))
+      : netProfit;
 
     return {
       isPrivateLabel: isPL,
       lineBreakdowns,
       productsRevenue,
-      labourTotal,
-      labourBottles,
-      labourRate,
+      effectiveCharges,
+      serviceChargesTotal,
+      totalInvoiceBilled,
       discount,
       grandRevenue,
       totalCost,
       productsProfit,
       netProfit,
+      commissionBaseProfit,
       overallMarginPercent,
       overallMarkupPercent
     };
-  }, [sale, products, rawMaterials]);
+  }, [sale, products, rawMaterials, includeServiceChargesInCommission]);
 
   if (!isOpen || !sale || !analysis) return null;
 
@@ -385,18 +392,18 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
             </div>
           </div>
 
-          {/* KPI Metrics Cards */}
+          {/* KPI Metrics Cards (Product-Only Gross Profit) */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 my-5">
-            {/* 1. Total Revenue */}
+            {/* 1. Product Revenue */}
             <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 print:bg-slate-50 print:border-slate-300">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1 print:text-slate-600">
-                <DollarSign className="w-3.5 h-3.5 text-emerald-400 print:text-emerald-700" /> Total Revenue
+                <DollarSign className="w-3.5 h-3.5 text-emerald-400 print:text-emerald-700" /> Product Revenue
               </span>
               <p className="text-lg sm:text-xl font-black font-mono text-emerald-400 mt-1 print:text-emerald-700">
                 {formatPKR(analysis.grandRevenue)}
               </p>
               <p className="text-[10px] text-slate-500 print:text-slate-500">
-                Billed to customer
+                Product sales (excl. service charges)
               </p>
             </div>
 
@@ -413,7 +420,7 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
               </p>
             </div>
 
-            {/* 3. Net Profit */}
+            {/* 3. Product Gross Profit */}
             <div className={`p-3.5 rounded-2xl border ${
               analysis.netProfit >= 0 
                 ? 'bg-emerald-950/20 border-emerald-800/40 print:bg-emerald-50 print:border-emerald-300' 
@@ -425,7 +432,7 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
                 ) : (
                   <ArrowDownRight className="w-3.5 h-3.5 text-rose-400" />
                 )}
-                Net Profit
+                Product Gross Profit
               </span>
               <p className={`text-lg sm:text-xl font-black font-mono mt-1 ${
                 analysis.netProfit >= 0 ? 'text-emerald-400 print:text-emerald-700' : 'text-rose-400 print:text-rose-700'
@@ -433,14 +440,14 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
                 {formatPKR(analysis.netProfit)}
               </p>
               <p className="text-[10px] text-slate-500 print:text-slate-500">
-                Revenue − Total Cost
+                Product Revenue − Product COGS
               </p>
             </div>
 
             {/* 4. Profit Margin */}
             <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 print:bg-slate-50 print:border-slate-300">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1 print:text-slate-600">
-                <Percent className="w-3.5 h-3.5 text-purple-400 print:text-purple-700" /> Profit Margin %
+                <Percent className="w-3.5 h-3.5 text-purple-400 print:text-purple-700" /> Product Margin %
               </span>
               <div className="flex items-baseline gap-2 mt-1">
                 <p className={`text-lg sm:text-xl font-black font-mono ${
@@ -453,7 +460,7 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
                 </span>
               </div>
               <p className="text-[10px] text-slate-500 print:text-slate-500">
-                Margin on total billed
+                Margin on product revenue
               </p>
             </div>
           </div>
@@ -476,6 +483,9 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
                     </span>
                   )}
                 </p>
+                <p className="text-[10px] text-slate-400 print:text-slate-500 mt-0.5">
+                  Commission Base: {includeServiceChargesInCommission ? 'Product Profit + Service Charges (Admin Enabled)' : 'Product Profit Only (Service Charges Excluded)'}
+                </p>
               </div>
             </div>
             {assignedSalesperson ? (
@@ -484,7 +494,7 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
                   Estimated Commission
                 </span>
                 <p className="text-base font-black font-mono text-emerald-400 print:text-emerald-700">
-                  {analysis.netProfit > 0 ? formatPKR(Number(((Number(assignedSalesperson.commission_rate ?? 10) / 100) * analysis.netProfit).toFixed(2))) : formatPKR(0)}
+                  {analysis.commissionBaseProfit > 0 ? formatPKR(Number(((Number(assignedSalesperson.commission_rate ?? 10) / 100) * analysis.commissionBaseProfit).toFixed(2))) : formatPKR(0)}
                 </p>
                 <span className="text-[10px] text-slate-500 print:text-slate-500">
                   Base estimate before monthly overhead coverage factor
@@ -594,24 +604,52 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
             </div>
           </div>
 
-          {/* Invoice Special Elements (Private Label Labour / Discount) & Final Totals Summary */}
+          {/* Invoice Special Elements (Service Charges Block & Final Product Profit Summary) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-800 print:border-t-2 print:border-slate-900">
-            {/* Left Column: Cost Basis Context & Notes */}
+            {/* Left Column: Separate Service Charges Block & Cost Basis Context */}
             <div className="space-y-3">
-              {analysis.isPrivateLabel && analysis.labourTotal > 0 && (
-                <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs print:bg-slate-50 print:border-slate-300">
+              {/* SEPARATE SERVICE CHARGES BLOCK */}
+              <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs print:bg-slate-50 print:border-slate-300">
+                <div className="flex items-center justify-between gap-2 pb-2 border-b border-amber-500/20 print:border-slate-300">
                   <div className="flex items-center gap-1.5 font-bold text-amber-300 print:text-slate-900">
                     <Award className="w-4 h-4 text-amber-400" />
-                    <span>Private Label Contract Packing Labour</span>
+                    <span>Service charges (cost recorded in Expenses)</span>
                   </div>
-                  <p className="text-slate-300 print:text-slate-700 mt-1 leading-relaxed">
-                    Billed to client: <strong className="text-white print:text-slate-900">{analysis.labourBottles} bottles</strong> filled at <strong className="text-white print:text-slate-900">PKR {analysis.labourRate}/bottle</strong> = <strong className="text-emerald-400 print:text-slate-900">{formatPKR(analysis.labourTotal)}</strong>.
-                  </p>
-                  <p className="text-[11px] text-slate-400 print:text-slate-500 mt-0.5">
-                    This labour charge is billed as pure manufacturing revenue and contributes directly to invoice gross profit.
-                  </p>
+                  <span className="font-mono font-black text-amber-300 print:text-slate-900">
+                    {formatPKR(analysis.serviceChargesTotal)}
+                  </span>
                 </div>
-              )}
+                {analysis.effectiveCharges.length > 0 ? (
+                  <div className="mt-2.5 space-y-1.5">
+                    {analysis.effectiveCharges.map((ch, idx) => {
+                      const isQtyRate = ch.calc_mode === 'qty_rate' && Number(ch.quantity || 0) > 0 && Number(ch.rate || 0) > 0;
+                      return (
+                        <div key={ch.id || `prof-ch-${idx}`} className="flex items-center justify-between text-slate-300 print:text-slate-700">
+                          <div>
+                            <span className="font-semibold text-white print:text-slate-900">{ch.type}:</span>{' '}
+                            <span>{ch.description || `${ch.type} Charges`}</span>
+                            {isQtyRate && (
+                              <span className="ml-1.5 font-mono text-[11px] text-amber-300/90 print:text-slate-600">
+                                ({Number(ch.quantity)} × PKR {Number(ch.rate)})
+                              </span>
+                            )}
+                          </div>
+                          <span className="font-mono font-bold text-amber-300 print:text-slate-900">
+                            {formatPKR(Number(ch.amount || 0))}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    <p className="text-[11px] text-slate-400 print:text-slate-500 pt-1.5 border-t border-amber-500/15 print:border-slate-200 leading-relaxed">
+                      Excluded from Product Gross Profit above so product margins remain clean. Service charges flow to P&amp;L as <strong>Service Charges Income</strong> while actual labour/transport payouts are recorded in <strong>Expenses</strong>.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-slate-400 print:text-slate-500 mt-2">
+                    No non-product service charges on this invoice (PKR 0).
+                  </p>
+                )}
+              </div>
 
               <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800 text-xs text-slate-400 print:bg-slate-50 print:border-slate-300 print:text-slate-600">
                 <span className="font-bold text-slate-300 print:text-slate-800 block mb-1">Cost Valuation Basis:</span>
@@ -619,24 +657,17 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
                   • <strong>Own Brand:</strong> True Unit Cost combining bulk formulation liquid and packaging items (bottles, caps, cartons).
                 </p>
                 <p className="leading-relaxed mt-0.5">
-                  • <strong>Private Label:</strong> Formulation liquid cost calculated per Liter multiplied by actual volume sold (Liters). Contract packing labour billed separately.
+                  • <strong>Private Label:</strong> Formulation liquid cost calculated per Liter multiplied by actual volume sold (Liters).
                 </p>
               </div>
             </div>
 
-            {/* Right Column: Invoice Grand Totals Summary Box */}
+            {/* Right Column: Product Profit & Invoice Reconciliation Summary Box */}
             <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-2 text-xs print:bg-slate-50 print:border-slate-300">
               <div className="flex justify-between text-slate-400 print:text-slate-600">
-                <span>Products Subtotal (Revenue):</span>
+                <span>Products Subtotal (Gross):</span>
                 <span className="font-mono font-bold text-slate-200 print:text-slate-900">{formatPKR(analysis.productsRevenue)}</span>
               </div>
-
-              {analysis.labourTotal > 0 && (
-                <div className="flex justify-between text-amber-300 print:text-slate-800 font-semibold">
-                  <span>Packing Labour ({analysis.labourBottles} bottles @ PKR {analysis.labourRate}):</span>
-                  <span className="font-mono text-emerald-400 print:text-emerald-700">+{formatPKR(analysis.labourTotal)}</span>
-                </div>
-              )}
 
               {analysis.discount > 0 && (
                 <div className="flex justify-between text-rose-400 print:text-rose-700 font-semibold">
@@ -645,31 +676,49 @@ export const InvoiceProfitModal: React.FC<InvoiceProfitModalProps> = ({
                 </div>
               )}
 
+              <div className="flex justify-between text-slate-300 print:text-slate-800 font-semibold">
+                <span>Net Product Revenue:</span>
+                <span className="font-mono font-bold text-emerald-400 print:text-emerald-700">{formatPKR(analysis.grandRevenue)}</span>
+              </div>
+
               <div className="flex justify-between text-slate-400 print:text-slate-600 border-t border-slate-800 print:border-slate-200 pt-1.5">
-                <span>Total Cost of Goods (COGS):</span>
+                <span>Total Cost of Goods (Product COGS):</span>
                 <span className="font-mono font-bold text-rose-400 print:text-rose-700">-{formatPKR(analysis.totalCost)}</span>
               </div>
 
               <div className="flex justify-between text-base font-black text-white print:text-slate-900 border-t-2 border-slate-700 print:border-slate-400 pt-2">
-                <span>Total Net Profit:</span>
+                <span>Product Gross Profit:</span>
                 <span className={`font-mono ${analysis.netProfit >= 0 ? 'text-emerald-400 print:text-emerald-700' : 'text-rose-400 print:text-rose-700'}`}>
                   {formatPKR(analysis.netProfit)}
                 </span>
               </div>
 
               <div className="flex justify-between text-xs font-bold pt-1">
-                <span className="text-slate-400 print:text-slate-600">Overall Profit Margin:</span>
+                <span className="text-slate-400 print:text-slate-600">Product Profit Margin:</span>
                 <span className={`font-mono ${analysis.overallMarginPercent >= 0 ? 'text-purple-400 print:text-purple-700' : 'text-rose-400 print:text-rose-700'}`}>
                   {analysis.overallMarginPercent}%
                 </span>
               </div>
 
               <div className="flex justify-between text-[11px] text-slate-500 print:text-slate-500 pt-0.5">
-                <span>Overall Markup on Cost:</span>
+                <span>Product Markup on Cost:</span>
                 <span className="font-mono font-semibold text-slate-400 print:text-slate-600">
                   {analysis.overallMarkupPercent}%
                 </span>
               </div>
+
+              {analysis.serviceChargesTotal > 0 && (
+                <div className="pt-2 mt-2 border-t border-slate-800/80 print:border-slate-300 space-y-1">
+                  <div className="flex justify-between text-[11px] text-amber-300 print:text-slate-700">
+                    <span>+ Service Charges (Separate Block):</span>
+                    <span className="font-mono font-bold">{formatPKR(analysis.serviceChargesTotal)}</span>
+                  </div>
+                  <div className="flex justify-between text-xs font-black text-slate-200 print:text-slate-900">
+                    <span>Total Invoice Billed to Customer:</span>
+                    <span className="font-mono">{formatPKR(analysis.totalInvoiceBilled)}</span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

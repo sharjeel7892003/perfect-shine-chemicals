@@ -264,6 +264,17 @@ export interface SaleItem {
   rate_per_liter?: number; // Negotiated price per liter (e.g. 170.00)
 }
 
+export interface InvoiceCharge {
+  id: string;
+  type: string; // 'Labour' | 'Transportation/Delivery' | 'Packing' | 'Other' | custom Admin type
+  description: string;
+  calc_mode: 'fixed' | 'qty_rate';
+  quantity?: number;
+  rate?: number;
+  amount: number;
+  is_auto_private_label?: boolean;
+}
+
 export interface Sale {
   id: string;
   invoice_number: string;
@@ -271,6 +282,9 @@ export interface Sale {
   customer_name: string;
   date: string;
   items: SaleItem[];
+  charges?: InvoiceCharge[]; // Unified non-product service charges (Labour, Transportation/Delivery, Packing, Other, etc.)
+  service_charges_total?: number; // Sum of charges[].amount
+  product_subtotal?: number; // Sum of items[].subtotal
   subtotal: number;
   discount: number;
   tax: number;

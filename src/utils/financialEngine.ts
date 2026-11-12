@@ -1,9 +1,133 @@
-import { Sale, Purchase, Payment, Expense, Customer, Supplier, SalesReturn } from '../types';
+import { Sale, Purchase, Payment, Expense, Customer, Supplier, SalesReturn, InvoiceCharge } from '../types';
+
+export const DEFAULT_INVOICE_CHARGE_TYPES = [
+  'Labour',
+  'Transportation/Delivery',
+  'Packing',
+  'Other',
+];
+
+/**
+ * Returns the unified list of non-product service charges for a sale invoice.
+ * Unifies explicit `sale.charges` with legacy Private Label `labour_total_amount`
+ * so both use the exact same charge-line mechanism everywhere.
+ */
+export const getEffectiveSaleCharges = (sale?: Sale | null): InvoiceCharge[] => {
+  if (!sale) return [];
+
+  if (Array.isArray(sale.charges) && sale.charges.length > 0) {
+    return sale.charges
+      .filter(c => c && Number(c.amount || 0) > 0)
+      .map(c => ({
+        id: c.id || 'charge',
+        type: c.type || 'Other',
+        description: c.description || c.type || 'Service Charge',
+        calc_mode: c.calc_mode === 'qty_rate' ? 'qty_rate' : 'fixed',
+        quantity: c.quantity !== undefined ? Number(c.quantity) : undefined,
+        rate: c.rate !== undefined ? Number(c.rate) : undefined,
+        amount: Number(Number(c.amount || 0).toFixed(2)),
+        is_auto_private_label: Boolean(c.is_auto_private_label),
+      }));
+  }
+
+  // Fallback for legacy Private Label invoices that only stored labour_* fields
+  const isPL = sale.invoice_type === 'private_label' || sale.is_private_label;
+  const legacyLabourTotal = Number(sale.labour_total_amount || 0);
+  const legacyBottles = Number(sale.labour_bottle_qty || 0);
+  const legacyRate = Number(sale.labour_rate_per_bottle || 0);
+  const computedLegacyLabour = legacyLabourTotal > 0 ? legacyLabourTotal : Number((legacyBottles * legacyRate).toFixed(2));
+
+  if (isPL && computedLegacyLabour > 0) {
+    return [
+      {
+        id: `pl_labour_${sale.id || 'auto'}`,
+        type: 'Labour',
+        description: 'Labour Charges (Packing & Bottling)',
+        calc_mode: legacyBottles > 0 && legacyRate > 0 ? 'qty_rate' : 'fixed',
+        quantity: legacyBottles > 0 ? legacyBottles : undefined,
+        rate: legacyRate > 0 ? legacyRate : undefined,
+        amount: Number(computedLegacyLabour.toFixed(2)),
+        is_auto_private_label: true,
+      },
+    ];
+  }
+
+  return [];
+};
+
+/**
+ * Sum of product/raw-material line subtotals on an invoice (excludes service charges).
+ */
+export const getSaleProductSubtotal = (sale?: Sale | null): number => {
+  if (!sale) return 0;
+  const itemsSum = (sale.items || []).reduce((acc, item) => acc + Number(item.subtotal || 0), 0);
+  return Number(itemsSum.toFixed(2));
+};
+
+/**
+ * Sum of non-product service charges on an invoice.
+ */
+export const getSaleServiceChargesTotal = (sale?: Sale | null): number => {
+  if (!sale) return 0;
+  const charges = getEffectiveSaleCharges(sale);
+  const chargesSum = charges.reduce((acc, c) => acc + Number(c.amount || 0), 0);
+  return Number(chargesSum.toFixed(2));
+};
+
+/**
+ * Authoritative breakdown of a sale invoice into Product Sales vs. Service Charges.
+ * Discount reduces product subtotal first (and any excess reduces service charges),
+ * ensuring netProductSales + netServiceCharges === total_amount.
+ */
+export const getSaleRevenueBreakdown = (sale?: Sale | null): {
+  productSubtotal: number;
+  serviceChargesTotal: number;
+  discount: number;
+  netProductSales: number;
+  netServiceCharges: number;
+  totalInvoiced: number;
+} => {
+  if (!sale) {
+    return {
+      productSubtotal: 0,
+      serviceChargesTotal: 0,
+      discount: 0,
+      netProductSales: 0,
+      netServiceCharges: 0,
+      totalInvoiced: 0,
+    };
+  }
+
+  const productSubtotal = getSaleProductSubtotal(sale);
+  const serviceChargesTotal = getSaleServiceChargesTotal(sale);
+  const discount = Number(sale.discount || 0);
+
+  const productDiscount = Math.min(productSubtotal, discount);
+  const chargeDiscount = Math.max(0, discount - productDiscount);
+
+  const netProductSales = Number(Math.max(0, productSubtotal - productDiscount).toFixed(2));
+  const netServiceCharges = Number(Math.max(0, serviceChargesTotal - chargeDiscount).toFixed(2));
+  const computedTotal = Number((netProductSales + netServiceCharges).toFixed(2));
+  const totalInvoiced = sale.total_amount !== undefined && Number(sale.total_amount) >= 0
+    ? Number(Number(sale.total_amount).toFixed(2))
+    : computedTotal;
+
+  return {
+    productSubtotal,
+    serviceChargesTotal,
+    discount,
+    netProductSales,
+    netServiceCharges,
+    totalInvoiced,
+  };
+};
 
 export interface CustomerFinancialSummary {
   customerId: string;
   customerName: string;
   totalSales: number;
+  productSales: number;
+  serviceCharges: number;
   totalReturns: number;
   salesPaidOnInvoice: number;
   directAccountPayments: number;
@@ -40,6 +164,9 @@ export interface FinancialFilterOptions {
 export interface OverallFinancialMetrics {
   totalSalesRevenue: number;
   grossSalesRevenue?: number;
+  grossProductSalesRevenue: number;
+  productSalesRevenue: number; // Net Product Sales (after product discounts & returns)
+  serviceChargesRevenue: number; // Non-product Service Charges Income (Labour, Transportation, Packing, etc.)
   totalSalesReturns?: number;
   
   // INFLOWS BREAKDOWN
@@ -102,6 +229,12 @@ export const calculateCustomerFinancials = (
   const totalSales = Number(
     custSales.reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0).toFixed(2)
   );
+  const grossProductSales = Number(
+    custSales.reduce((acc, s) => acc + getSaleRevenueBreakdown(s).netProductSales, 0).toFixed(2)
+  );
+  const serviceCharges = Number(
+    custSales.reduce((acc, s) => acc + getSaleRevenueBreakdown(s).netServiceCharges, 0).toFixed(2)
+  );
   const salesPaidOnInvoice = Number(
     custSales.reduce((acc, s) => acc + (Number(s.amount_paid) || 0), 0).toFixed(2)
   );
@@ -111,8 +244,9 @@ export const calculateCustomerFinancials = (
   const totalReturns = Number(
     custReturns.reduce((acc, r) => acc + (Number(r.total_amount) || 0), 0).toFixed(2)
   );
+  const productSales = Math.max(0, Number((grossProductSales - totalReturns).toFixed(2)));
 
-  // Net Invoiced = Total Sales - Total Returns
+  // Net Invoiced = Total Sales (products + charges) - Total Returns
   const netInvoiced = Math.max(0, Number((totalSales - totalReturns).toFixed(2)));
 
   // Get all customer payments (invoice-linked, balance settlements, and advance deposits)
@@ -173,6 +307,8 @@ export const calculateCustomerFinancials = (
     customerId: customer.id,
     customerName: customer.name,
     totalSales,
+    productSales,
+    serviceCharges,
     totalReturns,
     salesPaidOnInvoice,
     directAccountPayments,
@@ -284,6 +420,14 @@ export const calculateFinancialMetrics = (data: {
     filteredSales.reduce((acc, s) => acc + (Number(s.total_amount) || 0), 0).toFixed(2)
   );
 
+  const grossProductSalesRevenue = Number(
+    filteredSales.reduce((acc, s) => acc + getSaleRevenueBreakdown(s).netProductSales, 0).toFixed(2)
+  );
+
+  const serviceChargesRevenue = Number(
+    filteredSales.reduce((acc, s) => acc + getSaleRevenueBreakdown(s).netServiceCharges, 0).toFixed(2)
+  );
+
   // 1B. Filter Sales Returns
   const filteredReturns = salesReturns.filter(r => {
     const dateMatch = isDateInBounds(r.date, startDate, endDate);
@@ -299,7 +443,10 @@ export const calculateFinancialMetrics = (data: {
     filteredReturns.reduce((acc, r) => acc + (Number(r.total_amount) || 0), 0).toFixed(2)
   );
 
-  // Net Sales Revenue after returns
+  // Net Product Sales after returns
+  const productSalesRevenue = Math.max(0, Number((grossProductSalesRevenue - totalSalesReturns).toFixed(2)));
+
+  // Net Total Sales Revenue (Products + Service Charges - Returns)
   const totalSalesRevenue = Math.max(0, Number((grossSalesRevenue - totalSalesReturns).toFixed(2)));
 
   // 2. Filter Purchases
@@ -480,6 +627,9 @@ export const calculateFinancialMetrics = (data: {
   return {
     totalSalesRevenue,
     grossSalesRevenue,
+    grossProductSalesRevenue,
+    productSalesRevenue,
+    serviceChargesRevenue,
     totalSalesReturns,
     salesCashCollected,
     capitalInjected,

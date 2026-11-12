@@ -20,14 +20,15 @@ import {
   Loader2,
   UserCheck,
   RotateCcw,
-  TrendingUp
+  TrendingUp,
+  Edit3
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
-import { Sale, SaleItem, PaymentMethod, PaymentStatus, Product, PackSize, SalesReturn } from '../../types';
+import { Sale, SaleItem, InvoiceCharge, PaymentMethod, PaymentStatus, Product, PackSize, SalesReturn } from '../../types';
 import { formatPKR, formatDate, formatDateTime, getTodayDateString, formatSelectedDateToIso } from '../../utils/formatters';
 import { getRateDifferenceInfo, saleHasCustomRates } from '../../utils/pricing';
-import { calculateCustomerFinancials } from '../../utils/financialEngine';
+import { calculateCustomerFinancials, getEffectiveSaleCharges, getSaleProductSubtotal, getSaleServiceChargesTotal, getSaleRevenueBreakdown } from '../../utils/financialEngine';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { InvoiceModal } from './InvoiceModal';
@@ -45,7 +46,10 @@ export const SalesModule: React.FC = () => {
     salesReturns, 
     payments, 
     salespersons,
+    invoiceChargeTypes,
+    addInvoiceChargeType,
     createSale, 
+    updateSale,
     deleteSaleInvoice, 
     deleteSalesReturnRecord,
     updateSaleSalesperson,
@@ -81,11 +85,28 @@ export const SalesModule: React.FC = () => {
   const [newSalespersonId, setNewSalespersonId] = useState<string>('none');
   const [isUpdatingSalesperson, setIsUpdatingSalesperson] = useState(false);
 
+  // Edit Invoice / Charges Modal State
+  const [editingInvoiceSale, setEditingInvoiceSale] = useState<Sale | null>(null);
+  const [editInvoiceCharges, setEditInvoiceCharges] = useState<InvoiceCharge[]>([]);
+  const [editInvoiceDiscount, setEditInvoiceDiscount] = useState<number>(0);
+  const [editInvoicePaymentStatus, setEditInvoicePaymentStatus] = useState<PaymentStatus>('paid');
+  const [editInvoicePaymentMethod, setEditInvoicePaymentMethod] = useState<PaymentMethod>('cash');
+  const [editInvoiceAmountPaid, setEditInvoiceAmountPaid] = useState<number>(0);
+  const [editInvoiceNotes, setEditInvoiceNotes] = useState<string>('');
+  const [isSavingInvoiceEdit, setIsSavingInvoiceEdit] = useState<boolean>(false);
+
+  // Admin New Charge Type inline creator
+  const [showNewChargeTypeInput, setShowNewChargeTypeInput] = useState<boolean>(false);
+  const [newChargeTypeName, setNewChargeTypeName] = useState<string>('');
+  const [isAddingChargeType, setIsAddingChargeType] = useState<boolean>(false);
+
   // POS State
   const [saleDate, setSaleDate] = useState<string>(getTodayDateString());
   const [selectedSalespersonId, setSelectedSalespersonId] = useState<string>('none');
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
   const [cartItems, setCartItems] = useState<SaleItem[]>([]);
+  const [invoiceCharges, setInvoiceCharges] = useState<InvoiceCharge[]>([]);
+  const [plAutoLabourRemoved, setPlAutoLabourRemoved] = useState<boolean>(false);
   const [discountAmount, setDiscountAmount] = useState<number>(0);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>('paid');
@@ -114,14 +135,57 @@ export const SalesModule: React.FC = () => {
   const totalBottles = isPrivateLabelSale 
     ? cartItems.reduce((acc, item) => acc + (item.bottle_qty !== undefined ? item.bottle_qty : (item.quantity || 0)), 0)
     : 0;
-  const labourAmount = isPrivateLabelSale
-    ? Number((totalBottles * labourRatePerBottle).toFixed(2))
-    : 0;
-  const productsSubtotal = cartItems.reduce((acc, item) => acc + item.subtotal, 0);
-  const subtotal = isPrivateLabelSale 
-    ? Number((productsSubtotal + labourAmount).toFixed(2))
-    : productsSubtotal;
-  const totalAmount = Math.max(0, subtotal - discountAmount);
+
+  // Unify Private Label automatic Labour line with Additional Charges array
+  React.useEffect(() => {
+    if (isPrivateLabelSale && !plAutoLabourRemoved) {
+      const autoAmount = Number((totalBottles * labourRatePerBottle).toFixed(2));
+      setInvoiceCharges(prev => {
+        const existingIdx = prev.findIndex(ch => ch.is_auto_private_label);
+        if (existingIdx !== -1) {
+          const existing = prev[existingIdx];
+          if (existing.quantity === totalBottles && existing.rate === labourRatePerBottle && existing.amount === autoAmount) {
+            return prev;
+          }
+          const updated = [...prev];
+          updated[existingIdx] = {
+            ...existing,
+            type: 'Labour',
+            description: existing.description || 'Labour Charges (Packing & Bottling)',
+            calc_mode: 'qty_rate',
+            quantity: totalBottles,
+            rate: labourRatePerBottle,
+            amount: autoAmount,
+            is_auto_private_label: true,
+          };
+          return updated;
+        }
+        return [
+          {
+            id: `pl-labour-${Date.now()}`,
+            type: 'Labour',
+            description: 'Labour Charges (Packing & Bottling)',
+            calc_mode: 'qty_rate',
+            quantity: totalBottles,
+            rate: labourRatePerBottle,
+            amount: autoAmount,
+            is_auto_private_label: true,
+          },
+          ...prev,
+        ];
+      });
+    } else if (!isPrivateLabelSale) {
+      setInvoiceCharges(prev => prev.filter(ch => !ch.is_auto_private_label));
+      setPlAutoLabourRemoved(false);
+    }
+  }, [isPrivateLabelSale, totalBottles, labourRatePerBottle, plAutoLabourRemoved]);
+
+  const productsSubtotal = Number(cartItems.reduce((acc, item) => acc + item.subtotal, 0).toFixed(2));
+  const chargesSubtotal = Number(invoiceCharges.reduce((acc, ch) => acc + Number(ch.amount || 0), 0).toFixed(2));
+  const autoPlCharge = invoiceCharges.find(ch => ch.is_auto_private_label);
+  const labourAmount = autoPlCharge ? Number(autoPlCharge.amount || 0) : 0;
+  const subtotal = Number((productsSubtotal + chargesSubtotal).toFixed(2));
+  const totalAmount = Math.max(0, Number((subtotal - discountAmount).toFixed(2)));
 
   // Sync amount paid when payment status is full paid
   React.useEffect(() => {
@@ -616,8 +680,119 @@ export const SalesModule: React.FC = () => {
     setCartItems(prev => prev.filter((_, idx) => idx !== index));
   };
 
+  // Additional Charges Helpers (POS Checkout)
+  const addPosChargeLine = () => {
+    const defaultType = invoiceChargeTypes[0] || 'Labour';
+    setInvoiceCharges(prev => [
+      ...prev,
+      {
+        id: `chg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        type: defaultType,
+        description: `${defaultType.replace(/\/Delivery/i, '')} Charges`,
+        calc_mode: 'fixed',
+        quantity: 1,
+        rate: 0,
+        amount: 0,
+      }
+    ]);
+  };
+
+  const updatePosChargeLine = (index: number, patch: Partial<InvoiceCharge>) => {
+    setInvoiceCharges(prev => {
+      const current = prev[index];
+      if (!current) return prev;
+      const merged: InvoiceCharge = { ...current, ...patch };
+      if (patch.type && (!current.description || current.description === `${current.type.replace(/\/Delivery/i, '')} Charges`)) {
+        merged.description = `${patch.type.replace(/\/Delivery/i, '')} Charges`;
+      }
+      if (merged.calc_mode === 'qty_rate') {
+        const q = Number(merged.quantity || 0);
+        const r = Number(merged.rate || 0);
+        merged.amount = Number((q * r).toFixed(2));
+        if (merged.is_auto_private_label && patch.rate !== undefined) {
+          setLabourRatePerBottle(r);
+        }
+      } else {
+        merged.amount = Number(Number(merged.amount || 0).toFixed(2));
+      }
+      const updated = [...prev];
+      updated[index] = merged;
+      return updated;
+    });
+  };
+
+  const removePosChargeLine = (index: number) => {
+    setInvoiceCharges(prev => {
+      const target = prev[index];
+      if (target?.is_auto_private_label) {
+        setPlAutoLabourRemoved(true);
+      }
+      return prev.filter((_, i) => i !== index);
+    });
+  };
+
+  const handleAddCustomChargeType = async () => {
+    const cleaned = newChargeTypeName.trim();
+    if (!cleaned) return;
+    setIsAddingChargeType(true);
+    try {
+      await addInvoiceChargeType(cleaned);
+      setNewChargeTypeName('');
+      setShowNewChargeTypeInput(false);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to add charge type');
+    } finally {
+      setIsAddingChargeType(false);
+    }
+  };
+
+  const openEditInvoiceModal = (sale: Sale) => {
+    if (isMonthClosed(sale.date)) {
+      alert(`Cannot edit invoice ${sale.invoice_number} because month ${sale.date.slice(0, 7)} is closed. Please reopen the month from the Commission Report first.`);
+      return;
+    }
+    const existingCharges = getEffectiveSaleCharges(sale).map((ch, idx) => ({
+      ...ch,
+      id: ch.id || `edit-chg-${idx}-${Date.now()}`,
+    }));
+    const cleanNotes = (sale.notes || '').replace(/<!--PL_DATA:.*?-->/g, '').trim();
+    setEditingInvoiceSale(sale);
+    setEditInvoiceCharges(existingCharges);
+    setEditInvoiceDiscount(Number(sale.discount || 0));
+    setEditInvoicePaymentStatus(sale.payment_status);
+    setEditInvoicePaymentMethod(sale.payment_method);
+    setEditInvoiceAmountPaid(Number(sale.amount_paid || 0));
+    setEditInvoiceNotes(cleanNotes);
+  };
+
+  const handleSaveInvoiceEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingInvoiceSale) return;
+    setIsSavingInvoiceEdit(true);
+    try {
+      const updatedSale = await updateSale(editingInvoiceSale.id, {
+        charges: editInvoiceCharges,
+        discount: editInvoiceDiscount,
+        payment_status: editInvoicePaymentStatus,
+        payment_method: editInvoicePaymentMethod,
+        amount_paid: editInvoiceAmountPaid,
+        notes: editInvoiceNotes,
+      });
+      if (selectedInvoice && selectedInvoice.id === updatedSale.id) {
+        setSelectedInvoice(updatedSale);
+      }
+      setEditingInvoiceSale(null);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to update invoice');
+    } finally {
+      setIsSavingInvoiceEdit(false);
+    }
+  };
+
   const clearCart = () => {
     setCartItems([]);
+    setInvoiceCharges([]);
+    setPlAutoLabourRemoved(false);
     setDiscountAmount(0);
     setAmountPaid(0);
     setApplyCustomerAdvance(false);
@@ -674,6 +849,15 @@ export const SalesModule: React.FC = () => {
       }
     }
 
+    const cleanedCharges: InvoiceCharge[] = invoiceCharges
+      .filter(ch => Number(ch.amount || 0) > 0)
+      .map(ch => ({
+        ...ch,
+        amount: Number(Number(ch.amount || 0).toFixed(2)),
+        quantity: ch.calc_mode === 'qty_rate' ? Number(ch.quantity || 0) : undefined,
+        rate: ch.calc_mode === 'qty_rate' ? Number(ch.rate || 0) : undefined,
+      }));
+
     setIsSubmitting(true);
     setSubmitError(null);
     try {
@@ -694,6 +878,9 @@ export const SalesModule: React.FC = () => {
           liters_qty: item.liters_qty || item.base_quantity,
           rate_per_liter: item.rate_per_liter || item.unit_price,
         })),
+        charges: cleanedCharges,
+        product_subtotal: productsSubtotal,
+        service_charges_total: chargesSubtotal,
         subtotal,
         discount: discountAmount,
         tax: 0,
@@ -1539,28 +1726,197 @@ export const SalesModule: React.FC = () => {
                 )}
               </div>
 
+              {/* Additional Charges Section (Labour, Transportation/Delivery, Packing, Other) */}
+              <div className="border border-amber-500/25 rounded-xl p-3 bg-slate-950/60 space-y-2.5">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div>
+                    <span className="text-[11px] font-bold text-amber-300 uppercase tracking-wider block">
+                      Additional Charges (Non-Product / Service)
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      Labour, Transportation/Delivery, Packing — no stock or volume impact
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {isOwner && (
+                      <button
+                        type="button"
+                        onClick={() => setShowNewChargeTypeInput(prev => !prev)}
+                        className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[10px] font-bold transition-colors"
+                        title="Admin: Add a new charge type to Supabase"
+                      >
+                        + Charge Type
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={addPosChargeLine}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Charge</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Admin inline Add Charge Type creator */}
+                {isOwner && showNewChargeTypeInput && (
+                  <div className="p-2 rounded-lg bg-slate-900 border border-slate-700 flex items-center gap-2">
+                    <input
+                      type="text"
+                      placeholder="New charge type (e.g. Loading/Unloading)"
+                      value={newChargeTypeName}
+                      onChange={(e) => setNewChargeTypeName(e.target.value)}
+                      className="flex-1 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-amber-400"
+                    />
+                    <button
+                      type="button"
+                      disabled={isAddingChargeType || !newChargeTypeName.trim()}
+                      onClick={handleAddCustomChargeType}
+                      className="px-2.5 py-1 rounded bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs disabled:opacity-50"
+                    >
+                      {isAddingChargeType ? 'Saving...' : 'Save Type'}
+                    </button>
+                  </div>
+                )}
+
+                {invoiceCharges.length === 0 ? (
+                  <p className="text-[11px] text-slate-500 italic text-center py-1">
+                    No additional charges added to this invoice.
+                  </p>
+                ) : (
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                    {invoiceCharges.map((ch, cIdx) => (
+                      <div
+                        key={ch.id || `pos-chg-${cIdx}`}
+                        className="p-2.5 rounded-xl bg-slate-900 border border-amber-500/30 space-y-2 text-xs"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 flex-1">
+                            <select
+                              value={ch.type}
+                              onChange={(e) => updatePosChargeLine(cIdx, { type: e.target.value })}
+                              className="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-amber-300 font-bold focus:outline-none focus:border-amber-400"
+                            >
+                              {invoiceChargeTypes.map(t => (
+                                <option key={t} value={t}>{t}</option>
+                              ))}
+                              {!invoiceChargeTypes.includes(ch.type) && (
+                                <option value={ch.type}>{ch.type}</option>
+                              )}
+                            </select>
+
+                            <input
+                              type="text"
+                              placeholder="Description (e.g. Labour Charges)"
+                              value={ch.description}
+                              onChange={(e) => updatePosChargeLine(cIdx, { description: e.target.value })}
+                              className="flex-1 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-amber-400"
+                            />
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => removePosChargeLine(cIdx)}
+                            className="p-1 text-slate-500 hover:text-rose-400 rounded transition-colors"
+                            title="Remove charge line"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          {/* Mode selector: Fixed vs Qty × Rate */}
+                          <div className="flex items-center rounded-lg bg-slate-950 border border-slate-800 p-0.5 text-[10px]">
+                            <button
+                              type="button"
+                              onClick={() => updatePosChargeLine(cIdx, { calc_mode: 'fixed' })}
+                              className={`px-2 py-0.5 rounded font-bold transition-colors ${
+                                ch.calc_mode === 'fixed'
+                                  ? 'bg-amber-500 text-slate-950'
+                                  : 'text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              Fixed Amount
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updatePosChargeLine(cIdx, {
+                                calc_mode: 'qty_rate',
+                                quantity: ch.quantity || (totalBottles > 0 ? totalBottles : 1),
+                                rate: ch.rate || 0,
+                              })}
+                              className={`px-2 py-0.5 rounded font-bold transition-colors ${
+                                ch.calc_mode === 'qty_rate'
+                                  ? 'bg-amber-500 text-slate-950'
+                                  : 'text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              Qty × Rate
+                            </button>
+                          </div>
+
+                          {ch.calc_mode === 'qty_rate' ? (
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="number"
+                                step="any"
+                                min="0"
+                                placeholder="Qty"
+                                value={ch.quantity === 0 ? '' : (ch.quantity ?? '')}
+                                onChange={(e) => updatePosChargeLine(cIdx, { quantity: e.target.value === '' ? 0 : parseFloat(e.target.value) })}
+                                className="w-16 bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-xs text-center text-white font-mono focus:outline-none focus:border-amber-400"
+                                title="Quantity (e.g. 948 bottles)"
+                              />
+                              <span className="text-slate-500 font-mono">×</span>
+                              <input
+                                type="number"
+                                step="any"
+                                min="0"
+                                placeholder="Rate"
+                                value={ch.rate === 0 ? '' : (ch.rate ?? '')}
+                                onChange={(e) => updatePosChargeLine(cIdx, { rate: e.target.value === '' ? 0 : parseFloat(e.target.value) })}
+                                className="w-16 bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-xs text-right text-amber-300 font-mono focus:outline-none focus:border-amber-400"
+                                title="Rate per unit (e.g. 3.5)"
+                              />
+                              <span className="text-slate-500 font-mono">=</span>
+                              <span className="font-mono font-black text-amber-300 text-xs min-w-[68px] text-right">
+                                {formatPKR(Number(ch.amount || 0))}
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[10px] text-slate-400 font-mono">PKR</span>
+                              <input
+                                type="number"
+                                step="any"
+                                min="0"
+                                placeholder="0.00"
+                                value={ch.amount === 0 ? '' : ch.amount}
+                                onChange={(e) => updatePosChargeLine(cIdx, { amount: e.target.value === '' ? 0 : parseFloat(e.target.value) })}
+                                className="w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-right text-amber-300 font-mono font-bold focus:outline-none focus:border-amber-400"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* Discount & Totals */}
               <div className="space-y-2 pt-2 border-t border-slate-800 text-xs">
-                {isPrivateLabelSale && (
-                  <>
-                    <div className="flex items-center justify-between text-slate-400">
-                      <span>Products Subtotal ({cartItems.length} items):</span>
-                      <span className="font-mono font-bold text-white">{formatPKR(productsSubtotal)}</span>
-                    </div>
+                <div className="flex items-center justify-between text-slate-400">
+                  <span>Products Subtotal ({cartItems.length} items):</span>
+                  <span className="font-mono font-bold text-white">{formatPKR(productsSubtotal)}</span>
+                </div>
 
-                    {/* Automatic Labour row */}
-                    <div className="flex items-center justify-between p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300">
-                      <div>
-                        <span className="font-bold block">Labour (Packing & Bottling):</span>
-                        <span className="text-[10px] text-amber-400 font-mono">
-                          {totalBottles} bottles × PKR {labourRatePerBottle}/btl
-                        </span>
-                      </div>
-                      <span className="font-mono font-black text-amber-200 text-sm">
-                        + {formatPKR(labourAmount)}
-                      </span>
-                    </div>
-                  </>
+                {chargesSubtotal > 0 && (
+                  <div className="flex items-center justify-between text-amber-300">
+                    <span>Service Charges ({invoiceCharges.filter(c => Number(c.amount || 0) > 0).length} lines):</span>
+                    <span className="font-mono font-bold">+ {formatPKR(chargesSubtotal)}</span>
+                  </div>
                 )}
 
                 <div className="flex items-center justify-between text-slate-400">
@@ -1738,6 +2094,29 @@ export const SalesModule: React.FC = () => {
       ) : activeSubTab === 'history' ? (
         /* =================== INVOICES HISTORY VIEW =================== */
         <div className="rounded-2xl bg-slate-900 border border-slate-800 p-6 space-y-4">
+          {/* Product Sales vs Service Charges Breakdown Bar */}
+          {(() => {
+            const histProductSales = filteredSales.reduce((acc, s) => acc + getSaleRevenueBreakdown(s).netProductSales, 0);
+            const histServiceCharges = filteredSales.reduce((acc, s) => acc + getSaleRevenueBreakdown(s).netServiceCharges, 0);
+            const histTotalBilled = filteredSales.reduce((acc, s) => acc + Number(s.total_amount || 0), 0);
+            return (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pb-2 border-b border-slate-800">
+                <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Product Sales</span>
+                  <p className="text-base font-black font-mono text-emerald-400 mt-0.5">{formatPKR(histProductSales)}</p>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-950/60 border border-amber-500/20">
+                  <span className="text-[10px] font-bold text-amber-300 uppercase tracking-wider block">Service Charges (Labour / Transport)</span>
+                  <p className="text-base font-black font-mono text-amber-300 mt-0.5">{formatPKR(histServiceCharges)}</p>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Invoiced (Receivable Base)</span>
+                  <p className="text-base font-black font-mono text-white mt-0.5">{formatPKR(histTotalBilled)}</p>
+                </div>
+              </div>
+            );
+          })()}
+
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
             <div className="relative w-full sm:w-80">
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -1815,6 +2194,14 @@ export const SalesModule: React.FC = () => {
                           <span className="truncate">
                             {sale.items.map(i => `${i.quantity}x ${i.pack_size_name || i.product_name}`).join(', ')}
                           </span>
+                          {getSaleServiceChargesTotal(sale) > 0 && (
+                            <span
+                              className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 whitespace-nowrap font-mono"
+                              title={getEffectiveSaleCharges(sale).map(c => `${c.type}: ${formatPKR(c.amount)}`).join(' | ')}
+                            >
+                              + Charges: {formatPKR(getSaleServiceChargesTotal(sale))}
+                            </span>
+                          )}
                           {(sale.invoice_type === 'private_label' || sale.is_private_label) && (
                             <span 
                               className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 whitespace-nowrap"
@@ -1835,7 +2222,12 @@ export const SalesModule: React.FC = () => {
                         </div>
                       </td>
                       <td className="py-3 px-3 text-right font-mono font-bold text-emerald-400">
-                        {formatPKR(sale.total_amount)}
+                        <div>{formatPKR(sale.total_amount)}</div>
+                        {getSaleServiceChargesTotal(sale) > 0 && (
+                          <div className="text-[10px] font-normal text-slate-400">
+                            Prod: {formatPKR(getSaleProductSubtotal(sale))}
+                          </div>
+                        )}
                       </td>
                       <td className="py-3 px-3 text-right font-mono text-slate-300">
                         {formatPKR(sale.amount_paid)}
@@ -1850,12 +2242,21 @@ export const SalesModule: React.FC = () => {
                       <td className="py-3 px-3 text-right">
                         <div className="flex items-center justify-end gap-1.5">
                           <button
+                            onClick={() => openEditInvoiceModal(sale)}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/25 text-xs font-semibold transition-colors"
+                            title="Edit Additional Charges, Discount, or Payment Status on this Invoice"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                            <span>Edit</span>
+                          </button>
+
+                          <button
                             onClick={() => {
                               setReturnTargetSale(sale);
                               setIsReturnModalOpen(true);
                             }}
                             className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs font-semibold transition-colors"
-                            title="Process Sales Return & Credit Note for this invoice"
+                            title="Process Sales Return & Credit Note for this invoice (product lines only)"
                           >
                             <RotateCcw className="w-3.5 h-3.5" />
                             <span>Return</span>
@@ -2099,6 +2500,7 @@ export const SalesModule: React.FC = () => {
         <InvoiceModal
           sale={selectedInvoice}
           onClose={() => setSelectedInvoice(null)}
+          onEdit={() => openEditInvoiceModal(selectedInvoice)}
           onDelete={isOwner ? () => {
             const target = selectedInvoice;
             setSelectedInvoice(null);
@@ -2106,6 +2508,355 @@ export const SalesModule: React.FC = () => {
           } : undefined}
         />
       )}
+
+      {/* Edit Invoice & Additional Charges Modal */}
+      {editingInvoiceSale && (() => {
+        const editProductsSubtotal = getSaleProductSubtotal(editingInvoiceSale);
+        const editChargesSubtotal = Number(
+          editInvoiceCharges.reduce((sum, ch) => sum + Number(ch.amount || 0), 0).toFixed(2)
+        );
+        const editGrossSubtotal = Number((editProductsSubtotal + editChargesSubtotal).toFixed(2));
+        const editNetTotal = Math.max(0, Number((editGrossSubtotal - editInvoiceDiscount).toFixed(2)));
+
+        return (
+          <Modal
+            isOpen={Boolean(editingInvoiceSale)}
+            onClose={() => setEditingInvoiceSale(null)}
+            title={`Edit Invoice & Additional Charges: ${editingInvoiceSale.invoice_number}`}
+            subtitle={`Customer: ${editingInvoiceSale.customer_name} • Date: ${formatDate(editingInvoiceSale.date)}`}
+          >
+            <form onSubmit={handleSaveInvoiceEdit} className="space-y-4 text-xs">
+              <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 space-y-1.5">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                  Invoice Product Lines (Read-Only — Use Returns for Product Changes)
+                </span>
+                {editingInvoiceSale.items.map((item, i) => (
+                  <div key={i} className="flex items-center justify-between text-slate-300 font-mono">
+                    <span>{item.quantity} × {item.product_name} {item.pack_size_name ? `(${item.pack_size_name})` : ''}</span>
+                    <span className="font-bold text-white">{formatPKR(item.subtotal)}</span>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between pt-1.5 border-t border-slate-800 font-bold text-emerald-400">
+                  <span>Products Subtotal:</span>
+                  <span className="font-mono">{formatPKR(editProductsSubtotal)}</span>
+                </div>
+              </div>
+
+              {/* Editable Additional Charges Section */}
+              <div className="p-3.5 rounded-xl bg-amber-500/5 border border-amber-500/25 space-y-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div>
+                    <span className="text-xs font-bold text-amber-300 uppercase tracking-wider block">
+                      Additional Charges (Labour, Transportation/Delivery, Packing)
+                    </span>
+                    <span className="text-[11px] text-slate-400">
+                      Add, edit, or remove service charges. Customer receivable &amp; ledger adjust automatically.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const defaultType = invoiceChargeTypes[0] || 'Labour';
+                      setEditInvoiceCharges(prev => [
+                        ...prev,
+                        {
+                          id: `edit-chg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                          type: defaultType,
+                          description: `${defaultType.replace(/\/Delivery/i, '')} Charges`,
+                          calc_mode: 'fixed',
+                          quantity: 1,
+                          rate: 0,
+                          amount: 0,
+                        }
+                      ]);
+                    }}
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 font-bold text-xs transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Charge Line</span>
+                  </button>
+                </div>
+
+                {editInvoiceCharges.length === 0 ? (
+                  <p className="text-[11px] text-slate-500 italic text-center py-2">
+                    No additional service charges on this invoice.
+                  </p>
+                ) : (
+                  <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                    {editInvoiceCharges.map((ch, idx) => (
+                      <div key={ch.id || `edit-ch-${idx}`} className="p-2.5 rounded-xl bg-slate-900 border border-amber-500/30 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 flex-1">
+                            <select
+                              value={ch.type}
+                              onChange={(e) => {
+                                const nextType = e.target.value;
+                                setEditInvoiceCharges(prev => {
+                                  const copy = [...prev];
+                                  const curr = copy[idx];
+                                  const nextDesc = (!curr.description || curr.description === `${curr.type.replace(/\/Delivery/i, '')} Charges`)
+                                    ? `${nextType.replace(/\/Delivery/i, '')} Charges`
+                                    : curr.description;
+                                  copy[idx] = { ...curr, type: nextType, description: nextDesc };
+                                  return copy;
+                                });
+                              }}
+                              className="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-amber-300 font-bold"
+                            >
+                              {invoiceChargeTypes.map(t => (
+                                <option key={t} value={t}>{t}</option>
+                              ))}
+                              {!invoiceChargeTypes.includes(ch.type) && (
+                                <option value={ch.type}>{ch.type}</option>
+                              )}
+                            </select>
+
+                            <input
+                              type="text"
+                              placeholder="Charge description"
+                              value={ch.description}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setEditInvoiceCharges(prev => {
+                                  const copy = [...prev];
+                                  copy[idx] = { ...copy[idx], description: val };
+                                  return copy;
+                                });
+                              }}
+                              className="flex-1 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-white"
+                            />
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => setEditInvoiceCharges(prev => prev.filter((_, i) => i !== idx))}
+                            className="p-1 text-slate-500 hover:text-rose-400 rounded transition-colors"
+                            title="Remove this charge line"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="flex items-center rounded-lg bg-slate-950 border border-slate-800 p-0.5 text-[10px]">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditInvoiceCharges(prev => {
+                                  const copy = [...prev];
+                                  copy[idx] = { ...copy[idx], calc_mode: 'fixed' };
+                                  return copy;
+                                });
+                              }}
+                              className={`px-2 py-0.5 rounded font-bold ${
+                                ch.calc_mode === 'fixed' ? 'bg-amber-500 text-slate-950' : 'text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              Fixed Amount
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditInvoiceCharges(prev => {
+                                  const copy = [...prev];
+                                  const curr = copy[idx];
+                                  const q = Number(curr.quantity || 1);
+                                  const r = Number(curr.rate || curr.amount || 0);
+                                  copy[idx] = {
+                                    ...curr,
+                                    calc_mode: 'qty_rate',
+                                    quantity: q,
+                                    rate: r,
+                                    amount: Number((q * r).toFixed(2)),
+                                  };
+                                  return copy;
+                                });
+                              }}
+                              className={`px-2 py-0.5 rounded font-bold ${
+                                ch.calc_mode === 'qty_rate' ? 'bg-amber-500 text-slate-950' : 'text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              Qty × Rate
+                            </button>
+                          </div>
+
+                          {ch.calc_mode === 'qty_rate' ? (
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="number"
+                                step="any"
+                                min="0"
+                                placeholder="Qty"
+                                value={ch.quantity === 0 ? '' : (ch.quantity ?? '')}
+                                onChange={(e) => {
+                                  const q = e.target.value === '' ? 0 : parseFloat(e.target.value);
+                                  setEditInvoiceCharges(prev => {
+                                    const copy = [...prev];
+                                    const curr = copy[idx];
+                                    const r = Number(curr.rate || 0);
+                                    copy[idx] = {
+                                      ...curr,
+                                      quantity: q,
+                                      amount: Number((q * r).toFixed(2)),
+                                    };
+                                    return copy;
+                                  });
+                                }}
+                                className="w-16 bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-xs text-center text-white font-mono"
+                              />
+                              <span className="text-slate-500 font-mono">×</span>
+                              <input
+                                type="number"
+                                step="any"
+                                min="0"
+                                placeholder="Rate"
+                                value={ch.rate === 0 ? '' : (ch.rate ?? '')}
+                                onChange={(e) => {
+                                  const r = e.target.value === '' ? 0 : parseFloat(e.target.value);
+                                  setEditInvoiceCharges(prev => {
+                                    const copy = [...prev];
+                                    const curr = copy[idx];
+                                    const q = Number(curr.quantity || 0);
+                                    copy[idx] = {
+                                      ...curr,
+                                      rate: r,
+                                      amount: Number((q * r).toFixed(2)),
+                                    };
+                                    return copy;
+                                  });
+                                }}
+                                className="w-16 bg-slate-950 border border-slate-700 rounded px-1.5 py-1 text-xs text-right text-amber-300 font-mono"
+                              />
+                              <span className="text-slate-500 font-mono">=</span>
+                              <span className="font-mono font-black text-amber-300 min-w-[68px] text-right">
+                                {formatPKR(Number(ch.amount || 0))}
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[10px] text-slate-400 font-mono">PKR</span>
+                              <input
+                                type="number"
+                                step="any"
+                                min="0"
+                                placeholder="0.00"
+                                value={ch.amount === 0 ? '' : ch.amount}
+                                onChange={(e) => {
+                                  const amt = e.target.value === '' ? 0 : parseFloat(e.target.value);
+                                  setEditInvoiceCharges(prev => {
+                                    const copy = [...prev];
+                                    copy[idx] = { ...copy[idx], amount: amt };
+                                    return copy;
+                                  });
+                                }}
+                                className="w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1 text-xs text-right text-amber-300 font-mono font-bold"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Discount, Payment Status & Updated Totals */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                    Discount (PKR)
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={editInvoiceDiscount || ''}
+                    onChange={(e) => setEditInvoiceDiscount(parseFloat(e.target.value) || 0)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                    Payment Status
+                  </label>
+                  <select
+                    value={editInvoicePaymentStatus}
+                    onChange={(e) => {
+                      const st = e.target.value as PaymentStatus;
+                      setEditInvoicePaymentStatus(st);
+                      if (st === 'paid') {
+                        setEditInvoiceAmountPaid(editNetTotal);
+                      } else if (st === 'credit' || st === 'unpaid') {
+                        setEditInvoiceAmountPaid(0);
+                      }
+                    }}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white"
+                  >
+                    <option value="paid">Full Paid</option>
+                    <option value="partial">Partial Payment</option>
+                    <option value="credit">Credit / Unpaid</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                    Amount Paid (PKR)
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    max={editNetTotal}
+                    disabled={editInvoicePaymentStatus === 'paid' || editInvoicePaymentStatus === 'credit'}
+                    value={editInvoicePaymentStatus === 'paid' ? editNetTotal : editInvoicePaymentStatus === 'credit' ? 0 : (editInvoiceAmountPaid || '')}
+                    onChange={(e) => setEditInvoiceAmountPaid(parseFloat(e.target.value) || 0)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono disabled:opacity-60"
+                  />
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                <div className="flex justify-between text-slate-400">
+                  <span>Products Subtotal:</span>
+                  <span className="font-mono font-semibold text-white">{formatPKR(editProductsSubtotal)}</span>
+                </div>
+                <div className="flex justify-between text-amber-300">
+                  <span>Service Charges Total:</span>
+                  <span className="font-mono font-semibold">+ {formatPKR(editChargesSubtotal)}</span>
+                </div>
+                {editInvoiceDiscount > 0 && (
+                  <div className="flex justify-between text-rose-400">
+                    <span>Discount:</span>
+                    <span className="font-mono font-semibold">- {formatPKR(editInvoiceDiscount)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-sm font-black text-emerald-400 pt-1.5 border-t border-slate-800">
+                  <span>Updated Invoice Total:</span>
+                  <span className="font-mono">{formatPKR(editNetTotal)}</span>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  disabled={isSavingInvoiceEdit}
+                  onClick={() => setEditingInvoiceSale(null)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingInvoiceEdit}
+                  className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-black shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60"
+                >
+                  {isSavingInvoiceEdit && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isSavingInvoiceEdit ? 'Saving & Updating Ledger...' : 'Save Invoice Changes'}</span>
+                </button>
+              </div>
+            </form>
+          </Modal>
+        );
+      })()}
 
       {/* Internal Invoice Profit Report Modal */}
       {profitReportSale && (

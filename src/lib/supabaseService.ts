@@ -27,10 +27,17 @@ import {
   FixedAsset,
   FixedAssetFunding,
   Partner,
-  PartnerCapitalTransaction
+  PartnerCapitalTransaction,
+  InvoiceCharge
 } from '../types';
 import { ensureUUID, isValidUUID } from '../utils/uuid';
 import { allocateTripFreight } from '../utils/freightAllocation';
+import {
+  getEffectiveSaleCharges,
+  getSaleProductSubtotal,
+  getSaleServiceChargesTotal,
+  DEFAULT_INVOICE_CHARGE_TYPES
+} from '../utils/financialEngine';
 
 
 function assertOnline() {
@@ -73,7 +80,9 @@ export const supabaseService = {
         commPayRes,
         fixedAssetsRes,
         partnersRes,
-        partnerTxnsRes
+        partnerTxnsRes,
+        invChargesRes,
+        appSettingsRes
       ] = await Promise.all([
         supabase.from('products').select('*').order('created_at', { ascending: false }),
         supabase.from('customers').select('*').order('created_at', { ascending: false }),
@@ -99,7 +108,9 @@ export const supabaseService = {
         Promise.resolve(supabase.from('commission_payments').select('*').order('payment_date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
         Promise.resolve(supabase.from('fixed_assets').select('*, fixed_asset_fundings(*)').order('purchase_date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
         Promise.resolve(supabase.from('partners').select('*').order('name', { ascending: true })).catch(() => ({ data: [], error: null } as any)),
-        Promise.resolve(supabase.from('partner_capital_transactions').select('*').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any))
+        Promise.resolve(supabase.from('partner_capital_transactions').select('*').order('date', { ascending: false })).catch(() => ({ data: [], error: null } as any)),
+        Promise.resolve(supabase.from('invoice_charges').select('*').order('created_at', { ascending: true })).catch(() => ({ data: [], error: null } as any)),
+        Promise.resolve(supabase.from('app_settings').select('*')).catch(() => ({ data: [], error: null } as any))
       ]);
 
 
@@ -140,6 +151,24 @@ export const supabaseService = {
 
       // 1. Normalized Formulations (extract formulation_items into .items, enriched with correct rm.unit and active landed cost_per_unit)
       let allowStaffBatchSheetAccess = false;
+      let includeServiceChargesInCommission = false;
+      const chargeTypesSet = new Set<string>(DEFAULT_INVOICE_CHARGE_TYPES);
+
+      // Check app_settings if table is migrated
+      for (const settingRow of ((appSettingsRes as any)?.data || []) as any[]) {
+        if (settingRow.key === 'formulation_access' && settingRow.value?.allow_production_staff_batch_sheets === true) {
+          allowStaffBatchSheetAccess = true;
+        }
+        if (settingRow.key === 'commission_settings' && settingRow.value?.include_service_charges !== undefined) {
+          includeServiceChargesInCommission = Boolean(settingRow.value.include_service_charges);
+        }
+        if (settingRow.key === 'invoice_charge_types' && Array.isArray(settingRow.value?.types)) {
+          settingRow.value.types.forEach((t: any) => {
+            if (typeof t === 'string' && t.trim()) chargeTypesSet.add(t.trim());
+          });
+        }
+      }
+
       const normalizedFormulations: ProductFormulation[] = [];
 
       for (const f of (formRes.data || []) as any[]) {
@@ -152,6 +181,14 @@ export const supabaseService = {
               bomMeta = JSON.parse(match[1]);
               if (bomMeta.allow_staff_batch_sheets === true) {
                 allowStaffBatchSheetAccess = true;
+              }
+              if (bomMeta.include_service_charges_in_commission !== undefined) {
+                includeServiceChargesInCommission = Boolean(bomMeta.include_service_charges_in_commission);
+              }
+              if (Array.isArray(bomMeta.custom_charge_types)) {
+                bomMeta.custom_charge_types.forEach((t: any) => {
+                  if (typeof t === 'string' && t.trim()) chargeTypesSet.add(t.trim());
+                });
               }
             }
           } catch (e) {
@@ -274,7 +311,29 @@ export const supabaseService = {
         };
       });
 
-      // 3. Normalized Sales (extract sale_items into .items, resolve raw_material_id if unmigrated, restore Private Label metadata)
+      // Group relational invoice_charges by sale_id if table exists
+      const relationalChargesBySaleId = new Map<string, InvoiceCharge[]>();
+      for (const ch of ((invChargesRes as any)?.data || []) as any[]) {
+        if (!ch.sale_id) continue;
+        if (!relationalChargesBySaleId.has(ch.sale_id)) {
+          relationalChargesBySaleId.set(ch.sale_id, []);
+        }
+        if (ch.type && typeof ch.type === 'string') {
+          chargeTypesSet.add(ch.type.trim());
+        }
+        relationalChargesBySaleId.get(ch.sale_id)!.push({
+          id: ch.id || ensureUUID(),
+          type: ch.type || 'Other',
+          description: ch.description || ch.type || 'Service Charge',
+          calc_mode: ch.calc_mode === 'qty_rate' ? 'qty_rate' : 'fixed',
+          quantity: ch.quantity !== undefined && ch.quantity !== null ? Number(ch.quantity) : undefined,
+          rate: ch.rate !== undefined && ch.rate !== null ? Number(ch.rate) : undefined,
+          amount: Number(ch.amount || 0),
+          is_auto_private_label: Boolean(ch.is_auto_private_label),
+        });
+      }
+
+      // 3. Normalized Sales (extract sale_items into .items, resolve raw_material_id if unmigrated, restore Private Label & Additional Charges metadata)
       const normalizedSales = (salesRes.data || []).map((s: any) => {
         let is_private_label = Boolean(s.is_private_label);
         let invoice_type: 'standard' | 'private_label' = s.invoice_type || (is_private_label ? 'private_label' : 'standard');
@@ -283,6 +342,7 @@ export const supabaseService = {
         let labour_bottle_qty = s.labour_bottle_qty ? Number(s.labour_bottle_qty) : undefined;
         let labour_total_amount = s.labour_total_amount ? Number(s.labour_total_amount) : undefined;
         let advance_received_date = s.advance_received_date;
+        let metaCharges: InvoiceCharge[] | undefined = undefined;
         const metaItemsMap: Record<string, any> = {};
 
         if (s.notes && typeof s.notes === 'string' && s.notes.includes('<!--PL_DATA:')) {
@@ -290,13 +350,33 @@ export const supabaseService = {
             const match = s.notes.match(/<!--PL_DATA:(.*?)-->/);
             if (match && match[1]) {
               const meta = JSON.parse(match[1]);
-              is_private_label = true;
-              invoice_type = 'private_label';
+              if (meta.is_private_label !== undefined) {
+                is_private_label = Boolean(meta.is_private_label);
+                invoice_type = is_private_label ? 'private_label' : 'standard';
+              } else if (meta.invoice_type === 'private_label') {
+                is_private_label = true;
+                invoice_type = 'private_label';
+              }
               if (meta.client_brand_name) client_brand_name = meta.client_brand_name;
               if (meta.labour_rate_per_bottle !== undefined) labour_rate_per_bottle = Number(meta.labour_rate_per_bottle);
               if (meta.labour_bottle_qty !== undefined) labour_bottle_qty = Number(meta.labour_bottle_qty);
               if (meta.labour_total_amount !== undefined) labour_total_amount = Number(meta.labour_total_amount);
               if (meta.advance_received_date) advance_received_date = meta.advance_received_date;
+              if (Array.isArray(meta.charges)) {
+                metaCharges = meta.charges.map((c: any) => {
+                  if (c?.type && typeof c.type === 'string') chargeTypesSet.add(c.type.trim());
+                  return {
+                    id: c.id || ensureUUID(),
+                    type: c.type || 'Other',
+                    description: c.description || c.type || 'Service Charge',
+                    calc_mode: c.calc_mode === 'qty_rate' ? 'qty_rate' : 'fixed',
+                    quantity: c.quantity !== undefined && c.quantity !== null ? Number(c.quantity) : undefined,
+                    rate: c.rate !== undefined && c.rate !== null ? Number(c.rate) : undefined,
+                    amount: Number(c.amount || 0),
+                    is_auto_private_label: Boolean(c.is_auto_private_label),
+                  };
+                });
+              }
               if (Array.isArray(meta.items)) {
                 meta.items.forEach((mItem: any, idx: number) => {
                   const key = mItem.pack_size_id || mItem.product_id || String(idx);
@@ -342,7 +422,10 @@ export const supabaseService = {
           ? (spMap.get(s.salesperson_id) || profMap.get(s.salesperson_id) || 'Staff')
           : 'Staff';
 
-        return {
+        // Resolve unified charges from relational table -> JSONB column -> PL_DATA note tag -> legacy PL labour fallback
+        const relCharges = relationalChargesBySaleId.get(s.id);
+        const colCharges = Array.isArray(s.charges) && s.charges.length > 0 ? s.charges : undefined;
+        const candidateSale: Sale = {
           ...s,
           invoice_type,
           is_private_label,
@@ -352,7 +435,21 @@ export const supabaseService = {
           labour_total_amount,
           advance_received_date,
           items: enrichedItems,
-          salesperson_name: salespersonName
+          charges: relCharges && relCharges.length > 0
+            ? relCharges
+            : (metaCharges !== undefined ? metaCharges : colCharges),
+          salesperson_name: salespersonName,
+        };
+
+        const effectiveCharges = getEffectiveSaleCharges(candidateSale);
+        const service_charges_total = getSaleServiceChargesTotal({ ...candidateSale, charges: effectiveCharges });
+        const product_subtotal = getSaleProductSubtotal(candidateSale);
+
+        return {
+          ...candidateSale,
+          charges: effectiveCharges,
+          service_charges_total,
+          product_subtotal,
         };
       });
 
@@ -632,6 +729,8 @@ export const supabaseService = {
         rawMaterials: normalizedRawMaterials,
         formulations: (normalizedFormulations as ProductFormulation[]) || [],
         allowStaffBatchSheetAccess,
+        invoiceChargeTypes: Array.from(chargeTypesSet),
+        includeServiceChargesInCommission,
         productionBatches: (normalizedBatches as ProductionBatch[]) || [],
         sales: (normalizedSales as Sale[]) || [],
         salesReturns: normalizedSalesReturns,
@@ -1229,7 +1328,7 @@ export const supabaseService = {
   },
 
   // ============================================================================
-  // SALES (INVOICES) & SALE ITEMS
+  // SALES (INVOICES) & SALE ITEMS & INVOICE CHARGES
   // ============================================================================
   async upsertSale(sale: Sale): Promise<Sale> {
     if (!isSupabaseConfigured || !supabase) return sale;
@@ -1238,41 +1337,67 @@ export const supabaseService = {
     const validId = ensureUUID(sale.id);
     sale.id = validId;
 
-    // If Private Label, embed complete calculation metadata in notes
-    let notesPayload = sale.notes || '';
-    if (sale.invoice_type === 'private_label' || sale.is_private_label) {
+    const effectiveCharges = (Array.isArray(sale.charges) ? sale.charges : getEffectiveSaleCharges(sale))
+      .filter(c => c && Number(c.amount || 0) > 0)
+      .map(c => ({
+        id: ensureUUID(c.id),
+        type: c.type || 'Other',
+        description: c.description || c.type || 'Service Charge',
+        calc_mode: (c.calc_mode === 'qty_rate' ? 'qty_rate' : 'fixed') as 'fixed' | 'qty_rate',
+        quantity: c.quantity !== undefined && c.quantity !== null ? Number(c.quantity) : undefined,
+        rate: c.rate !== undefined && c.rate !== null ? Number(c.rate) : undefined,
+        amount: Number(Number(c.amount || 0).toFixed(2)),
+        is_auto_private_label: Boolean(c.is_auto_private_label),
+      }));
+
+    const productSubtotal = getSaleProductSubtotal(sale);
+    const serviceChargesTotal = Number(
+      effectiveCharges.reduce((acc, c) => acc + Number(c.amount || 0), 0).toFixed(2)
+    );
+    const isPL = Boolean(sale.invoice_type === 'private_label' || sale.is_private_label);
+
+    // Strip any old PL_DATA tag first
+    let notesPayload = (sale.notes || '').replace(/\s*<!--PL_DATA:.*?-->/g, '').trim();
+
+    if (isPL || effectiveCharges.length > 0) {
       const plMetadata = {
-        invoice_type: 'private_label',
-        is_private_label: true,
+        invoice_type: isPL ? 'private_label' : 'standard',
+        is_private_label: isPL,
         client_brand_name: sale.client_brand_name || '',
-        labour_rate_per_bottle: Number(sale.labour_rate_per_bottle || 3.5),
-        labour_bottle_qty: Number(sale.labour_bottle_qty || 0),
-        labour_total_amount: Number(sale.labour_total_amount || 0),
+        labour_rate_per_bottle: sale.labour_rate_per_bottle !== undefined ? Number(sale.labour_rate_per_bottle) : undefined,
+        labour_bottle_qty: sale.labour_bottle_qty !== undefined ? Number(sale.labour_bottle_qty) : undefined,
+        labour_total_amount: sale.labour_total_amount !== undefined ? Number(sale.labour_total_amount) : undefined,
         advance_received_date: sale.advance_received_date,
-        items: (sale.items || []).map(it => ({
-          product_id: it.product_id,
-          pack_size_id: it.pack_size_id,
-          product_name: it.product_name,
-          box_qty: it.box_qty,
-          bottles_per_box: it.bottles_per_box,
-          bottle_qty: it.bottle_qty,
-          liters_qty: it.liters_qty,
-          rate_per_liter: it.rate_per_liter,
-          subtotal: it.subtotal,
-          is_private_label: true
-        }))
+        charges: effectiveCharges,
+        service_charges_total: serviceChargesTotal,
+        product_subtotal: productSubtotal,
+        items: isPL
+          ? (sale.items || []).map(it => ({
+              product_id: it.product_id,
+              pack_size_id: it.pack_size_id,
+              product_name: it.product_name,
+              box_qty: it.box_qty,
+              bottles_per_box: it.bottles_per_box,
+              bottle_qty: it.bottle_qty,
+              liters_qty: it.liters_qty,
+              rate_per_liter: it.rate_per_liter,
+              subtotal: it.subtotal,
+              is_private_label: true
+            }))
+          : undefined
       };
 
-      notesPayload = notesPayload.replace(/<!--PL_DATA:.*?-->/g, '').trim();
-      const clientNotice = sale.client_brand_name ? `[Private Label Manufacturing for: ${sale.client_brand_name}]` : '';
-      if (clientNotice && !notesPayload.includes(clientNotice)) {
-        notesPayload = `${clientNotice}\n${notesPayload}`.trim();
+      if (isPL && sale.client_brand_name) {
+        const clientNotice = `[Private Label Manufacturing for: ${sale.client_brand_name}]`;
+        if (!notesPayload.includes(clientNotice)) {
+          notesPayload = `${clientNotice}\n${notesPayload}`.trim();
+        }
       }
       notesPayload = `${notesPayload}\n<!--PL_DATA:${JSON.stringify(plMetadata)}-->`.trim();
     }
 
     // 1. Insert parent sale
-    const payload = {
+    const basePayload = {
       id: validId,
       invoice_number: sale.invoice_number,
       customer_id: isValidUUID(sale.customer_id) ? sale.customer_id : null,
@@ -1280,7 +1405,7 @@ export const supabaseService = {
       date: sale.date || new Date().toISOString(),
       // CRITICAL: Do NOT add 'items' here! The live 'sales' table does NOT have an 'items' column.
       // All line items are normalized and inserted into 'sale_items' below.
-      subtotal: Number(sale.subtotal || 0),
+      subtotal: Number(sale.subtotal || (productSubtotal + serviceChargesTotal)),
       discount: Number(sale.discount || 0),
       tax: Number(sale.tax || 0),
       total_amount: Number(sale.total_amount || 0),
@@ -1291,10 +1416,49 @@ export const supabaseService = {
       notes: notesPayload
     };
 
-    const { error: saleError } = await supabase.from('sales').upsert(payload);
+    const fullPayload = {
+      ...basePayload,
+      charges: effectiveCharges,
+      service_charges_total: serviceChargesTotal,
+      product_subtotal: productSubtotal
+    };
+
+    let { error: saleError } = await supabase.from('sales').upsert(fullPayload);
+    if (saleError && (
+      saleError.code === '42703' ||
+      saleError.code === 'PGRST204' ||
+      saleError.message?.includes('charges') ||
+      saleError.message?.includes('service_charges_total') ||
+      saleError.message?.includes('product_subtotal')
+    )) {
+      const retry = await supabase.from('sales').upsert(basePayload);
+      saleError = retry.error;
+    }
+
     if (saleError) {
       console.error('Supabase upsertSale error:', saleError);
       throw new Error(`Sale database write failed: ${saleError.message}`);
+    }
+
+    // 1B. Sync relational invoice_charges table if migrated
+    try {
+      await supabase.from('invoice_charges').delete().eq('sale_id', validId);
+      if (effectiveCharges.length > 0) {
+        const chargesRows = effectiveCharges.map(c => ({
+          id: ensureUUID(c.id),
+          sale_id: validId,
+          type: c.type || 'Other',
+          description: c.description || c.type || 'Service Charge',
+          calc_mode: c.calc_mode === 'qty_rate' ? 'qty_rate' : 'fixed',
+          quantity: c.quantity !== undefined && c.quantity !== null ? Number(c.quantity) : null,
+          rate: c.rate !== undefined && c.rate !== null ? Number(c.rate) : null,
+          amount: Number(c.amount || 0),
+          is_auto_private_label: Boolean(c.is_auto_private_label),
+        }));
+        await supabase.from('invoice_charges').insert(chargesRows);
+      }
+    } catch (e) {
+      // Ignore if invoice_charges table has not been migrated yet (stored in PL_DATA)
     }
 
     // 2. Insert line items
@@ -1360,12 +1524,22 @@ export const supabaseService = {
       }
     }
 
-    return sale;
+    return {
+      ...sale,
+      charges: effectiveCharges,
+      service_charges_total: serviceChargesTotal,
+      product_subtotal: productSubtotal,
+    };
   },
 
   async deleteSale(id: string): Promise<void> {
     if (!isSupabaseConfigured || !supabase || !isValidUUID(id)) return;
     assertOnline();
+
+    // 0. Delete charges if table exists
+    try {
+      await supabase.from('invoice_charges').delete().eq('sale_id', id);
+    } catch (e) {}
 
     // 1. Delete items first
     await supabase.from('sale_items').delete().eq('sale_id', id);
@@ -1375,6 +1549,99 @@ export const supabaseService = {
     if (error) {
       console.error('Supabase deleteSale error:', error);
       throw new Error(`Sale deletion failed: ${error.message}`);
+    }
+  },
+
+  async updateInvoiceChargeTypesInSupabase(
+    types: string[],
+    formulationsList: ProductFormulation[],
+    updatedBy?: string
+  ): Promise<void> {
+    if (!isSupabaseConfigured || !supabase) return;
+    assertOnline();
+
+    const uniqueTypes = Array.from(new Set([...DEFAULT_INVOICE_CHARGE_TYPES, ...types.map(t => t.trim()).filter(Boolean)]));
+
+    try {
+      await supabase.from('app_settings').upsert({
+        key: 'invoice_charge_types',
+        value: { types: uniqueTypes },
+        updated_at: new Date().toISOString(),
+        updated_by: updatedBy || 'Admin'
+      });
+    } catch (e) {}
+
+    // Also persist in BOM_META on active formulations so it survives even before app_settings DDL
+    const targetForm = formulationsList.find(f => !f.is_historical_version);
+    if (targetForm) {
+      const { data: rowData } = await supabase
+        .from('product_formulations')
+        .select('instructions')
+        .eq('id', targetForm.id)
+        .single();
+      const rawInst = typeof rowData?.instructions === 'string' ? rowData.instructions : (targetForm.instructions || '');
+      let existingMeta: any = {};
+      const match = rawInst.match(/<!--BOM_META:(.*?)-->/);
+      if (match && match[1]) {
+        try { existingMeta = JSON.parse(match[1]); } catch {}
+      }
+      const cleanInst = rawInst.replace(/\s*<!--BOM_META:.*?-->/g, '').trim();
+      const nextMeta = {
+        ...existingMeta,
+        product_id: targetForm.product_id || existingMeta.product_id,
+        version: Number(targetForm.version || existingMeta.version || 1),
+        is_locked: Boolean(targetForm.is_locked ?? existingMeta.is_locked),
+        custom_charge_types: uniqueTypes,
+      };
+      await supabase
+        .from('product_formulations')
+        .update({ instructions: `${cleanInst}\n<!--BOM_META:${JSON.stringify(nextMeta)}-->`.trim() })
+        .eq('id', targetForm.id);
+    }
+  },
+
+  async updateCommissionServiceChargesSettingInSupabase(
+    includeServiceCharges: boolean,
+    formulationsList: ProductFormulation[],
+    updatedBy?: string
+  ): Promise<void> {
+    if (!isSupabaseConfigured || !supabase) return;
+    assertOnline();
+
+    try {
+      await supabase.from('app_settings').upsert({
+        key: 'commission_settings',
+        value: { include_service_charges: Boolean(includeServiceCharges) },
+        updated_at: new Date().toISOString(),
+        updated_by: updatedBy || 'Admin'
+      });
+    } catch (e) {}
+
+    const targetForm = formulationsList.find(f => !f.is_historical_version);
+    if (targetForm) {
+      const { data: rowData } = await supabase
+        .from('product_formulations')
+        .select('instructions')
+        .eq('id', targetForm.id)
+        .single();
+      const rawInst = typeof rowData?.instructions === 'string' ? rowData.instructions : (targetForm.instructions || '');
+      let existingMeta: any = {};
+      const match = rawInst.match(/<!--BOM_META:(.*?)-->/);
+      if (match && match[1]) {
+        try { existingMeta = JSON.parse(match[1]); } catch {}
+      }
+      const cleanInst = rawInst.replace(/\s*<!--BOM_META:.*?-->/g, '').trim();
+      const nextMeta = {
+        ...existingMeta,
+        product_id: targetForm.product_id || existingMeta.product_id,
+        version: Number(targetForm.version || existingMeta.version || 1),
+        is_locked: Boolean(targetForm.is_locked ?? existingMeta.is_locked),
+        include_service_charges_in_commission: Boolean(includeServiceCharges),
+      };
+      await supabase
+        .from('product_formulations')
+        .update({ instructions: `${cleanInst}\n<!--BOM_META:${JSON.stringify(nextMeta)}-->`.trim() })
+        .eq('id', targetForm.id);
     }
   },
 
